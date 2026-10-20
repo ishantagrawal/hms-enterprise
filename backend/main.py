@@ -5,8 +5,6 @@ from pydantic import BaseModel
 from typing import List, Optional
 import random
 import datetime
-import requests
-import re
 
 app = FastAPI(title="HMS Enterprise - SVNIT Campus Engine")
 
@@ -40,7 +38,6 @@ CATEGORY_ROUTING = {
     "Wi-Fi & Internet": "Central Computer Center (CCC)"
 }
 
-# Official SVNIT Council of Wardens Database
 USERS_DB = [
     {
         "user_id": "FOUNDER", "password": "IshantFounder@2026!",
@@ -57,39 +54,11 @@ USERS_DB = [
         "phone": "0261-2201528", "email": "deansw@svnit.ac.in", "department": "All"
     },
     {
-        "user_id": "CW_BHABHA", "password": "123",
-        "full_name": "Dr. Vikram P. Rathod", "role": "Warden",
-        "authority_title": "Chief Warden", "institute_id": "SVNIT",
-        "hostel_block": "Bhabha Bhawan", "floor": "Ground", "room": "Office",
-        "phone": "9876543210", "email": "cw1_bhabha@svnit.ac.in", "department": "All"
-    },
-    {
-        "user_id": "CW_GAJJAR", "password": "123",
-        "full_name": "Dr. Jogender Singh", "role": "Warden",
-        "authority_title": "Chief Warden", "institute_id": "SVNIT",
-        "hostel_block": "Gajjar Bhawan", "floor": "Ground", "room": "Office",
-        "phone": "9876543211", "email": "cw1_gajjar@svnit.ac.in", "department": "All"
-    },
-    {
-        "user_id": "CW_MTB", "password": "123",
-        "full_name": "Dr. Premlata Kumari", "role": "Warden",
-        "authority_title": "Chief Warden", "institute_id": "SVNIT",
-        "hostel_block": "Mother Teresa Bhawan", "floor": "Ground", "room": "Office",
-        "phone": "9876543212", "email": "cw1_mtb@svnit.ac.in", "department": "All"
-    },
-    {
         "user_id": "U26CE011", "password": "123",
         "full_name": "Ishant Agrawal", "role": "Student",
         "authority_title": "Student", "institute_id": "SVNIT",
         "hostel_block": "Gajjar Bhawan", "floor": "2nd Floor", "room": "B-204",
         "phone": "9876543213", "email": "u26ce011@ced.svnit.ac.in", "department": "None"
-    },
-    {
-        "user_id": "STAFF_ELEC", "password": "123",
-        "full_name": "Ramesh Kumar (JE Electrical)", "role": "DepartmentStaff",
-        "authority_title": "Department Staff", "institute_id": "SVNIT",
-        "hostel_block": "All", "floor": "-", "room": "-",
-        "phone": "9876543214", "email": "elec@svnit.ac.in", "department": "Electricity"
     }
 ]
 
@@ -129,8 +98,6 @@ def get_complaints(institute_id: str, role: str, user_id: str, department: Optio
     scoped = [c for c in COMPLAINTS_DB if c["institute_id"] == institute_id]
     if role == "Student":
         return [c for c in scoped if c["student_id"].lower() == user_id.lower()]
-    elif role == "DepartmentStaff":
-        return [c for c in scoped if c["category"] == department]
     elif role == "Warden":
         if hostel_block and hostel_block != "All":
             return [c for c in scoped if c["hostel_block"].lower() == hostel_block.lower()]
@@ -172,41 +139,25 @@ def create_complaint(req: ComplaintCreate):
     COMPLAINTS_DB.insert(0, new_ticket)
     return {"success": True, "ticket": new_ticket}
 
-# ==========================================
-# WARDEN DYNAMIC UPDATE API FOR DEAN
-# ==========================================
-class WardenUpdateReq(BaseModel):
-    user_id: str
-    full_name: str
-    hostel_block: str
-    phone: str
-    email: str
-    authority_title: str # 'Chief Warden' or 'Local Warden'
-
-@app.post("/api/admin/update-warden")
-def update_warden(req: WardenUpdateReq, admin_id: str):
-    admin = next((u for u in USERS_DB if u["user_id"].lower() == admin_id.strip().lower()), None)
-    if not admin or admin["hostel_block"] != "All":
-        raise HTTPException(status_code=403, detail="Only Dean / Super Admin can update wardens")
+@app.get("/api/complaints/export-pdf")
+def export_pdf_html(institute_id: str, hostel_block: Optional[str] = "All"):
+    scoped = COMPLAINTS_DB if institute_id == "ALL" else [c for c in COMPLAINTS_DB if c["institute_id"] == institute_id]
+    if hostel_block and hostel_block != "All":
+        scoped = [c for c in scoped if c["hostel_block"].lower() == hostel_block.lower()]
     
-    existing = next((u for u in USERS_DB if u["user_id"].lower() == req.user_id.strip().lower()), None)
-    if existing:
-        existing["full_name"] = req.full_name
-        existing["hostel_block"] = req.hostel_block
-        existing["phone"] = req.phone
-        existing["email"] = req.email
-        existing["authority_title"] = req.authority_title
-        return {"success": True, "message": f"Updated warden {req.user_id} successfully!"}
-    else:
-        USERS_DB.append({
-            "user_id": req.user_id.upper(), "password": "123",
-            "full_name": req.full_name, "role": "Warden",
-            "authority_title": req.authority_title, "institute_id": "SVNIT",
-            "hostel_block": req.hostel_block, "floor": "-", "room": "Office",
-            "phone": req.phone, "email": req.email, "department": "All"
-        })
-        return {"success": True, "message": f"Added new warden {req.user_id.upper()} successfully!"}
-
-@app.get("/api/admin/wardens")
-def get_wardens(institute_id: str):
-    return [u for u in USERS_DB if u["institute_id"] == institute_id and u["role"] == "Warden" and u["user_id"] != "DEAN01"]
+    html_content = f"""
+    <html><head><title>SVNIT Grievance Report</title><style>
+    body {{ font-family: system-ui, sans-serif; padding: 24px; color: #1e293b; }}
+    h2 {{ color: #2563eb; border-bottom: 2px solid #2563eb; padding-bottom: 8px; }}
+    table {{ width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 13px; }}
+    th, td {{ border: 1px solid #cbd5e1; padding: 10px; text-align: left; }}
+    th {{ background: #f8fafc; font-weight: bold; }}
+    </style></head><body>
+    <h2>🏛️ SVNIT Surat - Official Grievance Audit Report</h2>
+    <p><b>Hostel Scope:</b> {hostel_block} | <b>Generated on:</b> {datetime.datetime.now().strftime('%d %b %Y, %I:%M %p')}</p>
+    <table><tr><th>Ticket ID</th><th>Category</th><th>Student & Room</th><th>Issue Summary</th><th>Status</th><th>Date</th></tr>
+    """
+    for c in scoped:
+        html_content += f"<tr><td><b>{c['ticket_id']}</b></td><td>{c['category']}</td><td>{c['student_name']}<br/>{c['hostel_block']}, Rm {c['room']}</td><td>{c['summary']}</td><td><b>{c['status']}</b></td><td>{c['created_at']}</td></tr>"
+    html_content += "</table><script>window.onload = function() { window.print(); }</script></body></html>"
+    return Response(content=html_content, media_type="text/html")
