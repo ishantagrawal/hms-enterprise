@@ -5,7 +5,7 @@ import WardenView from './components/WardenView';
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // =========================================================
-// BUILT-IN CLUB COORDINATOR PORTAL (No missing file error!)
+// CLUB COORDINATOR PORTAL
 // =========================================================
 function ClubView({ user, apiUrl }) {
   const [activeTab, setActiveTab] = useState('ledger');
@@ -66,7 +66,7 @@ function ClubView({ user, apiUrl }) {
         })
       });
       if (res.ok) {
-        setMsg('✅ Club dossier & Dean notes updated!');
+        setMsg('✅ Club dossier updated successfully!');
         loadData();
       }
     } catch {
@@ -151,10 +151,10 @@ function ClubView({ user, apiUrl }) {
                 rows="2"
                 value={extraInfoInput}
                 onChange={(e) => setExtraInfoInput(e.target.value)}
-                placeholder="Extra achievements, budget notes, or equipment requests to show Dean..."
+                placeholder="Extra achievements, budget notes, or equipment requests..."
                 style={clubStyles.input}
               />
-              <button type="submit" style={clubStyles.primaryBtn}>💾 Save Info for Dean Portal</button>
+              <button type="submit" style={clubStyles.primaryBtn}>💾 Save Info</button>
             </form>
           </div>
 
@@ -190,7 +190,7 @@ function ClubView({ user, apiUrl }) {
               />
               <textarea
                 rows="3"
-                placeholder="Full Event Description (What happens at the event, eligibility, prizes...)"
+                placeholder="Full Event Description..."
                 value={eventForm.description}
                 onChange={(e) => setEventForm({ ...eventForm, description: e.target.value })}
                 required
@@ -198,14 +198,14 @@ function ClubView({ user, apiUrl }) {
               />
               <input
                 type="url"
-                placeholder="Previous Year Photo / Poster URL (https://...)"
+                placeholder="Poster Image URL (https://...)"
                 value={eventForm.image_url}
                 onChange={(e) => setEventForm({ ...eventForm, image_url: e.target.value })}
                 style={clubStyles.input}
               />
               <input
                 type="url"
-                placeholder="Audition / Registration Google Form Link (Optional)"
+                placeholder="Audition / Registration Google Form Link"
                 value={eventForm.registration_link}
                 onChange={(e) => setEventForm({ ...eventForm, registration_link: e.target.value })}
                 style={clubStyles.input}
@@ -248,7 +248,7 @@ function ClubView({ user, apiUrl }) {
             </form>
           </div>
 
-          <div style={clubStyles.sectionHeader}>📊 My Club Events & Live Student RSVPs</div>
+          <div style={clubStyles.sectionHeader}>📊 My Club Events & RSVPs</div>
           <div style={clubStyles.listContainer}>
             {myEvents.map((ev) => (
               <div key={ev.event_id} style={clubStyles.chatRow}>
@@ -260,7 +260,7 @@ function ClubView({ user, apiUrl }) {
                       {ev.status}
                     </span>
                   </div>
-                  <div style={clubStyles.rowSub}>📍 {ev.venue} • 📅 {ev.date} ({ev.start_time} - {ev.end_time})</div>
+                  <div style={clubStyles.rowSub}>📍 {ev.venue} • 📅 {ev.date}</div>
                   <div style={{ fontSize: '12px', color: '#4ade80', marginTop: '4px', fontWeight: '800' }}>
                     👥 {ev.rsvps?.length || 0} Students Confirmed Coming
                   </div>
@@ -324,7 +324,7 @@ function ClubView({ user, apiUrl }) {
 }
 
 // =========================================================
-// BUILT-IN STAFF MAINTENANCE PORTAL
+// STAFF MAINTENANCE PORTAL
 // =========================================================
 function StaffView({ user, complaints, apiUrl, onRefresh }) {
   const [selectedTicket, setSelectedTicket] = useState(null);
@@ -384,14 +384,14 @@ function StaffView({ user, complaints, apiUrl, onRefresh }) {
             <form onSubmit={handleResolve} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <textarea
                 rows="3"
-                placeholder="Enter action taken / resolution remark..."
+                placeholder="Enter action taken..."
                 value={remark}
                 onChange={(e) => setRemark(e.target.value)}
                 required
                 style={{ width: '100%', background: '#090d16', border: '1px solid #334155', borderRadius: '10px', padding: '12px', color: '#fff', boxSizing: 'border-box' }}
               />
               <button type="submit" style={{ background: '#8b5cf6', color: '#fff', border: 'none', padding: '12px', borderRadius: '10px', fontWeight: '800', cursor: 'pointer' }}>
-                ✅ Mark Resolved & Ask Student Confirmation
+                ✅ Mark Resolved
               </button>
             </form>
           </div>
@@ -402,12 +402,12 @@ function StaffView({ user, complaints, apiUrl, onRefresh }) {
 }
 
 // =========================================================
-// MAIN APP ENTRY & LOGIN PORTAL
+// MAIN APP ENTRY & CLEAN LOGIN PORTAL (WITH WAKING SERVER BAR)
 // =========================================================
 export default function App() {
   const [user, setUser] = useState(() => {
     try {
-      const saved = localStorage.getItem('unicore_user');
+      const saved = localStorage.getItem('hms_user');
       return saved ? JSON.parse(saved) : null;
     } catch {
       return null;
@@ -416,8 +416,10 @@ export default function App() {
 
   const [userIdInput, setUserIdInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [serverProgress, setServerProgress] = useState(0);
   const [complaints, setComplaints] = useState([]);
 
   const fetchComplaints = useCallback(async () => {
@@ -443,6 +445,23 @@ export default function App() {
     fetchComplaints();
   }, [fetchComplaints]);
 
+  // Handle server waking progress bar simulation
+  useEffect(() => {
+    let timer;
+    if (loading) {
+      setServerProgress(12);
+      timer = setInterval(() => {
+        setServerProgress((prev) => {
+          if (prev >= 92) return prev;
+          return prev + Math.floor(Math.random() * 15) + 5;
+        });
+      }, 400);
+    } else {
+      setServerProgress(0);
+    }
+    return () => clearInterval(timer);
+  }, [loading]);
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoginError(null);
@@ -458,28 +477,27 @@ export default function App() {
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setUser(data.user);
-        localStorage.setItem('unicore_user', JSON.stringify(data.user));
+        setServerProgress(100);
+        setTimeout(() => {
+          setUser(data.user);
+          localStorage.setItem('hms_user', JSON.stringify(data.user));
+          setLoading(false);
+        }, 300);
       } else {
-        setLoginError(data.detail || 'Invalid Position ID or Password');
+        setLoading(false);
+        setLoginError(data.detail || 'Invalid ID or Password');
       }
     } catch {
-      setLoginError('Cannot reach backend server. Ensure FastAPI is running.');
+      setLoading(false);
+      setLoginError('Cannot reach server. Please wait for server to wake up.');
     }
-    setLoading(false);
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('unicore_user');
+    localStorage.removeItem('hms_user');
     setUser(null);
     setUserIdInput('');
     setPasswordInput('');
-    setLoginError(null);
-  };
-
-  const fillDemoLogin = (id, pwd = '123') => {
-    setUserIdInput(id);
-    setPasswordInput(pwd);
     setLoginError(null);
   };
 
@@ -487,46 +505,55 @@ export default function App() {
     return (
       <div style={styles.loginPage}>
         <div style={styles.loginCard}>
-          <div style={styles.logoBadge}>UNICORE</div>
-          <h1 style={styles.loginTitle}>SVNIT Campus ERP & HMS</h1>
-          <p style={styles.loginSub}>Role-Based Institutional Login (Position-Wise)</p>
+          <div style={styles.logoBadge}>HMS</div>
+          <h1 style={styles.loginTitle}>Hostel Management System</h1>
+          <p style={styles.loginSub}>SVNIT Campus Portal</p>
 
           {loginError && <div style={styles.errorBox}>{loginError}</div>}
 
-          <form onSubmit={handleLogin} style={styles.form}>
-            <input
-              type="text"
-              placeholder="Position ID / Roll No (e.g., DEAN, U26CE011, CHRD)"
-              value={userIdInput}
-              onChange={(e) => setUserIdInput(e.target.value)}
-              required
-              style={styles.input}
-            />
-            <input
-              type="password"
-              placeholder="Password (default: 123)"
-              value={passwordInput}
-              onChange={(e) => setPasswordInput(e.target.value)}
-              required
-              style={styles.input}
-            />
-            <button type="submit" disabled={loading} style={styles.loginBtn}>
-              {loading ? 'Signing In...' : 'Sign In to Position Portal →'}
-            </button>
-          </form>
-
-          <div style={styles.quickAccessBox}>
-            <div style={styles.quickTitle}>⚡ One-Tap Demo Credentials (Password: 123)</div>
-            <div style={styles.chipGrid}>
-              <button type="button" onClick={() => fillDemoLogin('DEAN')} style={styles.demoChip}>🎓 Dean (DEAN)</button>
-              <button type="button" onClick={() => fillDemoLogin('U26CE011')} style={styles.demoChip}>🧑‍🎓 Student (U26CE011)</button>
-              <button type="button" onClick={() => fillDemoLogin('CHRD')} style={styles.demoChip}>🎭 Club (CHRD)</button>
-              <button type="button" onClick={() => fillDemoLogin('ACM')} style={styles.demoChip}>💻 Club (ACM)</button>
-              <button type="button" onClick={() => fillDemoLogin('GDSC')} style={styles.demoChip}>🚀 Club (GDSC)</button>
-              <button type="button" onClick={() => fillDemoLogin('CW_GAJJAR')} style={styles.demoChip}>🏢 Warden (CW_GAJJAR)</button>
-              <button type="button" onClick={() => fillDemoLogin('STAFF_ELEC')} style={styles.demoChip}>⚡ Staff (STAFF_ELEC)</button>
+          {loading ? (
+            <div style={styles.wakingBox}>
+              <div style={styles.wakingTop}>
+                <span style={styles.wakingText}>Waking secure server...</span>
+                <span style={styles.wakingPct}>{serverProgress}%</span>
+              </div>
+              <div style={styles.progressBarTrack}>
+                <div style={{ ...styles.progressBarFill, width: `${serverProgress}%` }} />
+              </div>
             </div>
-          </div>
+          ) : (
+            <form onSubmit={handleLogin} style={styles.form}>
+              <input
+                type="text"
+                placeholder="Position ID / Roll No (e.g., DEAN, U26CE011)"
+                value={userIdInput}
+                onChange={(e) => setUserIdInput(e.target.value)}
+                required
+                style={styles.input}
+              />
+              <div style={styles.passwordWrap}>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="Password"
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  required
+                  style={{ ...styles.input, paddingRight: '45px', marginBottom: 0 }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  style={styles.eyeBtn}
+                  title="Show / Hide Password"
+                >
+                  {showPassword ? '👁️‍🗨️' : '👁️'}
+                </button>
+              </div>
+              <button type="submit" style={styles.loginBtn}>
+                Sign In →
+              </button>
+            </form>
+          )}
         </div>
       </div>
     );
@@ -538,7 +565,7 @@ export default function App() {
         <div style={styles.headerLeft}>
           <div style={styles.appAvatar}>HMS</div>
           <div>
-            <div style={styles.headerTitle}>SVNIT UniCore ERP</div>
+            <div style={styles.headerTitle}>SVNIT Hostel Management System</div>
             <div style={styles.headerSub}>
               {user.role === 'Student'
                 ? `${user.hostel_block} • Rm ${user.room}`
@@ -640,42 +667,46 @@ const styles = {
     fontFamily: 'Inter, system-ui, sans-serif'
   },
   loginCard: {
-    width: '100%', maxWidth: '430px', background: '#0f172a',
-    border: '1px solid #1e293b', borderRadius: '22px', padding: '28px 22px',
+    width: '100%', maxWidth: '420px', background: '#0f172a',
+    border: '1px solid #1e293b', borderRadius: '22px', padding: '32px 24px',
     textAlign: 'center', boxShadow: '0 20px 50px rgba(0,0,0,0.6)'
   },
   logoBadge: {
     display: 'inline-block', background: 'rgba(139, 92, 246, 0.18)',
     color: '#c084fc', border: '1px solid rgba(139, 92, 246, 0.4)',
-    padding: '5px 14px', borderRadius: '999px', fontSize: '11px',
-    fontWeight: '800', letterSpacing: '1px', marginBottom: '10px'
+    padding: '6px 16px', borderRadius: '999px', fontSize: '12px',
+    fontWeight: '800', letterSpacing: '1px', marginBottom: '12px'
   },
-  loginTitle: { margin: '0 0 6px 0', color: '#f8fafc', fontSize: '22px', fontWeight: '800' },
-  loginSub: { margin: '0 0 20px 0', color: '#94a3b8', fontSize: '13px' },
+  loginTitle: { margin: '0 0 4px 0', color: '#f8fafc', fontSize: '21px', fontWeight: '800' },
+  loginSub: { margin: '0 0 24px 0', color: '#94a3b8', fontSize: '13px' },
   errorBox: {
     background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.4)',
     color: '#f87171', padding: '12px', borderRadius: '12px',
     fontSize: '13px', fontWeight: '600', marginBottom: '16px'
   },
-  form: { display: 'flex', flexDirection: 'column', gap: '12px' },
+  form: { display: 'flex', flexDirection: 'column', gap: '14px' },
   input: {
     width: '100%', background: '#090d16', border: '1px solid #334155',
     borderRadius: '12px', padding: '13px 14px', color: '#f8fafc',
-    fontSize: '14px', boxSizing: 'border-box', outline: 'none'
+    fontSize: '14px', boxSizing: 'border-box', outline: 'none', marginBottom: '12px'
+  },
+  passwordWrap: { position: 'relative', width: '100%' },
+  eyeBtn: {
+    position: 'absolute', right: '12px', top: '38%', transform: 'translateY(-50%)',
+    background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '16px', padding: 0
   },
   loginBtn: {
     width: '100%', background: 'linear-gradient(135deg, #8b5cf6, #6366f1)',
     color: '#fff', border: 'none', borderRadius: '12px', padding: '14px',
     fontSize: '15px', fontWeight: '800', cursor: 'pointer', marginTop: '4px'
   },
-  quickAccessBox: {
-    marginTop: '22px', paddingTop: '16px', borderTop: '1px solid #1e293b', textAlign: 'left'
+  wakingBox: {
+    background: '#090d16', border: '1px solid #1e293b', borderRadius: '14px',
+    padding: '20px 16px', textAlign: 'left', margin: '10px 0'
   },
-  quickTitle: { fontSize: '11px', fontWeight: '700', color: '#94a3b8', marginBottom: '10px', textTransform: 'uppercase' },
-  chipGrid: { display: 'flex', flexWrap: 'wrap', gap: '6px' },
-  demoChip: {
-    background: '#1e293b', color: '#e2e8f0', border: '1px solid #334155',
-    borderRadius: '8px', padding: '6px 10px', fontSize: '11px',
-    fontWeight: '600', cursor: 'pointer'
-  }
+  wakingTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' },
+  wakingText: { fontSize: '13px', fontWeight: '700', color: '#cbd5e1' },
+  wakingPct: { fontSize: '13px', fontWeight: '800', color: '#c084fc' },
+  progressBarTrack: { width: '100%', height: '8px', background: '#1e293b', borderRadius: '999px', overflow: 'hidden' },
+  progressBarFill: { height: '100%', background: 'linear-gradient(90deg, #8b5cf6, #38bdf8)', borderRadius: '999px', transition: 'width 0.3s ease' }
 };
