@@ -1,37 +1,113 @@
-import React, { useState, useEffect } from 'react';
-import { COMPLAINT_CATEGORIES } from '../config/categories';
+import React, { useState, useEffect, useCallback } from 'react';
 
-export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
+const COMPLAINT_CATEGORIES = [
+  { id: 'Electricity', title: 'Electricity', icon: '⚡' },
+  { id: 'Plumbing', title: 'Plumbing', icon: '🚰' },
+  { id: 'LAN / Wi-Fi', title: 'LAN / Wi-Fi', icon: '🌐' },
+  { id: 'Carpentry', title: 'Carpentry', icon: '🪚' },
+  { id: 'Water Cooler', title: 'RO / Water Cooler', icon: '💧' },
+  { id: 'Mess & Hygiene', title: 'Cleaning & Hygiene', icon: '🧹' }
+];
+
+const getCategoryIcon = (catName) => {
+  const found = COMPLAINT_CATEGORIES.find((c) => c.id === catName);
+  return found ? found.icon : '🛠️';
+};
+
+const getStatusColor = (status) => {
+  if (status === 'Completed' || status === 'Approved') return '#4ade80';
+  if (status === 'Awaiting Confirmation') return '#38bdf8';
+  if (status === 'Pending' || status === 'In Progress') return '#fbbf24';
+  return '#f87171';
+};
+
+export default function StudentPortal({ user, apiUrl }) {
   const [activeTab, setActiveTab] = useState('complaints');
+  const [complaints, setComplaints] = useState([]);
+  const [departments, setDepartments] = useState([]);
   const [showNewModal, setShowNewModal] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-
-  const [events, setEvents] = useState([]);
-  const [selectedEvent, setSelectedEvent] = useState(null);
-  const [calYear, setCalYear] = useState(2026);
-  const [calMonth, setCalMonth] = useState(9); // October
-  const [feedbackRating, setFeedbackRating] = useState(5);
-  const [feedbackReview, setFeedbackReview] = useState('');
   const [msg, setMsg] = useState(null);
 
+  // New Complaint Form
   const [category, setCategory] = useState('Electricity');
   const [summary, setSummary] = useState('');
   const [description, setDescription] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const loadEvents = () => {
-    fetch(`${apiUrl}/api/unicore/events`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (Array.isArray(data)) setEvents(data);
-      })
-      .catch(console.error);
-  };
+  // Events & EventRadar States
+  const [events, setEvents] = useState([]);
+  const [clubs, setClubs] = useState([]);
+  const [selectedEvent, setSelectedEvent] = useState(null);
+  const [selectedClubView, setSelectedClubView] = useState(null);
+  const [feedbackRating, setFeedbackRating] = useState(5);
+  const [feedbackReview, setFeedbackReview] = useState('');
+
+  // Password Change State
+  const [oldPass, setOldPass] = useState('');
+  const [newPass, setNewPass] = useState('');
+
+  const loadStudentData = useCallback(async () => {
+    try {
+      const [cRes, dRes, eRes, clRes] = await Promise.all([
+        fetch(`${apiUrl}/api/complaints?role=Student&user_id=${user.user_id}`),
+        fetch(`${apiUrl}/api/departments`),
+        fetch(`${apiUrl}/api/unicore/events`),
+        fetch(`${apiUrl}/api/unicore/clubs`)
+      ]);
+      if (cRes.ok) setComplaints(await cRes.json());
+      if (dRes.ok) setDepartments(await dRes.json());
+      if (eRes.ok) setEvents(await eRes.json());
+      if (clRes.ok) setClubs(await clRes.json());
+    } catch (e) {
+      console.error(e);
+    }
+  }, [apiUrl, user.user_id]);
 
   useEffect(() => {
-    loadEvents();
-  }, [apiUrl]);
+    loadStudentData();
+  }, [loadStudentData]);
+
+  const handleCreateComplaint = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${apiUrl}/api/complaints`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ student_id: user.user_id, category, summary, description })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setMsg(`✅ Grievance registered & routed to ${data.ticket.routed_to}!`);
+        setSummary('');
+        setDescription('');
+        setShowNewModal(false);
+        loadStudentData();
+      }
+    } catch {
+      setMsg('❌ Failed to submit complaint.');
+    }
+    setSubmitting(false);
+  };
+
+  const handleStudentVerify = async (ticketId, satisfied) => {
+    try {
+      const res = await fetch(`${apiUrl}/api/complaints/student-verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticket_id: ticketId, satisfied })
+      });
+      if (res.ok) {
+        setMsg(satisfied ? '✅ Issue verified & closed successfully!' : '🔄 Ticket reopened for maintenance re-check!');
+        setSelectedTicket(null);
+        loadStudentData();
+      }
+    } catch {
+      setMsg('❌ Verification error.');
+    }
+  };
 
   const handleRsvp = async (eventId) => {
     try {
@@ -42,14 +118,12 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setMsg({ type: 'success', text: '🎟️ RSVP Confirmed! Your attendance is counted.' });
-        setEvents(events.map((ev) => (ev.event_id === eventId ? { ...ev, rsvps: data.rsvps } : ev)));
-        setSelectedEvent((prev) => (prev ? { ...prev, rsvps: data.rsvps } : null));
-      } else {
-        setMsg({ type: 'error', text: data.detail || 'RSVP failed' });
+        setMsg(data.message);
+        setEvents((prev) => prev.map((ev) => (ev.event_id === eventId ? { ...ev, rsvps: data.rsvps } : ev)));
+        setSelectedEvent((prev) => (prev && prev.event_id === eventId ? { ...prev, rsvps: data.rsvps } : prev));
       }
     } catch {
-      setMsg({ type: 'error', text: 'Connection error.' });
+      setMsg('❌ Failed to update RSVP.');
     }
   };
 
@@ -68,91 +142,35 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setMsg({ type: 'success', text: '🤖 Feedback submitted to AI Audit engine!' });
+        setMsg('🤖 Thank you! Feedback added to AI Audit engine.');
         setFeedbackReview('');
-        setSelectedEvent(null);
-        loadEvents();
-      } else {
-        setMsg({ type: 'error', text: data.detail || 'Feedback failed' });
+        setSelectedEvent(data.event);
+        loadStudentData();
       }
     } catch {
-      setMsg({ type: 'error', text: 'Connection error.' });
+      setMsg('❌ Failed to submit feedback.');
     }
   };
 
-  const isFeedbackActive = (eventDateStr) => {
-    if (!eventDateStr) return false;
-    const eventDate = new Date(`${eventDateStr}T00:00:00`);
-    const now = new Date();
-    const diffDays = (now - eventDate) / (1000 * 60 * 60 * 24);
-    return diffDays >= 0 && diffDays <= 1.99;
-  };
-
-  const handleSubmit = async (e) => {
+  const handleSelfPassChange = async (e) => {
     e.preventDefault();
-    setSubmitting(true);
-    setMsg(null);
     try {
-      const res = await fetch(`${apiUrl}/api/complaints`, {
+      const res = await fetch(`${apiUrl}/api/student/change-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: user.user_id, category, summary, description })
+        body: JSON.stringify({ student_id: user.user_id, old_password: oldPass, new_password: newPass })
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setMsg({ type: 'success', text: `✅ Ticket ${data.ticket.ticket_id} registered!` });
-        setSummary('');
-        setDescription('');
-        setShowNewModal(false);
-        onRefresh();
+        setMsg('✅ Custom password saved successfully!');
+        setOldPass('');
+        setNewPass('');
       } else {
-        setMsg({ type: 'error', text: data.detail || 'Failed' });
+        setMsg(`❌ ${data.detail || 'Password change failed'}`);
       }
     } catch {
-      setMsg({ type: 'error', text: 'Server connection error.' });
+      setMsg('❌ Connection error.');
     }
-    setSubmitting(false);
-  };
-
-  const handleStudentVerify = async (ticketId, satisfied) => {
-    try {
-      const res = await fetch(`${apiUrl}/api/complaints/student-verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticket_id: ticketId, satisfied })
-      });
-      if (res.ok) {
-        setSelectedTicket(null);
-        onRefresh();
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const changeMonth = (offset) => {
-    let newMonth = calMonth + offset;
-    let newYear = calYear;
-    if (newMonth < 0) {
-      newMonth = 11;
-      newYear -= 1;
-    } else if (newMonth > 11) {
-      newMonth = 0;
-      newYear += 1;
-    }
-    setCalMonth(newMonth);
-    setCalYear(newYear);
-  };
-
-  const getCategoryIcon = (catName) => {
-    const found = COMPLAINT_CATEGORIES.find((c) => c.id === catName);
-    return found ? found.icon : '🛠️';
-  };
-
-  const getStatusColor = (status) => {
-    if (status === 'Completed' || status === 'Approved') return '#a78bfa';
-    if (status === 'Awaiting Confirmation') return '#38bdf8';
-    return '#fbbf24';
   };
 
   const filteredComplaints = complaints.filter(
@@ -162,426 +180,233 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
       c.ticket_id.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const actionPendingCount = complaints.filter((c) => c.status === 'Awaiting Confirmation').length;
-
-  const studentVisibleEvents = events.filter(
-    (e) => e.status === 'Approved' || e.status === 'Completed'
-  );
+  const actionPending = complaints.filter((c) => c.status === 'Awaiting Confirmation').length;
+  const studentVisibleEvents = events.filter((e) => e.status === 'Approved' || e.status === 'Completed');
   const upcomingEvents = studentVisibleEvents.filter((e) => e.status === 'Approved');
-  const pastEvents = studentVisibleEvents.filter((e) => e.status === 'Completed');
-
-  const monthNames = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December'
-  ];
-  const firstDayOfMonth = new Date(calYear, calMonth, 1).getDay();
-  const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+  const completedEvents = studentVisibleEvents.filter((e) => e.status === 'Completed');
 
   return (
-    <div style={styles.appWrapper}>
-      {msg && (
-        <div
-          style={{ ...styles.toast, borderColor: msg.type === 'success' ? '#8b5cf6' : '#ef4444' }}
-          onClick={() => setMsg(null)}
-        >
-          {msg.text}
-        </div>
-      )}
+    <div className="hms-container">
+      {msg && <div className="hms-toast" onClick={() => setMsg(null)}>{msg}</div>}
+
+      <div className="hms-desktop-tabs">
+        <button className={`hms-dtab ${activeTab === 'complaints' ? 'active' : ''}`} onClick={() => setActiveTab('complaints')}>
+          💬 My Grievances {actionPending > 0 && <span className="hms-badge-inline">{actionPending}</span>}
+        </button>
+        <button className={`hms-dtab ${activeTab === 'eventradar' ? 'active' : ''}`} onClick={() => setActiveTab('eventradar')}>
+          📡 EventRadar & Clubs ({studentVisibleEvents.length})
+        </button>
+        <button className={`hms-dtab ${activeTab === 'attendance' ? 'active' : ''}`} onClick={() => setActiveTab('attendance')}>
+          📅 Night Attendance
+        </button>
+        <button className={`hms-dtab ${activeTab === 'leave' ? 'active' : ''}`} onClick={() => setActiveTab('leave')}>
+          🪪 Leave Pass
+        </button>
+        <button className={`hms-dtab ${activeTab === 'profile' ? 'active' : ''}`} onClick={() => setActiveTab('profile')}>
+          👤 Profile & Security
+        </button>
+      </div>
 
       {/* TAB 1: COMPLAINTS */}
       {activeTab === 'complaints' && (
-        <div style={styles.tabContent}>
-          <div style={styles.searchWrap}>
-            <span>🔍</span>
-            <input
-              type="text"
-              placeholder="Search complaints or ticket ID..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={styles.searchInput}
-            />
+        <div>
+          <div className="hms-toolbar">
+            <div className="hms-search-box">
+              <span>🔍</span>
+              <input type="text" placeholder="Search complaints by summary, category, or ID..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+            </div>
+            <button className="hms-btn-primary" style={{ width: 'auto' }} onClick={() => setShowNewModal(true)}>
+              + Lodge New Grievance
+            </button>
           </div>
 
-          <div style={styles.listContainer}>
-            {filteredComplaints.length === 0 ? (
-              <div style={styles.emptyState}>
-                <div style={{ fontSize: '38px', marginBottom: '8px' }}>📭</div>
-                <div style={{ color: '#e2e8f0', fontWeight: '700', fontSize: '15px' }}>No Grievances Found</div>
-                <p style={{ color: '#94a3b8', fontSize: '13px', margin: '4px 0 0 0' }}>
-                  Tap the purple + button below to lodge a hostel complaint.
-                </p>
-              </div>
-            ) : (
-              filteredComplaints.map((c) => (
-                <div key={c.ticket_id} onClick={() => setSelectedTicket(c)} style={styles.chatRow}>
-                  <div style={styles.rowAvatar}>{getCategoryIcon(c.category)}</div>
-                  <div style={styles.rowCenter}>
-                    <div style={styles.rowTopLine}>
-                      <span style={styles.rowTitle}>{c.summary}</span>
-                      <span style={styles.rowTime}>{c.created_at.split(',')[0]}</span>
+          {filteredComplaints.length === 0 ? (
+            <div className="hms-empty-card">
+              <div style={{ fontSize: '40px', marginBottom: '8px' }}>📭</div>
+              <h3>No Grievances Found</h3>
+              <p className="hms-muted">Tap "+ Lodge New Grievance" to report any room or hostel issue.</p>
+            </div>
+          ) : (
+            <div className="hms-grid-2">
+              {filteredComplaints.map((c) => (
+                <div key={c.ticket_id} className="hms-item-card" onClick={() => setSelectedTicket(c)}>
+                  <div className="hms-avatar-circle">{getCategoryIcon(c.category)}</div>
+                  <div style={{ flex: 1 }}>
+                    <div className="hms-row-between">
+                      <span className="hms-item-title">{c.summary}</span>
+                      <span className="hms-muted-xs">{c.created_at.split(',')[0]}</span>
                     </div>
-                    <div style={styles.rowBottomLine}>
-                      <span style={styles.rowSub}>{c.ticket_id} • {c.category}</span>
-                      <span
-                        style={{
-                          ...styles.statusBadge,
-                          color: getStatusColor(c.status),
-                          borderColor: getStatusColor(c.status)
-                        }}
-                      >
-                        {c.status === 'Awaiting Confirmation' ? 'Verify Now' : c.status}
+                    <p className="hms-item-sub" style={{ margin: '4px 0' }}>{c.description}</p>
+                    <div className="hms-row-between" style={{ marginTop: '6px' }}>
+                      <span className="hms-item-sub">{c.ticket_id} • {c.category}</span>
+                      <span className="hms-status-pill" style={{ color: getStatusColor(c.status), borderColor: getStatusColor(c.status) }}>
+                        {c.status === 'Awaiting Confirmation' ? '⚡ Tap to Verify Resolution' : c.status}
                       </span>
                     </div>
                   </div>
                 </div>
-              ))
-            )}
-          </div>
-
-          <button onClick={() => setShowNewModal(true)} style={styles.fabBtn} title="Lodge New Complaint">+</button>
+              ))}
+            </div>
+          )}
+          <button className="hms-fab-mobile" onClick={() => setShowNewModal(true)}>+</button>
         </div>
       )}
 
-      {/* TAB 2: EVENTRADAR (GOOGLE CALENDAR GRID + LIST) */}
+      {/* TAB 2: EVENTRADAR & CLUBS */}
       {activeTab === 'eventradar' && (
-        <div style={styles.tabContent}>
-          <div style={styles.radarBanner}>
-            <div style={{ fontSize: '11px', fontWeight: '800', color: '#c084fc', letterSpacing: '0.8px' }}>
-              SVNIT LIVE EVENTRADAR
-            </div>
-            <h2 style={{ margin: '4px 0 2px 0', color: '#f8fafc', fontSize: '18px' }}>
-              📡 Campus Event Calendar
-            </h2>
-            <p style={{ margin: 0, color: '#94a3b8', fontSize: '12px' }}>
-              Tap any event badge on the calendar or list to view details, audition forms, RSVP, or give feedback.
-            </p>
-          </div>
-
-          <div style={styles.calTopBar}>
-            <button onClick={() => changeMonth(-1)} style={styles.calNavBtn}>◀ Prev</button>
-            <div style={{ color: '#f8fafc', fontWeight: '800', fontSize: '15px' }}>
-              {monthNames[calMonth]} {calYear}
-            </div>
-            <button onClick={() => changeMonth(1)} style={styles.calNavBtn}>Next ▶</button>
-          </div>
-
-          <div style={styles.calGridContainer}>
-            <div style={styles.calHeaderRow}>
-              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
-                <div key={d} style={styles.calHeaderCell}>{d}</div>
-              ))}
-            </div>
-
-            <div style={styles.calDaysGrid}>
-              {Array.from({ length: firstDayOfMonth }).map((_, idx) => (
-                <div key={`empty-${idx}`} style={{ ...styles.calCell, opacity: 0.35 }} />
-              ))}
-
-              {Array.from({ length: daysInMonth }).map((_, index) => {
-                const dayNum = index + 1;
-                const monthPadded = String(calMonth + 1).padStart(2, '0');
-                const dayPadded = String(dayNum).padStart(2, '0');
-                const dateStr = `${calYear}-${monthPadded}-${dayPadded}`;
-                const matchedEvents = studentVisibleEvents.filter((e) => e.date === dateStr);
-
-                return (
-                  <div key={dateStr} style={styles.calCell}>
-                    <span style={styles.calCellNum}>{dayNum}</span>
-                    {matchedEvents.map((ev) => (
-                      <div
-                        key={ev.event_id}
-                        onClick={() => setSelectedEvent(ev)}
-                        style={{
-                          ...styles.calEventPill,
-                          background: ev.status === 'Completed' ? '#334155' : '#8b5cf6'
-                        }}
-                        title={ev.title}
-                      >
-                        {ev.title}
+        <div className="hms-stack" style={{ gap: '22px' }}>
+          <div className="hms-grid-2">
+            <div className="hms-card">
+              <div className="hms-section-label">🎟️ Upcoming Campus Events ({upcomingEvents.length})</div>
+              <div className="hms-stack">
+                {upcomingEvents.map((ev) => {
+                  const isGoing = ev.rsvps?.some((r) => r.toUpperCase() === user.user_id.toUpperCase());
+                  return (
+                    <div key={ev.event_id} className="hms-item-card" onClick={() => setSelectedEvent(ev)}>
+                      <div className="hms-avatar-circle">🎪</div>
+                      <div style={{ flex: 1 }}>
+                        <div className="hms-row-between">
+                          <span className="hms-item-title">{ev.title}</span>
+                          <span className="hms-pill-badge">{ev.club_id}</span>
+                        </div>
+                        <p className="hms-item-sub" style={{ margin: '4px 0', color: '#cbd5e1' }}>{ev.description}</p>
+                        <div className="hms-item-sub">📍 {ev.venue} • 📅 {ev.date} ({ev.start_time} - {ev.end_time})</div>
+                        <div className="hms-row-between" style={{ marginTop: '8px' }}>
+                          <span style={{ fontSize: '12px', color: '#4ade80', fontWeight: 800 }}>
+                            👥 {ev.rsvps?.length || 0} Students Attending
+                          </span>
+                          <span className="hms-status-pill" style={{ color: isGoing ? '#4ade80' : '#c084fc', borderColor: isGoing ? '#4ade80' : '#8b5cf6' }}>
+                            {isGoing ? '✓ You Are Going' : 'View Details →'}
+                          </span>
+                        </div>
                       </div>
-                    ))}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="hms-card">
+              <div className="hms-section-label">⭐ Past Events — AI Feedback & Audits ({completedEvents.length})</div>
+              <div className="hms-stack">
+                {completedEvents.map((ev) => (
+                  <div key={ev.event_id} className="hms-item-card" onClick={() => setSelectedEvent(ev)}>
+                    <div className="hms-avatar-circle">🏁</div>
+                    <div style={{ flex: 1 }}>
+                      <div className="hms-row-between">
+                        <span className="hms-item-title">{ev.title}</span>
+                        <span className="hms-pill-badge">{ev.club_id}</span>
+                      </div>
+                      <p className="hms-item-sub" style={{ margin: '4px 0' }}>{ev.description}</p>
+                      <div className="hms-row-between" style={{ marginTop: '6px' }}>
+                        <span style={{ fontSize: '12px', color: '#fbbf24', fontWeight: 700 }}>
+                          ⭐ Rating: {ev.ai_audit?.average_rating || 4.9}/5.0
+                        </span>
+                        <span style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 700 }}>Tap to Rate & View AI Audit →</span>
+                      </div>
+                    </div>
                   </div>
-                );
-              })}
+                ))}
+              </div>
             </div>
           </div>
 
-          <div style={styles.sectionHeader}>📅 Upcoming Approved Events ({upcomingEvents.length})</div>
-          <div style={styles.listContainer}>
-            {upcomingEvents.length === 0 ? (
-              <div style={{ ...styles.emptyState, padding: '20px' }}>No upcoming approved events.</div>
-            ) : (
-              upcomingEvents.map((ev) => (
-                <div key={ev.event_id} onClick={() => setSelectedEvent(ev)} style={styles.chatRow}>
-                  <div style={styles.rowAvatar}>🎟️</div>
-                  <div style={styles.rowCenter}>
-                    <div style={styles.rowTopLine}>
-                      <span style={styles.rowTitle}>{ev.title}</span>
-                      <span style={{ color: '#c084fc', fontSize: '11px', fontWeight: '800' }}>{ev.status}</span>
+          <div className="hms-card">
+            <div className="hms-section-label">🏛️ Explore Official Student Clubs ({clubs.length})</div>
+            <div className="hms-grid-3">
+              {clubs.map((c) => (
+                <div key={c.club_id} className="hms-item-card" onClick={() => setSelectedClubView(c)}>
+                  <div className="hms-avatar-circle">🎭</div>
+                  <div style={{ flex: 1 }}>
+                    <div className="hms-row-between">
+                      <span className="hms-item-title">{c.name}</span>
+                      <span className="hms-pill-badge">{c.club_id}</span>
                     </div>
-                    <div style={styles.rowSub}>📍 {ev.venue} • 📅 {ev.date} ({ev.start_time})</div>
-                    <div style={{ fontSize: '11px', color: '#a78bfa', marginTop: '4px', fontWeight: '700' }}>
-                      👥 {ev.rsvps?.length || 0} Students Coming • Tap for Details & RSVP
+                    <p className="hms-item-sub" style={{ margin: '6px 0' }}>{c.mission}</p>
+                    <div style={{ fontSize: '11px', color: '#c084fc', fontWeight: 700 }}>
+                      👥 {c.members?.length || 0} Core Members • Tap for Dossier
                     </div>
                   </div>
                 </div>
-              ))
-            )}
-          </div>
-
-          <div style={{ ...styles.sectionHeader, color: '#94a3b8', marginTop: '18px' }}>
-            ⏮️ Past Completed Events ({pastEvents.length})
-          </div>
-          <div style={styles.listContainer}>
-            {pastEvents.map((ev) => (
-              <div key={ev.event_id} onClick={() => setSelectedEvent(ev)} style={styles.chatRow}>
-                <div style={styles.rowAvatar}>🏁</div>
-                <div style={styles.rowCenter}>
-                  <div style={styles.rowTopLine}>
-                    <span style={styles.rowTitle}>{ev.title}</span>
-                    <span style={{ color: '#94a3b8', fontSize: '11px', fontWeight: '700' }}>Completed</span>
-                  </div>
-                  <div style={styles.rowSub}>📍 {ev.venue} • 📅 {ev.date}</div>
-                  <div style={{ fontSize: '11px', color: isFeedbackActive(ev.date) ? '#4ade80' : '#64748b', marginTop: '4px', fontWeight: '700' }}>
-                    {isFeedbackActive(ev.date) ? '⭐ Feedback Window Open (1 Day Left)' : '🔒 Feedback Closed • Tap to View Memories'}
-                  </div>
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </div>
       )}
 
-      {/* TAB 3: ATTENDANCE */}
+      {/* TAB 3: ATTENDANCE - COMING SOON */}
       {activeTab === 'attendance' && (
-        <div style={styles.comingSoonWrap}>
-          <div style={styles.comingSoonBadge}>PHASE 2 ROLLOUT • ACTIVE SYNC</div>
-          <div style={styles.bigIconBox}>📅</div>
-          <h2 style={styles.csTitle}>Hostel Night Attendance</h2>
-          <p style={styles.csSub}>Smart geo-fenced attendance synced with the SVNIT Council of Wardens.</p>
+        <div className="hms-card" style={{ textAlign: 'center', padding: '50px 20px', maxWidth: '540px', margin: '0 auto' }}>
+          <span className="hms-pill-badge">PHASE 2 ROLLOUT • COMING SOON</span>
+          <div style={{ fontSize: '50px', margin: '16px 0' }}>📅</div>
+          <h3>Hostel Night Attendance</h3>
+          <p className="hms-muted">Smart geo-fenced night roll-call synced with the Council of Wardens is currently under phase-2 deployment.</p>
         </div>
       )}
 
-      {/* TAB 4: LEAVE FORM */}
+      {/* TAB 4: LEAVE PASS - COMING SOON */}
       {activeTab === 'leave' && (
-        <div style={styles.comingSoonWrap}>
-          <div style={styles.comingSoonBadge}>PHASE 2 ROLLOUT • COMING SOON</div>
-          <div style={styles.bigIconBox}>🪪</div>
-          <h2 style={styles.csTitle}>Digital Leave & Gate Outpass</h2>
-          <p style={styles.csSub}>Paperless leave applications with instant Warden approval and QR code verification.</p>
+        <div className="hms-card" style={{ textAlign: 'center', padding: '50px 20px', maxWidth: '540px', margin: '0 auto' }}>
+          <span className="hms-pill-badge">PHASE 2 ROLLOUT • COMING SOON</span>
+          <div style={{ fontSize: '50px', margin: '16px 0' }}>🪪</div>
+          <h3>Digital Leave & Gate Outpass</h3>
+          <p className="hms-muted">Paperless leave applications with instant Warden approval and main-gate QR verification will be available soon.</p>
         </div>
       )}
 
-      {/* TAB 5: PROFILE */}
+      {/* TAB 5: PROFILE & SECURITY */}
       {activeTab === 'profile' && (
-        <div style={styles.tabContent}>
-          <div style={styles.profileCard}>
-            <div style={styles.profileAvatar}>
-              {user.full_name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()}
-            </div>
-            <h2 style={{ margin: '12px 0 4px 0', color: '#f8fafc', fontSize: '20px' }}>{user.full_name}</h2>
-            <span style={styles.idPill}>{user.user_id} • Verified Resident</span>
-
-            <div style={styles.infoList}>
-              <div style={styles.infoRow}><span style={styles.infoLabel}>🏢 Hostel Bhawan</span><span style={styles.infoVal}>{user.hostel_block}</span></div>
-              <div style={styles.infoRow}><span style={styles.infoLabel}>🚪 Room & Floor</span><span style={styles.infoVal}>Room {user.room} ({user.floor})</span></div>
-              <div style={styles.infoRow}><span style={styles.infoLabel}>📞 Phone</span><span style={styles.infoVal}>{user.phone}</span></div>
-              <div style={styles.infoRow}><span style={styles.infoLabel}>✉️ Email</span><span style={styles.infoVal}>{user.email}</span></div>
+        <div className="hms-grid-2">
+          <div className="hms-card" style={{ textAlign: 'center' }}>
+            <div className="hms-profile-avatar">{user.full_name.split(' ').map((n) => n[0]).join('').slice(0, 2)}</div>
+            <h2 style={{ margin: '12px 0 4px 0' }}>{user.full_name}</h2>
+            <span className="hms-pill-badge">{user.user_id} • Verified Resident</span>
+            <div className="hms-stack" style={{ marginTop: '20px', textAlign: 'left' }}>
+              <div className="hms-row-item"><span>🏢 Hostel Bhawan</span><strong>{user.hostel_block}</strong></div>
+              <div className="hms-row-item"><span>🚪 Room</span><strong>Room {user.room}</strong></div>
+              <div className="hms-row-item"><span>🎓 Department</span><strong>{user.department}</strong></div>
+              <div className="hms-row-item"><span>📞 Phone</span><strong>{user.phone}</strong></div>
+              <div className="hms-row-item"><span>✉️ Email</span><strong>{user.email}</strong></div>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* MODAL: EVENT DETAILS */}
-      {selectedEvent && (
-        <div style={styles.modalOverlay} onClick={() => setSelectedEvent(null)}>
-          <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <span style={{ color: '#c084fc', fontWeight: '800', fontSize: '13px' }}>📡 EventRadar Details</span>
-              <button onClick={() => setSelectedEvent(null)} style={styles.closeBtn}>✕</button>
-            </div>
-
-            {selectedEvent.image_url && (
-              <img
-                src={selectedEvent.image_url}
-                alt="Event Cover"
-                style={{ width: '100%', height: '180px', objectFit: 'cover', borderRadius: '12px', marginBottom: '12px' }}
-              />
-            )}
-
-            <h2 style={{ margin: '0 0 6px 0', color: '#f8fafc', fontSize: '20px' }}>{selectedEvent.title}</h2>
-            <p style={{ margin: '0 0 12px 0', color: '#94a3b8', fontSize: '13px' }}>
-              Organized by Chapter: <strong style={{ color: '#c084fc' }}>{selectedEvent.club_id}</strong>
+          <div className="hms-card">
+            <div className="hms-section-label">🔐 Change My Account Password</div>
+            <p className="hms-muted" style={{ marginBottom: '14px' }}>
+              Your default password is your Date of Birth (<code>DDMMYYYY</code>). Set your custom password below.
             </p>
-
-            <div style={{ background: '#090d16', padding: '12px', borderRadius: '10px', color: '#e2e8f0', fontSize: '13px', lineHeight: '1.5', border: '1px solid #1e293b', marginBottom: '12px' }}>
-              {selectedEvent.description || 'Official SVNIT club event.'}
-            </div>
-
-            <div style={styles.detailBox}>
-              <div>📍 <strong>Venue:</strong> {selectedEvent.venue}</div>
-              <div style={{ marginTop: '6px' }}>📅 <strong>Date:</strong> {selectedEvent.date}</div>
-              <div style={{ marginTop: '6px' }}>⏰ <strong>Time:</strong> {selectedEvent.start_time} - {selectedEvent.end_time}</div>
-              <div style={{ marginTop: '8px', color: '#a78bfa', fontWeight: '800' }}>
-                👥 {selectedEvent.rsvps?.length || 0} Students Confirmed Coming
-              </div>
-            </div>
-
-            {selectedEvent.registration_link && (
-              <div style={{ marginTop: '12px' }}>
-                <a
-                  href={selectedEvent.registration_link}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{
-                    display: 'block', textAlign: 'center', background: '#1e293b',
-                    color: '#c084fc', border: '1px solid #8b5cf6', padding: '12px',
-                    borderRadius: '10px', textDecoration: 'none', fontWeight: '700', fontSize: '13px'
-                  }}
-                >
-                  🔗 Open Audition / Google Form Link
-                </a>
-              </div>
-            )}
-
-            {selectedEvent.status !== 'Completed' && (
-              <div style={{ marginTop: '12px' }}>
-                <button
-                  onClick={() => handleRsvp(selectedEvent.event_id)}
-                  disabled={selectedEvent.rsvps?.includes(user.user_id)}
-                  style={{
-                    ...styles.primaryBtn,
-                    background: selectedEvent.rsvps?.includes(user.user_id) ? '#1e293b' : '#8b5cf6',
-                    color: selectedEvent.rsvps?.includes(user.user_id) ? '#c084fc' : '#fff',
-                    border: selectedEvent.rsvps?.includes(user.user_id) ? '1px solid #8b5cf6' : 'none'
-                  }}
-                >
-                  {selectedEvent.rsvps?.includes(user.user_id)
-                    ? `✅ You're Coming (${selectedEvent.rsvps.length} Going)`
-                    : "🎟️ I'm Coming / RSVP Now"}
-                </button>
-              </div>
-            )}
-
-            {selectedEvent.status === 'Completed' && isFeedbackActive(selectedEvent.date) && (
-              <form
-                onSubmit={(e) => handleFeedbackSubmit(e, selectedEvent.event_id)}
-                style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}
-              >
-                <div style={{ fontSize: '13px', fontWeight: '700', color: '#c084fc' }}>
-                  ⭐ Post-Event Feedback (Active 1-Day Window)
-                </div>
-                <select
-                  value={feedbackRating}
-                  onChange={(e) => setFeedbackRating(Number(e.target.value))}
-                  style={styles.input}
-                >
-                  <option value={5}>⭐⭐⭐⭐⭐ 5 - Excellent</option>
-                  <option value={4}>⭐⭐⭐⭐ 4 - Very Good</option>
-                  <option value={3}>⭐⭐⭐ 3 - Good</option>
-                  <option value={2}>⭐⭐ 2 - Average</option>
-                  <option value={1}>⭐ 1 - Poor</option>
-                </select>
-                <textarea
-                  rows="2"
-                  placeholder="Share your feedback for the Club & Dean AI Audit..."
-                  value={feedbackReview}
-                  onChange={(e) => setFeedbackReview(e.target.value)}
-                  required
-                  style={styles.input}
-                />
-                <button type="submit" style={styles.primaryBtn}>Submit Event Feedback</button>
-              </form>
-            )}
-
-            {selectedEvent.status === 'Completed' && !isFeedbackActive(selectedEvent.date) && (
-              <div style={{ marginTop: '14px', textAlign: 'center', fontSize: '12px', color: '#64748b', background: '#090d16', padding: '10px', borderRadius: '8px' }}>
-                🔒 Feedback window closed (Active strictly for 1 day after event date).
-              </div>
-            )}
+            <form onSubmit={handleSelfPassChange} className="hms-stack">
+              <input type="password" className="hms-input" placeholder="Current Password or DOB (DDMMYYYY)" value={oldPass} onChange={(e) => setOldPass(e.target.value)} required />
+              <input type="password" className="hms-input" placeholder="New Custom Password" value={newPass} onChange={(e) => setNewPass(e.target.value)} required />
+              <button type="submit" className="hms-btn-primary">💾 Save Custom Password</button>
+            </form>
           </div>
         </div>
       )}
 
-      {/* MODAL: COMPLAINT DETAILS */}
-      {selectedTicket && (
-        <div style={styles.modalOverlay} onClick={() => setSelectedTicket(null)}>
-          <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <span style={{ color: '#c084fc', fontWeight: '800', fontSize: '14px' }}>
-                {selectedTicket.ticket_id} • {selectedTicket.category}
-              </span>
-              <button onClick={() => setSelectedTicket(null)} style={styles.closeBtn}>✕</button>
-            </div>
-            <h3 style={{ margin: '0 0 8px 0', color: '#f8fafc', fontSize: '17px' }}>{selectedTicket.summary}</h3>
-            <p style={{ margin: '0 0 14px 0', color: '#cbd5e1', fontSize: '14px' }}>{selectedTicket.description}</p>
-            <div style={styles.detailBox}>
-              <div><strong>Status:</strong> <span style={{ color: getStatusColor(selectedTicket.status), fontWeight: '700' }}>{selectedTicket.status}</span></div>
-              <div style={{ marginTop: '6px' }}><strong>Assigned Wing:</strong> {selectedTicket.routed_to}</div>
-              {selectedTicket.staff_remark && (
-                <div style={{ marginTop: '6px', color: '#c084fc' }}><strong>Staff Note:</strong> {selectedTicket.staff_remark}</div>
-              )}
-            </div>
-            {selectedTicket.status === 'Awaiting Confirmation' && (
-              <div style={styles.verifyBox}>
-                <div style={{ fontSize: '13px', fontWeight: '700', color: '#f8fafc', marginBottom: '10px' }}>
-                  Did maintenance staff resolve your issue?
-                </div>
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <button onClick={() => handleStudentVerify(selectedTicket.ticket_id, true)} style={styles.yesBtn}>✅ Yes, Resolved</button>
-                  <button onClick={() => handleStudentVerify(selectedTicket.ticket_id, false)} style={styles.noBtn}>❌ Reopen</button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: NEW COMPLAINT */}
+      {/* MODAL: LODGE NEW COMPLAINT */}
       {showNewModal && (
-        <div style={styles.modalOverlay} onClick={() => setShowNewModal(false)}>
-          <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-              <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '18px' }}>📝 Lodge New Grievance</h3>
-              <button onClick={() => setShowNewModal(false)} style={styles.closeBtn}>✕</button>
+        <div className="hms-modal-backdrop" onClick={() => setShowNewModal(false)}>
+          <div className="hms-modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="hms-row-between" style={{ marginBottom: '12px' }}>
+              <h3 style={{ margin: 0 }}>📝 Lodge New Hostel Grievance</h3>
+              <button className="hms-close-btn" onClick={() => setShowNewModal(false)}>✕</button>
             </div>
-            <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <form onSubmit={handleCreateComplaint} className="hms-stack">
+              <label className="hms-label">Select Maintenance Category</label>
+              <select className="hms-input" value={category} onChange={(e) => setCategory(e.target.value)}>
+                {departments.map((d) => (
+                  <option key={d.id} value={d.id}>{d.icon} {d.title}</option>
+                ))}
+              </select>
               <div>
-                <label style={styles.label}>Select Maintenance Wing</label>
-                <div style={styles.catGrid}>
-                  {COMPLAINT_CATEGORIES.map((cat) => (
-                    <div
-                      key={cat.id}
-                      onClick={() => setCategory(cat.id)}
-                      style={{
-                        ...styles.catChip,
-                        borderColor: category === cat.id ? '#8b5cf6' : '#1e293b',
-                        background: category === cat.id ? 'rgba(139, 92, 246, 0.15)' : '#090d16'
-                      }}
-                    >
-                      <span>{cat.icon}</span>
-                      <span style={{ fontSize: '12px', fontWeight: '700', color: '#f8fafc' }}>{cat.title}</span>
-                    </div>
-                  ))}
-                </div>
+                <label className="hms-label">Issue Headline / Summary</label>
+                <input type="text" className="hms-input" placeholder="e.g. Ceiling fan regulator sparking in B-204" value={summary} onChange={(e) => setSummary(e.target.value)} required />
               </div>
-              <input
-                type="text"
-                placeholder="Short Summary (e.g. Fan regulator sparking)"
-                value={summary}
-                onChange={(e) => setSummary(e.target.value)}
-                required
-                style={styles.input}
-              />
-              <textarea
-                rows="3"
-                placeholder="Describe exact issue details..."
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                required
-                style={styles.input}
-              />
-              <button type="submit" disabled={submitting} style={styles.primaryBtn}>
+              <div>
+                <label className="hms-label">Detailed Problem Description</label>
+                <textarea rows="3" className="hms-input" placeholder="Provide exact room details or severity..." value={description} onChange={(e) => setDescription(e.target.value)} required />
+              </div>
+              <button type="submit" disabled={submitting} className="hms-btn-primary">
                 {submitting ? 'Submitting...' : '🚀 Submit Grievance'}
               </button>
             </form>
@@ -589,134 +414,142 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
         </div>
       )}
 
-      {/* BOTTOM NAVIGATION */}
-      <nav style={styles.bottomNav}>
-        <button onClick={() => setActiveTab('complaints')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'complaints' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>
-            <span style={{ fontSize: '18px' }}>💬</span>
-            {actionPendingCount > 0 && <span style={styles.badgeCount}>{actionPendingCount}</span>}
+      {/* MODAL: TICKET DETAILS & VERIFICATION */}
+      {selectedTicket && (
+        <div className="hms-modal-backdrop" onClick={() => setSelectedTicket(null)}>
+          <div className="hms-modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="hms-row-between" style={{ marginBottom: '12px' }}>
+              <span className="hms-pill-badge">{selectedTicket.ticket_id} • {selectedTicket.category}</span>
+              <button className="hms-close-btn" onClick={() => setSelectedTicket(null)}>✕</button>
+            </div>
+            <h3>{selectedTicket.summary}</h3>
+            <p className="hms-muted">{selectedTicket.description}</p>
+            <div className="hms-detail-box">
+              <div><strong>Status:</strong> <span style={{ color: getStatusColor(selectedTicket.status), fontWeight: 800 }}>{selectedTicket.status}</span></div>
+              <div style={{ marginTop: '6px' }}><strong>Routed Wing:</strong> {selectedTicket.routed_to}</div>
+              {selectedTicket.staff_remark && (
+                <div style={{ marginTop: '8px', padding: '10px', background: 'rgba(74,222,128,0.1)', borderRadius: '8px', color: '#4ade80' }}>
+                  <strong>🛠️ Staff Remark:</strong> {selectedTicket.staff_remark}
+                </div>
+              )}
+            </div>
+            {selectedTicket.status !== 'Completed' && (
+              <div style={{ marginTop: '16px', padding: '14px', background: 'rgba(139,92,246,0.12)', borderRadius: '12px', border: '1px solid #8b5cf6' }}>
+                <div style={{ fontWeight: 800, fontSize: '13px', marginBottom: '10px', textAlign: 'center' }}>
+                  Is this maintenance issue successfully resolved?
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button className="hms-btn-primary" onClick={() => handleStudentVerify(selectedTicket.ticket_id, true)}>
+                    ✅ Yes, Resolved
+                  </button>
+                  <button className="hms-btn-danger" onClick={() => handleStudentVerify(selectedTicket.ticket_id, false)}>
+                    ❌ Reopen Ticket
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'complaints' ? '#c084fc' : '#94a3b8' }}>Complaints</span>
-        </button>
+        </div>
+      )}
 
-        <button onClick={() => setActiveTab('eventradar')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'eventradar' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>
-            <span style={{ fontSize: '18px' }}>📡</span>
-          </div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'eventradar' ? '#c084fc' : '#94a3b8' }}>EventRadar</span>
-        </button>
+      {/* MODAL: EVENT DETAILS, RSVP & FEEDBACK */}
+      {selectedEvent && (
+        <div className="hms-modal-backdrop" onClick={() => setSelectedEvent(null)}>
+          <div className="hms-modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="hms-row-between" style={{ marginBottom: '12px' }}>
+              <span className="hms-pill-badge">🎪 {selectedEvent.club_id} CHAPTER • {selectedEvent.status}</span>
+              <button className="hms-close-btn" onClick={() => setSelectedEvent(null)}>✕</button>
+            </div>
 
-        <button onClick={() => setActiveTab('attendance')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'attendance' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>
-            <span style={{ fontSize: '18px' }}>📅</span>
-          </div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'attendance' ? '#c084fc' : '#94a3b8' }}>Attendance</span>
-        </button>
+            {selectedEvent.image_url && <img src={selectedEvent.image_url} alt="Poster" className="hms-event-img" />}
 
-        <button onClick={() => setActiveTab('leave')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'leave' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>
-            <span style={{ fontSize: '18px' }}>🪪</span>
-          </div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'leave' ? '#c084fc' : '#94a3b8' }}>Leave Form</span>
-        </button>
+            <h3 style={{ margin: '0 0 8px 0', fontSize: '19px' }}>{selectedEvent.title}</h3>
+            <p className="hms-muted">{selectedEvent.description}</p>
+            <div className="hms-detail-box">
+              <div>📍 <strong>Venue:</strong> {selectedEvent.venue}</div>
+              <div style={{ marginTop: '4px' }}>📅 <strong>Date & Time:</strong> {selectedEvent.date} ({selectedEvent.start_time} - {selectedEvent.end_time})</div>
+              <div style={{ marginTop: '6px', color: '#4ade80', fontWeight: 800 }}>
+                👥 Live Attendance Count: {selectedEvent.rsvps?.length || 0} Students Confirmed Coming
+              </div>
+            </div>
 
-        <button onClick={() => setActiveTab('profile')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'profile' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>
-            <span style={{ fontSize: '18px' }}>👤</span>
+            {selectedEvent.registration_link && (
+              <a href={selectedEvent.registration_link} target="_blank" rel="noreferrer" className="hms-link-btn">
+                🔗 Open Google Form Registration Link
+              </a>
+            )}
+
+            {selectedEvent.status !== 'Completed' ? (
+              <div style={{ marginTop: '14px', padding: '14px', background: 'rgba(139,92,246,0.12)', borderRadius: '12px', border: '1px solid #8b5cf6', textAlign: 'center' }}>
+                <button className="hms-btn-primary" onClick={() => handleRsvp(selectedEvent.event_id)}>
+                  {selectedEvent.rsvps?.some((r) => r.toUpperCase() === user.user_id.toUpperCase())
+                    ? `✅ You Are Attending! (${selectedEvent.rsvps.length} Going — Tap to Cancel)`
+                    : '🎟️ Yes, I Am Attending (RSVP Now)'}
+                </button>
+              </div>
+            ) : (
+              <div style={{ marginTop: '16px' }}>
+                {selectedEvent.ai_audit && (
+                  <div className="hms-detail-box" style={{ borderColor: '#8b5cf6', marginBottom: '14px' }}>
+                    <div className="hms-section-label">🤖 AI Feedback Audit</div>
+                    <div><strong>Turnout:</strong> {selectedEvent.ai_audit.total_attendees} | <strong>Rating:</strong> ⭐ {selectedEvent.ai_audit.average_rating}/5.0</div>
+                    <div style={{ color: '#4ade80', fontWeight: 700, marginTop: '8px' }}>👍 Highlights:</div>
+                    <ul style={{ margin: '4px 0 8px 18px', padding: 0 }}>{selectedEvent.ai_audit.key_pros?.map((p, i) => <li key={i}>{p}</li>)}</ul>
+                  </div>
+                )}
+                <form onSubmit={(e) => handleFeedbackSubmit(e, selectedEvent.event_id)} className="hms-stack" style={{ background: '#090d16', padding: '14px', borderRadius: '12px', border: '1px solid #334155' }}>
+                  <div className="hms-section-label" style={{ margin: 0 }}>⭐ Submit Event Rating & Review</div>
+                  <select className="hms-input" value={feedbackRating} onChange={(e) => setFeedbackRating(Number(e.target.value))}>
+                    <option value={5}>⭐⭐⭐⭐⭐ 5 - Excellent</option>
+                    <option value={4}>⭐⭐⭐⭐ 4 - Very Good</option>
+                    <option value={3}>⭐⭐⭐ 3 - Good</option>
+                    <option value={2}>⭐⭐ 2 - Fair</option>
+                    <option value={1}>⭐ 1 - Poor</option>
+                  </select>
+                  <textarea rows="2" className="hms-input" placeholder="Write your feedback..." value={feedbackReview} onChange={(e) => setFeedbackReview(e.target.value)} required />
+                  <button type="submit" className="hms-btn-primary">Submit Feedback</button>
+                </form>
+              </div>
+            )}
           </div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'profile' ? '#c084fc' : '#94a3b8' }}>Profile</span>
-        </button>
+        </div>
+      )}
+
+      {/* MODAL: CLUB DOSSIER */}
+      {selectedClubView && (
+        <div className="hms-modal-backdrop" onClick={() => setSelectedClubView(null)}>
+          <div className="hms-modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="hms-row-between" style={{ marginBottom: '10px' }}>
+              <span className="hms-pill-badge">OFFICIAL CHAPTER • {selectedClubView.club_id}</span>
+              <button className="hms-close-btn" onClick={() => setSelectedClubView(null)}>✕</button>
+            </div>
+            <h3 style={{ margin: '0 0 6px 0' }}>{selectedClubView.name}</h3>
+            <p className="hms-muted">{selectedClubView.mission}</p>
+            <div className="hms-detail-box" style={{ marginBottom: '14px' }}>
+              <div><strong>Faculty Advisor:</strong> {selectedClubView.faculty_advisor}</div>
+              <div style={{ marginTop: '4px' }}><strong>Head Coordinator:</strong> {selectedClubView.head_coordinator}</div>
+            </div>
+            <div className="hms-section-label">👥 Core Committee Roster ({selectedClubView.members?.length || 0})</div>
+            <div className="hms-stack">
+              {selectedClubView.members?.map((m, i) => (
+                <div key={i} className="hms-row-item">
+                  <div>
+                    <div className="hms-item-title">{m.name}</div>
+                    <div className="hms-item-sub">{m.roll} • {m.phone}</div>
+                  </div>
+                  <span className="hms-pill-badge">{m.position}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <nav className="hms-bottom-nav">
+        <button onClick={() => setActiveTab('complaints')} className="hms-bnav-item"><span>💬</span><span>Complaints</span></button>
+        <button onClick={() => setActiveTab('eventradar')} className="hms-bnav-item"><span>📡</span><span>Events</span></button>
+        <button onClick={() => setActiveTab('profile')} className="hms-bnav-item"><span>👤</span><span>Profile</span></button>
       </nav>
     </div>
   );
 }
-
-const styles = {
-  appWrapper: { maxWidth: '680px', margin: '0 auto', paddingBottom: '95px', minHeight: 'calc(100vh - 70px)' },
-  tabContent: { padding: '14px 16px' },
-  radarBanner: { background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(99, 102, 241, 0.2))', border: '1px solid rgba(139, 92, 246, 0.4)', borderRadius: '16px', padding: '16px', marginBottom: '14px' },
-  searchWrap: { display: 'flex', alignItems: 'center', gap: '10px', background: '#1e293b', borderRadius: '999px', padding: '10px 16px', marginBottom: '14px' },
-  searchInput: { background: 'transparent', border: 'none', outline: 'none', color: '#f8fafc', fontSize: '14px', width: '100%' },
-  toast: { margin: '12px 16px 0 16px', background: '#0f172a', borderLeft: '4px solid', padding: '12px 14px', borderRadius: '10px', fontSize: '13px', fontWeight: '600', color: '#f8fafc', cursor: 'pointer' },
-  listContainer: { display: 'flex', flexDirection: 'column' },
-  chatRow: { display: 'flex', alignItems: 'flex-start', gap: '14px', padding: '14px 8px', borderBottom: '1px solid rgba(30, 41, 59, 0.7)', cursor: 'pointer' },
-  calTopBar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '10px 14px', marginBottom: '10px' },
-  calNavBtn: { background: '#1e293b', color: '#c084fc', border: '1px solid #334155', borderRadius: '8px', padding: '6px 12px', fontSize: '12px', fontWeight: '700', cursor: 'pointer' },
-  calGridContainer: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', overflow: 'hidden', marginBottom: '18px' },
-  calHeaderRow: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', background: '#1e293b', padding: '10px 0', textAlign: 'center', fontSize: '11px', fontWeight: '800', color: '#94a3b8' },
-  calHeaderCell: { textTransform: 'uppercase' },
-  calDaysGrid: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '1px', background: '#1e293b' },
-  calCell: { background: '#090d16', minHeight: '78px', padding: '6px', display: 'flex', flexDirection: 'column', gap: '4px', overflow: 'hidden' },
-  calCellNum: { fontSize: '11px', fontWeight: '700', color: '#64748b' },
-  calEventPill: { color: '#fff', fontSize: '10px', fontWeight: '700', padding: '3px 5px', borderRadius: '5px', cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  sectionHeader: { color: '#c084fc', fontSize: '12px', fontWeight: '800', margin: '8px 0', textTransform: 'uppercase', letterSpacing: '0.6px' },
-  rowAvatar: { width: '46px', height: '46px', borderRadius: '50%', background: '#1e293b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', flexShrink: 0 },
-  rowCenter: { flex: 1, minWidth: 0 },
-  rowTopLine: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '4px' },
-  rowTitle: { color: '#f8fafc', fontSize: '15px', fontWeight: '700', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  rowTime: { color: '#94a3b8', fontSize: '11px', flexShrink: 0 },
-  rowBottomLine: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' },
-  rowSub: { color: '#94a3b8', fontSize: '13px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  statusBadge: { fontSize: '10px', fontWeight: '700', border: '1px solid', padding: '2px 8px', borderRadius: '999px', flexShrink: 0 },
-  emptyState: { textAlign: 'center', padding: '40px 20px', background: '#0f172a', borderRadius: '18px', border: '1px solid #1e293b', marginTop: '8px', color: '#94a3b8' },
-  fabBtn: { position: 'fixed', right: '22px', bottom: '88px', width: '56px', height: '56px', borderRadius: '16px', background: '#8b5cf6', color: '#fff', border: 'none', fontSize: '30px', fontWeight: '800', cursor: 'pointer', boxShadow: '0 10px 25px rgba(139, 92, 246, 0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 90 },
-  comingSoonWrap: { padding: '40px 20px', textAlign: 'center', margin: '16px', background: '#0f172a', borderRadius: '22px', border: '1px solid #1e293b' },
-  comingSoonBadge: { display: 'inline-block', background: 'rgba(139, 92, 246, 0.18)', color: '#c084fc', border: '1px solid rgba(139, 92, 246, 0.35)', padding: '5px 12px', borderRadius: '999px', fontSize: '11px', fontWeight: '800', letterSpacing: '0.8px', marginBottom: '16px' },
-  bigIconBox: { width: '72px', height: '72px', borderRadius: '22px', background: '#1e293b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '36px', margin: '0 auto 14px auto' },
-  csTitle: { color: '#f8fafc', fontSize: '21px', fontWeight: '800', margin: '0 0 8px 0' },
-  csSub: { color: '#94a3b8', fontSize: '14px', lineHeight: '1.5', maxWidth: '420px', margin: '0 auto 22px auto' },
-  profileCard: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: '22px', padding: '26px 20px', textAlign: 'center' },
-  profileAvatar: { width: '72px', height: '72px', borderRadius: '50%', background: '#8b5cf6', color: '#fff', fontSize: '24px', fontWeight: '800', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto' },
-  idPill: { display: 'inline-block', background: 'rgba(139, 92, 246, 0.15)', color: '#c084fc', padding: '4px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: '700', marginTop: '4px' },
-  infoList: { marginTop: '22px', display: 'flex', flexDirection: 'column', gap: '10px', textAlign: 'left' },
-  infoRow: { display: 'flex', justifyContent: 'space-between', background: '#090d16', padding: '12px 14px', borderRadius: '12px', border: '1px solid #1e293b', fontSize: '13px' },
-  infoLabel: { color: '#94a3b8' },
-  infoVal: { color: '#f8fafc', fontWeight: '700' },
-  modalOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.78)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '16px' },
-  modalSheet: { background: '#0f172a', border: '1px solid #334155', borderRadius: '20px', padding: '22px', width: '100%', maxWidth: '480px', maxHeight: '85vh', overflowY: 'auto' },
-  closeBtn: { background: '#1e293b', color: '#cbd5e1', border: 'none', width: '30px', height: '30px', borderRadius: '50%', cursor: 'pointer', fontWeight: '700' },
-  detailBox: { background: '#090d16', border: '1px solid #1e293b', borderRadius: '12px', padding: '14px', fontSize: '13px', color: '#cbd5e1' },
-  verifyBox: { marginTop: '14px', background: 'rgba(139, 92, 246, 0.1)', border: '1px solid #8b5cf6', borderRadius: '12px', padding: '14px', textAlign: 'center' },
-  yesBtn: { flex: 1, background: '#8b5cf6', color: '#fff', border: 'none', padding: '10px', borderRadius: '8px', fontWeight: '800', cursor: 'pointer', fontSize: '12px' },
-  noBtn: { flex: 1, background: '#ef4444', color: '#fff', border: 'none', padding: '10px', borderRadius: '8px', fontWeight: '700', cursor: 'pointer', fontSize: '12px' },
-  label: { display: 'block', fontSize: '11px', fontWeight: '700', color: '#94a3b8', marginBottom: '8px', textTransform: 'uppercase' },
-  catGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '6px' },
-  catChip: { display: 'flex', alignItems: 'center', gap: '8px', padding: '10px', borderRadius: '10px', border: '1.5px solid', cursor: 'pointer' },
-  input: { width: '100%', background: '#090d16', border: '1px solid #334155', borderRadius: '10px', padding: '12px', color: '#fff', fontSize: '14px', boxSizing: 'border-box' },
-  primaryBtn: { width: '100%', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: '10px', padding: '13px', fontWeight: '800', fontSize: '14px', cursor: 'pointer' },
-  bottomNav: { position: 'fixed', bottom: 0, left: 0, right: 0, height: '72px', background: '#0b141a', borderTop: '1px solid #1e293b', display: 'flex', justifyContent: 'space-around', alignItems: 'center', zIndex: 100 },
-  navItem: { background: 'transparent', border: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', cursor: 'pointer', flex: 1 },
-  iconPill: { position: 'relative', width: '52px', height: '30px', borderRadius: '999px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-  navLabel: { fontSize: '10px', fontWeight: '600' },
-  badgeCount: { position: 'absolute', top: '-2px', right: '4px', background: '#8b5cf6', color: '#fff', fontSize: '9px', fontWeight: '800', padding: '1px 5px', borderRadius: '999px' }
-};
-// State variables inside StudentView component:
-const [oldPass, setOldPass] = useState('');
-const [newPass, setNewPass] = useState('');
-const [passMsg, setPassMsg] = useState(null);
-
-const handleSelfPasswordChange = async (e) => {
-  e.preventDefault();
-  setPassMsg(null);
-  try {
-    const res = await fetch(`${apiUrl}/api/student/change-password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        student_id: user.user_id,
-        old_password: oldPass,
-        new_password: newPass
-      })
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setPassMsg({ type: 'success', text: '✅ Password updated successfully!' });
-      setOldPass('');
-      setNewPass('');
-    } else {
-      setPassMsg({ type: 'error', text: `❌ ${data.detail || 'Failed'}` });
-    }
-  } catch {
-    setPassMsg({ type: 'error', text: 'Server connection error.' });
-  }
-};

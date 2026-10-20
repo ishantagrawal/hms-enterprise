@@ -1,71 +1,138 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 
-export default function StaffView({ user, complaints, apiUrl, onRefresh }) {
+const COMPLAINT_CATEGORIES = [
+  { id: 'Electricity', title: 'Electricity', icon: '⚡' },
+  { id: 'Plumbing', title: 'Plumbing', icon: '🚰' },
+  { id: 'LAN / Wi-Fi', title: 'LAN / Wi-Fi', icon: '🌐' },
+  { id: 'Carpentry', title: 'Carpentry', icon: '🪚' },
+  { id: 'Water Cooler', title: 'RO / Water Cooler', icon: '💧' },
+  { id: 'Mess & Hygiene', title: 'Cleaning & Hygiene', icon: '🧹' }
+];
+
+const getCategoryIcon = (catName) => {
+  const found = COMPLAINT_CATEGORIES.find((c) => c.id === catName);
+  return found ? found.icon : '🛠️';
+};
+
+const getStatusColor = (status) => {
+  if (status === 'Completed') return '#4ade80';
+  if (status === 'Awaiting Confirmation') return '#38bdf8';
+  return '#fbbf24';
+};
+
+export default function StaffPortal({ user, apiUrl }) {
+  const [complaints, setComplaints] = useState([]);
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [remark, setRemark] = useState('');
+  const [msg, setMsg] = useState(null);
+
+  const loadStaffComplaints = useCallback(async () => {
+    try {
+      const params = new URLSearchParams({
+        role: 'Staff',
+        user_id: user.user_id,
+        department: user.department || 'Electricity'
+      });
+      const res = await fetch(`${apiUrl}/api/complaints?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) setComplaints(data);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, [apiUrl, user.user_id, user.department]);
+
+  useEffect(() => {
+    loadStaffComplaints();
+  }, [loadStaffComplaints]);
 
   const handleResolve = async (e) => {
     e.preventDefault();
     if (!selectedTicket) return;
-    const res = await fetch(`${apiUrl}/api/complaints/staff-resolve`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticket_id: selectedTicket.ticket_id, staff_remark: remark })
-    });
-    if (res.ok) {
-      setRemark('');
-      setSelectedTicket(null);
-      onRefresh();
+    try {
+      const res = await fetch(`${apiUrl}/api/complaints/staff-resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticket_id: selectedTicket.ticket_id, staff_remark: remark })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setMsg(`✅ Ticket ${selectedTicket.ticket_id} resolved and sent to student for confirmation!`);
+        setRemark('');
+        setSelectedTicket(null);
+        loadStaffComplaints();
+      } else {
+        setMsg(`❌ ${data.detail || 'Resolution failed'}`);
+      }
+    } catch {
+      setMsg('❌ Connection error.');
     }
   };
 
   return (
-    <div style={{ maxWidth: '680px', margin: '0 auto', padding: '16px' }}>
-      <h3 style={{ color: '#c084fc', marginTop: 0 }}>🛠️ Assigned Maintenance Queue ({user.department})</h3>
+    <div className="hms-container">
+      {msg && <div className="hms-toast" onClick={() => setMsg(null)}>{msg}</div>}
+
+      <div className="hms-desktop-tabs">
+        <button className="hms-dtab active">
+          🛠️ Assigned Maintenance Queue ({user.department} Wing) — {complaints.length} Tickets
+        </button>
+      </div>
+
       {complaints.length === 0 ? (
-        <div style={{ padding: '30px', textAlign: 'center', background: '#0f172a', borderRadius: '14px', color: '#94a3b8' }}>
-          No pending maintenance tickets in your wing.
+        <div className="hms-empty-card">
+          <div style={{ fontSize: '40px', marginBottom: '8px' }}>🛠️</div>
+          <h3>No Pending Maintenance Tickets</h3>
+          <p className="hms-muted">All grievances assigned to the {user.department} department have been resolved.</p>
         </div>
       ) : (
-        complaints.map((c) => (
-          <div
-            key={c.ticket_id}
-            onClick={() => setSelectedTicket(c)}
-            style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '14px', padding: '14px', marginBottom: '10px', cursor: 'pointer' }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <strong style={{ color: '#f8fafc' }}>{c.summary}</strong>
-              <span style={{ color: '#c084fc', fontSize: '12px', fontWeight: '700' }}>{c.status}</span>
+        <div className="hms-grid-2">
+          {complaints.map((c) => (
+            <div key={c.ticket_id} className="hms-item-card" onClick={() => setSelectedTicket(c)}>
+              <div className="hms-avatar-circle">{getCategoryIcon(c.category)}</div>
+              <div style={{ flex: 1 }}>
+                <div className="hms-row-between">
+                  <span className="hms-item-title">{c.summary}</span>
+                  <span className="hms-status-pill" style={{ color: getStatusColor(c.status), borderColor: getStatusColor(c.status) }}>
+                    {c.status}
+                  </span>
+                </div>
+                <p className="hms-item-sub" style={{ margin: '4px 0' }}>{c.description}</p>
+                <div className="hms-item-sub">
+                  📍 {c.hostel_block} • Room {c.room} ({c.student_name})
+                </div>
+              </div>
             </div>
-            <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '6px' }}>
-              📍 {c.hostel_block} • Room {c.room} ({c.student_name})
-            </div>
-          </div>
-        ))
+          ))}
+        </div>
       )}
 
       {selectedTicket && (
-        <div
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', zIndex: 200 }}
-          onClick={() => setSelectedTicket(null)}
-        >
-          <div
-            style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '18px', padding: '20px', width: '100%', maxWidth: '440px' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 style={{ marginTop: 0, color: '#f8fafc' }}>Resolve {selectedTicket.ticket_id}</h3>
-            <p style={{ color: '#cbd5e1', fontSize: '13px' }}>{selectedTicket.description}</p>
-            <form onSubmit={handleResolve} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <div className="hms-modal-backdrop" onClick={() => setSelectedTicket(null)}>
+          <div className="hms-modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="hms-row-between" style={{ marginBottom: '12px' }}>
+              <span className="hms-pill-badge">{selectedTicket.ticket_id} • {selectedTicket.category}</span>
+              <button className="hms-close-btn" onClick={() => setSelectedTicket(null)}>✕</button>
+            </div>
+            <h3>{selectedTicket.summary}</h3>
+            <p className="hms-muted">{selectedTicket.description}</p>
+            <div className="hms-detail-box" style={{ marginBottom: '14px' }}>
+              <div><strong>Resident:</strong> {selectedTicket.student_name} ({selectedTicket.student_id})</div>
+              <div style={{ marginTop: '4px' }}><strong>Location:</strong> {selectedTicket.hostel_block}, Room {selectedTicket.room}</div>
+            </div>
+            <form onSubmit={handleResolve} className="hms-stack">
+              <label className="hms-label">Enter Maintenance Action / Parts Replaced</label>
               <textarea
                 rows="3"
-                placeholder="Enter action taken / resolution remark..."
+                className="hms-input"
+                placeholder="e.g. Replaced faulty capacitor and tested switch..."
                 value={remark}
                 onChange={(e) => setRemark(e.target.value)}
                 required
-                style={{ width: '100%', background: '#090d16', border: '1px solid #334155', borderRadius: '10px', padding: '12px', color: '#fff', boxSizing: 'border-box' }}
               />
-              <button type="submit" style={{ background: '#8b5cf6', color: '#fff', border: 'none', padding: '12px', borderRadius: '10px', fontWeight: '800', cursor: 'pointer' }}>
-                ✅ Mark Resolved & Ask Student Confirmation
+              <button type="submit" className="hms-btn-primary">
+                ✅ Mark Resolved & Send for Student Verification
               </button>
             </form>
           </div>

@@ -1,423 +1,330 @@
-import React, { useState, useEffect } from 'react';
-import { COMPLAINT_CATEGORIES } from '../config/categories';
+import React, { useState, useEffect, useCallback } from 'react';
 
-export default function WardenView({ user, complaints, apiUrl }) {
-  const isDean = user.role === 'Dean' || user.hostel_block === 'All';
+const SAMPLE_CSV = `U26CE091, Aarav Verma, Gajjar Bhawan, B-102, Civil Engineering, 1st Year, +919876543291, u26ce091@svnit.ac.in, 14082007
+U26ME044, Priyansh Shah, Gajjar Bhawan, A-208, Mechanical Engineering, 1st Year, +919876543292, u26me044@svnit.ac.in, 22112007`;
 
-  const [activeTab, setActiveTab] = useState(isDean ? 'hostels' : 'complaints');
-  const [clubSubTab, setClubSubTab] = useState('approvals');
-  const [selectedHostel, setSelectedHostel] = useState(null);
-  const [selectedTicket, setSelectedTicket] = useState(null);
-  const [resetTarget, setResetTarget] = useState(null);
+export default function WardenPortal({ user, apiUrl }) {
+  const [activeTab, setActiveTab] = useState('complaints');
+  const [complaints, setComplaints] = useState([]);
+  const [students, setStudents] = useState([]);
+  const [departments, setDepartments] = useState([]);
+  const [staffList, setStaffList] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [msg, setMsg] = useState(null);
 
-  const [clubs, setClubs] = useState([]);
-  const [events, setEvents] = useState([]);
-  const [selectedClub, setSelectedClub] = useState(null);
-  const [selectedEventAudit, setSelectedEventAudit] = useState(null);
+  const hostelName = user.hostel_block;
 
-  const [calYear, setCalYear] = useState(2026);
-  const [calMonth, setCalMonth] = useState(9);
+  // 1. Manual Single Student Onboarding
+  const [studentForm, setStudentForm] = useState({
+    user_id: '', full_name: '', hostel_block: hostelName,
+    room: '', department: 'Civil Engineering', year: '1st Year',
+    phone: '', email: '', dob: ''
+  });
+  const [bulkCsv, setBulkCsv] = useState('');
 
-  // Passwords States
-  const [newPassword, setNewPassword] = useState('');
-  const [studentRollInput, setStudentRollInput] = useState('');
-  const [studentNewPassInput, setStudentNewPassInput] = useState('');
+  // 2. Manual Hostel Complaint Category & Hostel Staff Creation
+  const [deptForm, setDeptForm] = useState({ title: '', icon: '🧹' });
+  const [staffForm, setStaffForm] = useState({ user_id: '', password: '123', full_name: '', department: 'Cleanliness & Hygiene', phone: '' });
 
-  // PDF Scope
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
-  const [pdfScope, setPdfScope] = useState(isDean ? 'All' : user.hostel_block);
-  const [statusMsg, setStatusMsg] = useState(null);
+  const loadWardenData = useCallback(async () => {
+    try {
+      const [cRes, sRes, dRes, sfRes] = await Promise.all([
+        fetch(`${apiUrl}/api/complaints?role=Warden&hostel_block=${encodeURIComponent(hostelName)}`),
+        fetch(`${apiUrl}/api/warden/students?hostel_block=${encodeURIComponent(hostelName)}`),
+        fetch(`${apiUrl}/api/departments?hostel_block=${encodeURIComponent(hostelName)}`),
+        fetch(`${apiUrl}/api/staff?hostel_block=${encodeURIComponent(hostelName)}`)
+      ]);
+      if (cRes.ok) setComplaints(await cRes.json());
+      if (sRes.ok) setStudents(await sRes.json());
+      if (dRes.ok) setDepartments(await dRes.json());
+      if (sfRes.ok) setStaffList(await sfRes.json());
+    } catch (e) { console.error(e); }
+  }, [apiUrl, hostelName]);
 
-  const svnitHostels = [
-    { code: 'GAJJAR', name: 'Gajjar Bhawan', cwId: 'CW_GAJJAR', wId: 'W_GAJJAR', ext: '0261-2201659', icon: '🏢' },
-    { code: 'BHABHA', name: 'Bhabha Bhawan', cwId: 'CW_BHABHA', wId: 'W_BHABHA', ext: '0261-2201790', icon: '🏢' },
-    { code: 'MTB', name: 'Mother Teresa Bhawan', cwId: 'CW_MTB', wId: 'W_MTB', ext: '0261-2201967', icon: '🏢' },
-    { code: 'SVB', name: 'Swami Vivekananda Bhawan', cwId: 'CW_SVB', wId: 'W_SVB', ext: '0261-2201657', icon: '🏢' },
-    { code: 'NEHRU', name: 'Nehru Bhawan', cwId: 'CW_NEHRU', wId: 'W_NEHRU', ext: '0261-2201703', icon: '🏢' },
-    { code: 'TAGORE', name: 'Tagore Bhawan', cwId: 'CW_TAGORE', wId: 'W_TAGORE', ext: '0261-2201707', icon: '🏢' },
-    { code: 'SARABHAI', name: 'Sarabhai Bhawan', cwId: 'CW_SARABHAI', wId: 'W_SARABHAI', ext: '0261-2201793', icon: '🏢' },
-    { code: 'RAMAN', name: 'Raman Bhawan', cwId: 'CW_RAMAN', wId: 'W_RAMAN', ext: '0261-2201789', icon: '🏢' },
-    { code: 'ABVB', name: 'Atal Bihari Vajpayee Bhawan', cwId: 'CW_ABVB', wId: 'W_ABVB', ext: '0261-2201880', icon: '🏢' }
-  ];
+  useEffect(() => { loadWardenData(); }, [loadWardenData]);
 
-  useEffect(() => {
-    fetch(`${apiUrl}/api/unicore/clubs`).then(res => res.json()).then(data => Array.isArray(data) && setClubs(data)).catch(console.error);
-    fetch(`${apiUrl}/api/unicore/events`).then(res => res.json()).then(data => Array.isArray(data) && setEvents(data)).catch(console.error);
-  }, [apiUrl]);
-
-  const checkAiVenueClash = (candidateEv) => {
-    const conflicts = events.filter(other => other.event_id !== candidateEv.event_id && other.status === 'Approved' && other.date === candidateEv.date && other.venue.toLowerCase() === candidateEv.venue.toLowerCase() && !(candidateEv.end_time <= other.start_time || candidateEv.start_time >= other.end_time));
-    if (conflicts.length > 0) return { free: false, text: `❌ AI Clash Alert: ${conflicts[0].venue} is already booked by ${conflicts[0].club_id} (${conflicts[0].title}) at ${conflicts[0].start_time}-${conflicts[0].end_time}!` };
-    return { free: true, text: `✅ AI Re-Check Passed: ${candidateEv.venue} is 100% free on ${candidateEv.date} (${candidateEv.start_time} - ${candidateEv.end_time}). No other event clashing.` };
-  };
-
-  const handleApproveEvent = async (eventId, action) => {
-    const res = await fetch(`${apiUrl}/api/unicore/events/approve?event_id=${eventId}&action=${action}`, { method: 'POST' });
-    if (res.ok) {
-      setEvents(events.map(e => e.event_id === eventId ? { ...e, status: action } : e));
-      setStatusMsg(`✅ Event ${eventId} marked as ${action}!`);
-    }
-  };
-
-  const handleDownloadPDF = (scopeOverride) => {
-    const targetScope = scopeOverride || pdfScope;
-    const query = new URLSearchParams({ institute_id: user.institute_id, hostel_block: targetScope, from_date: fromDate, to_date: toDate });
-    window.open(`${apiUrl}/api/complaints/export-pdf?${query.toString()}`, '_blank');
-  };
-
-  const handlePasswordReset = async (e) => {
+  const handleAddStudent = async (e) => {
     e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/dean/reset-password?admin_id=${user.user_id}`, {
+    const res = await fetch(`${apiUrl}/api/warden/add-student`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target_user_id: resetTarget, new_password: newPassword })
+      body: JSON.stringify({ ...studentForm, hostel_block: hostelName })
     });
     const data = await res.json();
     if (res.ok && data.success) {
-      setStatusMsg(`✅ ${data.message}`); setResetTarget(null); setNewPassword('');
-    } else setStatusMsg(`❌ ${data.detail || 'Error'}`);
+      setMsg(`✅ ${data.message}`);
+      setStudentForm({ ...studentForm, user_id: '', full_name: '', room: '', phone: '', email: '', dob: '' });
+      loadWardenData();
+    } else setMsg(`❌ ${data.detail || 'Error'}`);
   };
 
-  const handleWardenResetStudent = async (e) => {
+  const handleBulkUpload = async (e) => {
     e.preventDefault();
-    if (!studentRollInput.trim() || !studentNewPassInput.trim()) return;
-    try {
-      const res = await fetch(`${apiUrl}/api/warden/reset-student-password?warden_id=${user.user_id}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_user_id: studentRollInput.trim().toUpperCase(), new_password: studentNewPassInput.trim() })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setStatusMsg(`✅ ${data.message}`); setStudentRollInput(''); setStudentNewPassInput('');
-      } else setStatusMsg(`❌ ${data.detail || 'Could not reset student password'}`);
-    } catch { setStatusMsg('❌ Server connection error.'); }
+    const lines = bulkCsv.trim().split('\n');
+    const parsed = [];
+    for (let l of lines) {
+      const p = l.split(',').map((x) => x.trim());
+      if (p.length >= 9) {
+        parsed.push({
+          user_id: p[0], full_name: p[1], hostel_block: hostelName, room: p[3],
+          department: p[4], year: p[5], phone: p[6], email: p[7], dob: p[8]
+        });
+      }
+    }
+    if (parsed.length === 0) {
+      setMsg('❌ Please check CSV format (9 columns per line).');
+      return;
+    }
+    const res = await fetch(`${apiUrl}/api/warden/upload-students`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(parsed)
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      setMsg(`✅ ${data.message}`);
+      setBulkCsv('');
+      loadWardenData();
+    }
   };
 
-  const changeMonth = (offset) => {
-    let newMonth = calMonth + offset;
-    let newYear = calYear;
-    if (newMonth < 0) { newMonth = 11; newYear -= 1; } 
-    else if (newMonth > 11) { newMonth = 0; newYear += 1; }
-    setCalMonth(newMonth); setCalYear(newYear);
+  const handleResetDob = async (rollNo) => {
+    const res = await fetch(`${apiUrl}/api/warden/reset-student-password`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_user_id: rollNo })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      setMsg(`🔑 ${data.message}`);
+    }
   };
 
-  const getCategoryIcon = (catName) => {
-    const found = COMPLAINT_CATEGORIES.find(c => c.id === catName);
-    return found ? found.icon : '🛠️';
+  const handleCreateHostelDept = async (e) => {
+    e.preventDefault();
+    const res = await fetch(`${apiUrl}/api/departments/create`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: deptForm.title,
+        dept_type: 'Hostel',
+        hostel_block: hostelName,
+        icon: deptForm.icon,
+        created_by: user.user_id
+      })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      setMsg(`✅ ${data.message}`);
+      setDeptForm({ title: '', icon: '🧹' });
+      loadWardenData();
+    } else setMsg(`❌ ${data.detail || 'Error'}`);
   };
 
-  const getStatusColor = (status) => {
-    if (status === 'Completed' || status === 'Approved') return '#a78bfa';
-    if (status === 'Awaiting Confirmation') return '#38bdf8';
-    if (status === 'Pending Dean Approval') return '#fbbf24';
-    return '#f87171';
+  const handleCreateHostelStaff = async (e) => {
+    e.preventDefault();
+    const res = await fetch(`${apiUrl}/api/staff/create`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...staffForm, hostel_block: hostelName })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      setMsg(`✅ ${data.message}`);
+      setStaffForm({ user_id: '', password: '123', full_name: '', department: 'Cleanliness & Hygiene', phone: '' });
+      loadWardenData();
+    }
   };
 
-  const openCount = complaints.filter(c => c.status !== 'Completed').length;
-  const pendingEvents = events.filter(e => e.status === 'Pending Dean Approval');
-  const displayedComplaints = selectedHostel ? complaints.filter(c => c.hostel_block === selectedHostel) : complaints;
-
-  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-  const firstDayOfMonth = new Date(calYear, calMonth, 1).getDay();
-  const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+  const filteredStudents = students.filter(
+    (s) =>
+      s.full_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      s.user_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      s.room.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   return (
-    <div style={styles.appWrapper}>
-      {statusMsg && <div style={styles.toast} onClick={() => setStatusMsg(null)}>{statusMsg}</div>}
+    <div className="hms-container">
+      {msg && <div className="hms-toast" onClick={() => setMsg(null)}>{msg}</div>}
 
-      {isDean && activeTab === 'hostels' && (
-        <div style={styles.tabContent}>
-          <div style={styles.listContainer}>
-            {svnitHostels.map(h => {
-              const hostelIssues = complaints.filter(c => c.hostel_block === h.name && c.status !== 'Completed').length;
-              return (
-                <div key={h.code} onClick={() => { setSelectedHostel(h.name); setActiveTab('complaints'); }} style={styles.chatRow}>
-                  <div style={styles.rowAvatar}>{h.icon}</div>
-                  <div style={styles.rowCenter}>
-                    <div style={styles.rowTopLine}>
-                      <span style={styles.rowTitle}>{h.name}</span>
-                      <span style={styles.rowTime}>{h.ext}</span>
-                    </div>
-                    <div style={styles.rowBottomLine}>
-                      <span style={styles.rowSub}>Portals: {h.cwId} • {h.wId}</span>
-                      <span style={{ ...styles.unreadBubble, background: hostelIssues > 0 ? '#8b5cf6' : '#1e293b', color: hostelIssues > 0 ? '#fff' : '#94a3b8' }}>
-                        {hostelIssues} active
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      <div className="hms-desktop-tabs">
+        <button className={`hms-dtab ${activeTab === 'complaints' ? 'active' : ''}`} onClick={() => setActiveTab('complaints')}>
+          💬 {hostelName} Complaints ({complaints.length})
+        </button>
+        <button className={`hms-dtab ${activeTab === 'students' ? 'active' : ''}`} onClick={() => setActiveTab('students')}>
+          🎓 Student Directory & Onboarding ({students.length})
+        </button>
+        <button className={`hms-dtab ${activeTab === 'staff' ? 'active' : ''}`} onClick={() => setActiveTab('staff')}>
+          🛠️ Hostel Staff & Custom Categories ({staffList.length})
+        </button>
+      </div>
 
+      {/* TAB 1: ALL HOSTEL COMPLAINTS */}
       {activeTab === 'complaints' && (
-        <div style={styles.tabContent}>
-          {selectedHostel && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <span style={{ color: '#c084fc', fontWeight: '800', fontSize: '13px' }}>🏢 Filtering: {selectedHostel}</span>
-              <button onClick={() => setSelectedHostel(null)} style={styles.keyChip}>Show All</button>
-            </div>
-          )}
-          <div style={styles.listContainer}>
-            {displayedComplaints.length === 0 ? (
-              <div style={styles.emptyState}>No grievances found.</div>
-            ) : (
-              displayedComplaints.map(c => (
-                <div key={c.ticket_id} onClick={() => setSelectedTicket(c)} style={styles.chatRow}>
-                  <div style={styles.rowAvatar}>{getCategoryIcon(c.category)}</div>
-                  <div style={styles.rowCenter}>
-                    <div style={styles.rowTopLine}>
-                      <span style={styles.rowTitle}>{c.summary}</span>
-                      <span style={styles.rowTime}>{c.created_at.split(',')[0]}</span>
-                    </div>
-                    <div style={styles.rowBottomLine}>
-                      <span style={styles.rowSub}>{c.student_name} • {c.hostel_block} (Rm {c.room})</span>
-                      <span style={{ ...styles.statusBadge, color: getStatusColor(c.status), borderColor: getStatusColor(c.status) }}>{c.status}</span>
-                    </div>
+        <div className="hms-card">
+          <div className="hms-row-between" style={{ marginBottom: '16px' }}>
+            <div className="hms-section-label" style={{ margin: 0 }}>🏢 All Resident Complaints in {hostelName}</div>
+            <button
+              className="hms-btn-ghost-sm"
+              onClick={() => window.open(`${apiUrl}/api/complaints/export-pdf?hostel_block=${encodeURIComponent(hostelName)}`, '_blank')}
+            >
+              🖨️ Print Hostel Grievance PDF
+            </button>
+          </div>
+          {complaints.length === 0 ? (
+            <div className="hms-empty-card">No complaints logged for {hostelName}.</div>
+          ) : (
+            <div className="hms-grid-2">
+              {complaints.map((c) => (
+                <div key={c.ticket_id} className="hms-card" style={{ background: '#090d16' }}>
+                  <div className="hms-row-between">
+                    <span className="hms-item-title">{c.summary}</span>
+                    <span className="hms-pill-badge">{c.category}</span>
                   </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      )}
+                  <p className="hms-item-sub" style={{ margin: '6px 0' }}>{c.description}</p>
+                  <div className="hms-item-sub">👤 {c.student_name} ({c.student_id}) • Room {c.room}</div>
 
-      {activeTab === 'clubshub' && (
-        <div style={styles.tabContent}>
-          <div style={styles.subTabBar}>
-            <button onClick={() => setClubSubTab('approvals')} style={{ ...styles.subTabBtn, background: clubSubTab === 'approvals' ? '#8b5cf6' : 'transparent', color: clubSubTab === 'approvals' ? '#fff' : '#94a3b8' }}>⚡ Event Approvals</button>
-            <button onClick={() => setClubSubTab('directory')} style={{ ...styles.subTabBtn, background: clubSubTab === 'directory' ? '#8b5cf6' : 'transparent', color: clubSubTab === 'directory' ? '#fff' : '#94a3b8' }}>📁 All Clubs Info</button>
-          </div>
-
-          {clubSubTab === 'approvals' && (
-            <>
-              <div style={styles.sectionHeader}>⚡ Venue Requisitions & AI Clash Verification</div>
-              {pendingEvents.length === 0 ? (
-                <div style={{ ...styles.emptyState, padding: '18px', marginBottom: '16px' }}>✅ All proposals reviewed!</div>
-              ) : (
-                pendingEvents.map(ev => {
-                  const aiCheck = checkAiVenueClash(ev);
-                  return (
-                    <div key={ev.event_id} onClick={() => setSelectedEventAudit(ev)} style={styles.approvalCard}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ color: '#f8fafc', fontWeight: '800', fontSize: '15px' }}>{ev.title}</span>
-                        <span style={{ color: '#fbbf24', fontSize: '11px', fontWeight: '800' }}>{ev.status}</span>
-                      </div>
-                      <div style={{ color: '#cbd5e1', fontSize: '12px', marginTop: '4px' }}>
-                        📍 <strong>{ev.venue}</strong> • 📅 <strong>{ev.date}</strong> ({ev.start_time} - {ev.end_time}) • Club: <strong>{ev.club_id}</strong>
-                      </div>
-                      <div style={{ marginTop: '8px', padding: '8px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: '700', background: aiCheck.free ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.15)', color: aiCheck.free ? '#4ade80' : '#f87171', border: `1px solid ${aiCheck.free ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}` }}>
-                        🤖 {aiCheck.text}
-                      </div>
-                      {isDean && (
-                        <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }} onClick={(e) => e.stopPropagation()}>
-                          <button onClick={() => handleApproveEvent(ev.event_id, 'Approved')} style={styles.approveBtn}>✓ Approve Venue</button>
-                          <button onClick={() => handleApproveEvent(ev.event_id, 'Rejected')} style={styles.rejectBtn}>✕ Reject</button>
-                        </div>
-                      )}
+                  {/* 3-Stage Status View */}
+                  <div className="hms-timeline-box">
+                    <div className="hms-tl-step">
+                      <span className="hms-tl-dot" style={{ background: '#4ade80', color: '#050811' }}>✓</span>
+                      <span><strong>1. Lodged:</strong> {c.created_at}</span>
                     </div>
-                  );
-                })
-              )}
-
-              <div style={{ ...styles.sectionHeader, marginTop: '18px' }}>🗓️ Master Campus Event Calendar</div>
-              <div style={styles.calTopBar}>
-                <button onClick={() => changeMonth(-1)} style={styles.calNavBtn}>◀ Prev</button>
-                <div style={{ color: '#f8fafc', fontWeight: '800', fontSize: '15px' }}>{monthNames[calMonth]} {calYear}</div>
-                <button onClick={() => changeMonth(1)} style={styles.calNavBtn}>Next ▶</button>
-              </div>
-              <div style={styles.calGridContainer}>
-                <div style={styles.calHeaderRow}>
-                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => <div key={d} style={styles.calHeaderCell}>{d}</div>)}
-                </div>
-                <div style={styles.calDaysGrid}>
-                  {Array.from({ length: firstDayOfMonth }).map((_, idx) => <div key={`empty-${idx}`} style={{ ...styles.calCell, opacity: 0.35 }} />)}
-                  {Array.from({ length: daysInMonth }).map((_, index) => {
-                    const dayNum = index + 1;
-                    const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
-                    const matchedEvents = events.filter(e => e.date === dateStr);
-                    return (
-                      <div key={dateStr} style={styles.calCell}>
-                        <span style={styles.calCellNum}>{dayNum}</span>
-                        {matchedEvents.map(ev => (
-                          <div key={ev.event_id} onClick={() => setSelectedEventAudit(ev)} style={{ ...styles.calEventPill, background: ev.status === 'Approved' ? '#8b5cf6' : ev.status === 'Completed' ? '#334155' : '#fbbf24', color: ev.status === 'Pending Dean Approval' ? '#090d16' : '#fff' }} title={ev.title}>
-                            {ev.title}
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </>
-          )}
-
-          {clubSubTab === 'directory' && (
-            <div>
-              <div style={styles.sectionHeader}>📁 Official SVNIT Student Chapters</div>
-              <div style={styles.listContainer}>
-                {clubs.map(club => {
-                  const clubEvents = events.filter(e => e.club_id.toUpperCase() === club.club_id.toUpperCase());
-                  return (
-                    <div key={club.club_id} onClick={() => setSelectedClub(club)} style={styles.chatRow}>
-                      <div style={styles.rowAvatar}>🏛️</div>
-                      <div style={styles.rowCenter}>
-                        <div style={styles.rowTopLine}>
-                          <span style={styles.rowTitle}>{club.name}</span>
-                          <span style={styles.codePill}>{club.club_id}</span>
-                        </div>
-                        <div style={styles.rowSub}>{club.mission}</div>
-                        <div style={{ display: 'flex', gap: '12px', marginTop: '6px', fontSize: '11px', color: '#c084fc', fontWeight: '700' }}>
-                          <span>🎪 {clubEvents.length} Events</span>
-                          <span>👥 {club.members?.length || 0} Core Members</span>
-                        </div>
-                      </div>
+                    <div className="hms-tl-step">
+                      <span className="hms-tl-dot" style={{ background: c.staff_read_at ? '#38bdf8' : '#1e293b', color: '#fff' }}>{c.staff_read_at ? '✓' : '2'}</span>
+                      <span><strong>2. Staff Read/Action:</strong> {c.staff_done_at ? `Done (${c.staff_remark})` : c.staff_read_at ? `Read at ${c.staff_read_at}` : 'Pending Staff Read'}</span>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {activeTab === 'reports' && (
-        <div style={styles.tabContent}>
-          <div style={styles.sheetCard}>
-            <h3 style={{ margin: '0 0 12px 0', color: '#f8fafc', fontSize: '17px' }}>📥 Official PDF Grievance Report</h3>
-            {isDean && (
-              <div style={{ marginBottom: '12px' }}>
-                <label style={styles.label}>Hostel Scope</label>
-                <select value={pdfScope} onChange={e => setPdfScope(e.target.value)} style={styles.input}>
-                  <option value="All">All SVNIT Hostels</option>
-                  {svnitHostels.map(h => <option key={h.code} value={h.name}>{h.name}</option>)}
-                </select>
-              </div>
-            )}
-            <div style={{ marginBottom: '12px' }}><label style={styles.label}>From Date</label><input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} style={styles.input} /></div>
-            <div style={{ marginBottom: '16px' }}><label style={styles.label}>To Date</label><input type="date" value={toDate} onChange={e => setToDate(e.target.value)} style={styles.input} /></div>
-            <button onClick={() => handleDownloadPDF()} style={styles.primaryBtn}>🖨️ Download PDF</button>
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'settings' && (
-        <div style={styles.tabContent}>
-          <div style={{ ...styles.sheetCard, marginBottom: '16px' }}>
-            <h3 style={{ margin: '0 0 6px 0', color: '#f8fafc', fontSize: '16px' }}>🔑 Reset Resident Student Password</h3>
-            <p style={{ margin: '0 0 14px 0', color: '#94a3b8', fontSize: '12px' }}>
-              {isDean ? 'Dean can reset any student password across all hostels.' : `Warden of ${user.hostel_block} can reset resident passwords.`}
-            </p>
-            <form onSubmit={handleWardenResetStudent} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <input type="text" placeholder="Student Roll No (e.g. U26CE011)" value={studentRollInput} onChange={e => setStudentRollInput(e.target.value)} required style={styles.input} />
-              <input type="text" placeholder="New Temporary Password (or DOB: DDMMYYYY)" value={studentNewPassInput} onChange={e => setStudentNewPassInput(e.target.value)} required style={styles.input} />
-              <button type="submit" style={styles.primaryBtn}>Save & Reset Student Password</button>
-            </form>
-          </div>
-
-          {isDean ? (
-            <div style={styles.listContainer}>
-              <div style={styles.sectionHeader}>🏢 Campus Hostels Warden Accounts</div>
-              {svnitHostels.map(h => (
-                <div key={h.code} style={styles.chatRow}>
-                  <div style={styles.rowAvatar}>🔑</div>
-                  <div style={styles.rowCenter}>
-                    <div style={styles.rowTitle}>{h.name}</div>
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
-                      <button onClick={() => setResetTarget(h.cwId)} style={styles.keyChip}>Reset {h.cwId}</button>
-                      <button onClick={() => setResetTarget(h.wId)} style={styles.keyChip}>Reset {h.wId}</button>
+                    <div className="hms-tl-step">
+                      <span className="hms-tl-dot" style={{ background: c.status === 'Completed' ? '#8b5cf6' : '#1e293b', color: '#fff' }}>{c.status === 'Completed' ? '✓' : '3'}</span>
+                      <span><strong>3. Student Verified:</strong> {c.status === 'Completed' ? `Satisfied (${c.student_verified_at})` : c.status}</span>
                     </div>
                   </div>
                 </div>
               ))}
             </div>
-          ) : (
-            <div style={styles.sheetCard}>
-              <h3 style={{ margin: '0 0 6px 0', color: '#f8fafc' }}>{user.full_name}</h3>
-              <p style={{ margin: '0 0 14px 0', color: '#c084fc', fontSize: '13px' }}>ID: {user.user_id}</p>
-              <div style={styles.detailBox}><div><strong>Assigned Hostel:</strong> {user.hostel_block}</div></div>
-            </div>
           )}
         </div>
       )}
 
-      {/* Modals are kept hidden to save space, standard structure intact */}
-      <nav style={styles.bottomNav}>
-        {isDean && (
-          <button onClick={() => setActiveTab('hostels')} style={styles.navItem}>
-            <div style={{ ...styles.iconPill, background: activeTab === 'hostels' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}><span style={{ fontSize: '18px' }}>🏢</span></div>
-            <span style={{ ...styles.navLabel, color: activeTab === 'hostels' ? '#c084fc' : '#94a3b8' }}>Hostels</span>
-          </button>
-        )}
-        <button onClick={() => setActiveTab('complaints')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'complaints' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>
-            <span style={{ fontSize: '18px' }}>💬</span>{openCount > 0 && <span style={styles.badgeCount}>{openCount}</span>}
+      {/* TAB 2: MANUAL STUDENT ONBOARDING & DIRECTORY WITH 1-CLICK DOB RESET */}
+      {activeTab === 'students' && (
+        <div className="hms-grid-2">
+          <div className="hms-stack">
+            <div className="hms-card">
+              <div className="hms-section-label">➕ Manually Onboard Student ({hostelName})</div>
+              <form onSubmit={handleAddStudent} className="hms-stack">
+                <div className="hms-grid-2" style={{ gap: '8px' }}>
+                  <input type="text" className="hms-input" placeholder="Roll No (e.g. U26CE015)" value={studentForm.user_id} onChange={(e) => setStudentForm({ ...studentForm, user_id: e.target.value })} required />
+                  <input type="text" className="hms-input" placeholder="Full Name" value={studentForm.full_name} onChange={(e) => setStudentForm({ ...studentForm, full_name: e.target.value })} required />
+                </div>
+                <div className="hms-grid-2" style={{ gap: '8px' }}>
+                  <input type="text" className="hms-input" placeholder="Room No (e.g. B-205)" value={studentForm.room} onChange={(e) => setStudentForm({ ...studentForm, room: e.target.value })} required />
+                  <input type="text" className="hms-input" placeholder="DOB DDMMYYYY (Default Pass)" value={studentForm.dob} onChange={(e) => setStudentForm({ ...studentForm, dob: e.target.value })} required />
+                </div>
+                <div className="hms-grid-2" style={{ gap: '8px' }}>
+                  <input type="text" className="hms-input" placeholder="Branch / Dept (e.g. Civil Engineering)" value={studentForm.department} onChange={(e) => setStudentForm({ ...studentForm, department: e.target.value })} required />
+                  <select className="hms-input" value={studentForm.year} onChange={(e) => setStudentForm({ ...studentForm, year: e.target.value })}>
+                    <option value="1st Year">1st Year</option>
+                    <option value="2nd Year">2nd Year</option>
+                    <option value="3rd Year">3rd Year</option>
+                    <option value="4th Year">4th Year</option>
+                  </select>
+                </div>
+                <div className="hms-grid-2" style={{ gap: '8px' }}>
+                  <input type="text" className="hms-input" placeholder="Phone Number" value={studentForm.phone} onChange={(e) => setStudentForm({ ...studentForm, phone: e.target.value })} required />
+                  <input type="email" className="hms-input" placeholder="Official Email" value={studentForm.email} onChange={(e) => setStudentForm({ ...studentForm, email: e.target.value })} required />
+                </div>
+                <button type="submit" className="hms-btn-primary">💾 Add Student (Default Password = DOB)</button>
+              </form>
+            </div>
+
+            <div className="hms-card">
+              <div className="hms-row-between" style={{ marginBottom: '8px' }}>
+                <div className="hms-section-label" style={{ margin: 0 }}>📥 Bulk Student Upload (CSV)</div>
+                <button type="button" className="hms-btn-ghost-sm" onClick={() => setBulkCsv(SAMPLE_CSV)}>Load Sample</button>
+              </div>
+              <form onSubmit={handleBulkUpload} className="hms-stack">
+                <textarea rows="3" className="hms-input" placeholder="RollNo, Name, Hostel, Room, Branch, Year, Phone, Email, DOB(DDMMYYYY)" value={bulkCsv} onChange={(e) => setBulkCsv(e.target.value)} required />
+                <button type="submit" className="hms-btn-primary">📤 Upload Bulk Students</button>
+              </form>
+            </div>
           </div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'complaints' ? '#c084fc' : '#94a3b8' }}>Grievances</span>
-        </button>
-        <button onClick={() => setActiveTab('clubshub')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'clubshub' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>
-            <span style={{ fontSize: '18px' }}>⭐</span>{pendingEventsCount > 0 && <span style={styles.badgeCount}>{pendingEventsCount}</span>}
+
+          <div className="hms-card">
+            <div className="hms-section-label">🔍 {hostelName} Student Directory — Search & Reset Password to DOB</div>
+            <div className="hms-search-box" style={{ marginBottom: '14px' }}>
+              <span>🔍</span>
+              <input type="text" placeholder="Search student by Roll No, Name, or Room..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+            </div>
+            <div className="hms-stack" style={{ maxHeight: '480px', overflowY: 'auto' }}>
+              {filteredStudents.map((st) => (
+                <div key={st.user_id} className="hms-row-item">
+                  <div>
+                    <div className="hms-item-title">{st.full_name} ({st.user_id})</div>
+                    <div className="hms-item-sub">🚪 Room {st.room} • {st.department} ({st.year}) • DOB: {st.dob}</div>
+                  </div>
+                  <button className="hms-btn-primary-sm" onClick={() => handleResetDob(st.user_id)}>
+                    🔑 Reset to DOB
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'clubshub' ? '#c084fc' : '#94a3b8' }}>Clubs Hub</span>
-        </button>
-        <button onClick={() => setActiveTab('reports')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'reports' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}><span style={{ fontSize: '18px' }}>📥</span></div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'reports' ? '#c084fc' : '#94a3b8' }}>PDF Report</span>
-        </button>
-        <button onClick={() => setActiveTab('settings')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'settings' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}><span style={{ fontSize: '18px' }}>🔑</span></div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'settings' ? '#c084fc' : '#94a3b8' }}>Passwords</span>
-        </button>
+        </div>
+      )}
+
+      {/* TAB 3: HOSTEL-SPECIFIC DEPARTMENTS & STAFF MANAGEMENT */}
+      {activeTab === 'staff' && (
+        <div className="hms-grid-2">
+          <div className="hms-card">
+            <div className="hms-section-label">➕ 1. Create Hostel-Specific Complaint Department</div>
+            <p className="hms-muted" style={{ marginBottom: '12px' }}>
+              Need a new category for {hostelName} (like "Tiles & Flooring", "Mess Hygiene", "Washroom Smell")? Create it here and residents of {hostelName} will immediately see it!
+            </p>
+            <form onSubmit={handleCreateHostelDept} className="hms-stack" style={{ marginBottom: '22px' }}>
+              <div className="hms-grid-2" style={{ gap: '8px' }}>
+                <input type="text" className="hms-input" placeholder="Category Name (e.g. Washroom Hygiene)" value={deptForm.title} onChange={(e) => setDeptForm({ ...deptForm, title: e.target.value })} required />
+                <input type="text" className="hms-input" placeholder="Emoji Icon (e.g. 🧼)" value={deptForm.icon} onChange={(e) => setDeptForm({ ...deptForm, icon: e.target.value })} required />
+              </div>
+              <button type="submit" className="hms-btn-primary">+ Create Hostel Complaint Option</button>
+            </form>
+
+            <div className="hms-section-label">👷 2. Create Hostel Maintenance Staff Account</div>
+            <form onSubmit={handleCreateHostelStaff} className="hms-stack">
+              <div className="hms-grid-2" style={{ gap: '8px' }}>
+                <input type="text" className="hms-input" placeholder="Staff Login ID (e.g. PLUMB_GAJJAR)" value={staffForm.user_id} onChange={(e) => setStaffForm({ ...staffForm, user_id: e.target.value })} required />
+                <input type="text" className="hms-input" placeholder="Password" value={staffForm.password} onChange={(e) => setStaffForm({ ...staffForm, password: e.target.value })} required />
+              </div>
+              <input type="text" className="hms-input" placeholder="Staff Member Full Name" value={staffForm.full_name} onChange={(e) => setStaffForm({ ...staffForm, full_name: e.target.value })} required />
+              <div className="hms-grid-2" style={{ gap: '8px' }}>
+                <select className="hms-input" value={staffForm.department} onChange={(e) => setStaffForm({ ...staffForm, department: e.target.value })}>
+                  {departments.filter((d) => d.type === 'Hostel').map((d) => (
+                    <option key={d.id} value={d.id}>{d.icon} {d.title}</option>
+                  ))}
+                </select>
+                <input type="text" className="hms-input" placeholder="Phone Number" value={staffForm.phone} onChange={(e) => setStaffForm({ ...staffForm, phone: e.target.value })} required />
+              </div>
+              <button type="submit" className="hms-btn-primary">💾 Create Hostel Staff Account</button>
+            </form>
+          </div>
+
+          <div className="hms-card">
+            <div className="hms-section-label">👷 Attached Staff Members for {hostelName} ({staffList.length})</div>
+            <div className="hms-stack">
+              {staffList.map((s) => (
+                <div key={s.user_id} className="hms-row-item">
+                  <div>
+                    <div className="hms-item-title">{s.full_name} (ID: {s.user_id})</div>
+                    <div className="hms-item-sub">Department: <strong>{s.department}</strong> • 📞 {s.phone}</div>
+                  </div>
+                  <span className="hms-pill-badge">{s.hostel_block === 'All' ? 'Central Team' : s.hostel_block}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <nav className="hms-bottom-nav">
+        <button onClick={() => setActiveTab('complaints')} className={`hms-bnav-item ${activeTab === 'complaints' ? 'active' : ''}`}><span>💬</span><span>Complaints</span></button>
+        <button onClick={() => setActiveTab('students')} className={`hms-bnav-item ${activeTab === 'students' ? 'active' : ''}`}><span>🎓</span><span>Students</span></button>
+        <button onClick={() => setActiveTab('staff')} className={`hms-bnav-item ${activeTab === 'staff' ? 'active' : ''}`}><span>🛠️</span><span>Staff</span></button>
       </nav>
     </div>
   );
 }
-
-const styles = {
-  appWrapper: { maxWidth: '680px', margin: '0 auto', paddingBottom: '90px', minHeight: 'calc(100vh - 70px)' },
-  tabContent: { padding: '14px' },
-  toast: { margin: '10px 14px 0 14px', background: '#1e293b', borderLeft: '4px solid #8b5cf6', padding: '12px', borderRadius: '10px', color: '#f8fafc', fontSize: '13px', fontWeight: '600', cursor: 'pointer' },
-  subTabBar: { display: 'flex', gap: '8px', background: '#0f172a', padding: '6px', borderRadius: '12px', border: '1px solid #1e293b', marginBottom: '14px' },
-  subTabBtn: { flex: 1, border: 'none', padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: '800', cursor: 'pointer' },
-  approvalCard: { background: '#0f172a', border: '1px solid #334155', borderRadius: '14px', padding: '14px', marginBottom: '10px', cursor: 'pointer' },
-  calTopBar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '10px 14px', marginBottom: '10px' },
-  calNavBtn: { background: '#1e293b', color: '#c084fc', border: '1px solid #334155', borderRadius: '8px', padding: '6px 12px', fontSize: '12px', fontWeight: '700', cursor: 'pointer' },
-  calGridContainer: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', overflow: 'hidden', marginBottom: '16px' },
-  calHeaderRow: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', background: '#1e293b', padding: '10px 0', textAlign: 'center', fontSize: '11px', fontWeight: '800', color: '#94a3b8' },
-  calHeaderCell: { textTransform: 'uppercase' },
-  calDaysGrid: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '1px', background: '#1e293b' },
-  calCell: { background: '#090d16', minHeight: '78px', padding: '6px', display: 'flex', flexDirection: 'column', gap: '4px', overflow: 'hidden' },
-  calCellNum: { fontSize: '11px', fontWeight: '700', color: '#64748b' },
-  calEventPill: { fontSize: '10px', fontWeight: '700', padding: '3px 5px', borderRadius: '5px', cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  sectionHeader: { color: '#c084fc', fontSize: '12px', fontWeight: '800', margin: '6px 0 10px 0', textTransform: 'uppercase', letterSpacing: '0.5px' },
-  listContainer: { display: 'flex', flexDirection: 'column' },
-  chatRow: { display: 'flex', alignItems: 'flex-start', gap: '14px', padding: '14px 6px', borderBottom: '1px solid rgba(30, 41, 59, 0.65)', cursor: 'pointer' },
-  rowAvatar: { width: '48px', height: '48px', borderRadius: '50%', background: '#1e293b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '21px', flexShrink: 0 },
-  rowCenter: { flex: 1, minWidth: 0 },
-  rowTopLine: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '4px' },
-  rowTitle: { color: '#f8fafc', fontSize: '15px', fontWeight: '700', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  rowTime: { color: '#94a3b8', fontSize: '11px', flexShrink: 0 },
-  rowBottomLine: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' },
-  rowSub: { color: '#94a3b8', fontSize: '13px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  unreadBubble: { fontSize: '11px', fontWeight: '800', padding: '2px 8px', borderRadius: '999px', flexShrink: 0 },
-  statusBadge: { fontSize: '10px', fontWeight: '700', border: '1px solid', padding: '2px 8px', borderRadius: '999px', flexShrink: 0 },
-  codePill: { background: '#1e293b', color: '#c084fc', fontSize: '11px', fontWeight: '800', padding: '2px 8px', borderRadius: '999px' },
-  emptyState: { textAlign: 'center', padding: '40px 20px', color: '#64748b', fontSize: '14px', background: '#0f172a', borderRadius: '14px', border: '1px solid #1e293b' },
-  sheetCard: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: '18px', padding: '20px' },
-  detailBox: { background: '#090d16', border: '1px solid #1e293b', borderRadius: '12px', padding: '14px', fontSize: '13px', color: '#cbd5e1', marginTop: '12px' },
-  statBox: { background: '#090d16', border: '1px solid #1e293b', borderRadius: '12px', padding: '12px', textAlign: 'center' },
-  label: { display: 'block', fontSize: '11px', fontWeight: '700', color: '#94a3b8', marginBottom: '6px', textTransform: 'uppercase' },
-  input: { width: '100%', background: '#090d16', border: '1px solid #334155', borderRadius: '10px', padding: '12px', color: '#fff', fontSize: '14px', boxSizing: 'border-box' },
-  primaryBtn: { width: '100%', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: '10px', padding: '13px', fontWeight: '800', fontSize: '14px', cursor: 'pointer' },
-  keyChip: { background: '#1e293b', border: '1px solid #334155', color: '#c084fc', padding: '5px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: '700', cursor: 'pointer' },
-  approveBtn: { flex: 1, background: '#8b5cf6', color: '#fff', border: 'none', padding: '8px 12px', borderRadius: '8px', fontWeight: '700', fontSize: '12px', cursor: 'pointer' },
-  rejectBtn: { background: '#ef4444', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: '8px', fontWeight: '700', fontSize: '12px', cursor: 'pointer' },
-  bottomNav: { position: 'fixed', bottom: 0, left: 0, right: 0, height: '70px', background: '#0b141a', borderTop: '1px solid #1e293b', display: 'flex', justifyContent: 'space-around', alignItems: 'center', zIndex: 100 },
-  navItem: { background: 'transparent', border: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', cursor: 'pointer', flex: 1 },
-  iconPill: { position: 'relative', width: '56px', height: '30px', borderRadius: '999px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-  navLabel: { fontSize: '11px', fontWeight: '600' },
-  badgeCount: { position: 'absolute', top: '-3px', right: '6px', background: '#8b5cf6', color: '#fff', fontSize: '10px', fontWeight: '800', padding: '1px 6px', borderRadius: '999px' }
-};

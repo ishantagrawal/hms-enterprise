@@ -1,347 +1,487 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 
-// Safety fallback so activeTab is never undefined
-var activeTab = 'ledger';
-
-export default function ClubView({ user, apiUrl }) {
-  const [activeTab, setActiveTab] = useState('ledger');
+export default function ClubPortal({ user, apiUrl }) {
+  const [activeTab, setActiveTab] = useState('profile');
   const [clubs, setClubs] = useState([]);
   const [events, setEvents] = useState([]);
-  const [aiAudit, setAiAudit] = useState(null);
+  const [notices, setNotices] = useState([]);
+  const [selectedEventFeedback, setSelectedEventFeedback] = useState(null);
   const [msg, setMsg] = useState(null);
 
-  const [extraInfoInput, setExtraInfoInput] = useState('');
-  const [missionInput, setMissionInput] = useState('');
-
-  const [eventForm, setEventForm] = useState({
-    title: '',
-    date: '2026-10-29',
-    start_time: '10:00',
-    end_time: '13:00',
-    venue: 'CRC Auditorium',
-    description: '',
-    image_url: '',
-    registration_link: ''
+  // 1. Manual Club Profile & Dossier State
+  const [dossier, setDossier] = useState({
+    name: '', tagline: '', mission: '', faculty_advisor: '',
+    head_coordinator: '', banner_url: '', avatar_url: '', extra_dean_info: ''
   });
 
-  const loadData = async () => {
+  // 2. Manual Member Roster Form
+  const [memberForm, setMemberForm] = useState({ name: '', roll: '', position: '', phone: '' });
+
+  // 3. Gallery Upload Form (Device File OR URL)
+  const [galleryForm, setGalleryForm] = useState({ media_type: 'image', media_url: '', caption: '' });
+
+  // 4. Manual Event Requisition Form (100% Free-Text Manual Venue)
+  const [eventForm, setEventForm] = useState({
+    title: '', date: '2026-10-29', start_time: '16:00', end_time: '19:00',
+    venue: '', description: '', image_url: '', registration_link: ''
+  });
+
+  // 5. Targeted Notice Form
+  const [noticeForm, setNoticeForm] = useState({
+    title: '', message: '', target_branch: 'All', target_year: 'All', attachment_link: ''
+  });
+
+  const loadClubData = useCallback(async () => {
     try {
-      const cRes = await fetch(`${apiUrl}/api/unicore/clubs`);
+      const [cRes, eRes, nRes] = await Promise.all([
+        fetch(`${apiUrl}/api/unicore/clubs`),
+        fetch(`${apiUrl}/api/unicore/events`),
+        fetch(`${apiUrl}/api/unicore/notices`)
+      ]);
       if (cRes.ok) {
         const cData = await cRes.json();
         setClubs(cData);
-        const found = cData.find((c) => c.club_id.toUpperCase() === user.user_id.toUpperCase()) || cData[0];
-        if (found) {
-          setMissionInput(found.mission || '');
-          setExtraInfoInput(found.extra_dean_info || '');
+        const myC = cData.find((c) => c.club_id.toUpperCase() === user.user_id.toUpperCase());
+        if (myC) {
+          setDossier({
+            name: myC.name || '',
+            tagline: myC.tagline || '',
+            mission: myC.mission || '',
+            faculty_advisor: myC.faculty_advisor || '',
+            head_coordinator: myC.head_coordinator || '',
+            banner_url: myC.banner_url || '',
+            avatar_url: myC.avatar_url || '',
+            extra_dean_info: myC.extra_dean_info || ''
+          });
         }
       }
-      const eRes = await fetch(`${apiUrl}/api/unicore/events`);
       if (eRes.ok) setEvents(await eRes.json());
-      const aRes = await fetch(`${apiUrl}/api/unicore/audit-summary`);
-      if (aRes.ok) setAiAudit(await aRes.json());
-    } catch (err) {
-      console.error(err);
+      if (nRes.ok) setNotices(await nRes.json());
+    } catch (e) { console.error(e); }
+  }, [apiUrl, user.user_id]);
+
+  useEffect(() => { loadClubData(); }, [loadClubData]);
+
+  // Helper to read local file from Device Gallery into Base64 Data URL
+  const handleFileUpload = (file, callback) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = () => callback(reader.result);
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveDossier = async (e) => {
+    e.preventDefault();
+    const res = await fetch(`${apiUrl}/api/unicore/clubs/update-dossier`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ club_id: user.user_id, ...dossier })
+    });
+    if (res.ok) {
+      setMsg('✅ Club profile, photos & dossier updated live!');
+      loadClubData();
     }
   };
 
-  useEffect(() => {
-    loadData();
-  }, [apiUrl]);
-
-  const handleSaveClubInfo = async (e) => {
+  const handleAddMember = async (e) => {
     e.preventDefault();
-    try {
-      const res = await fetch(`${apiUrl}/api/unicore/clubs/update-info`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          club_id: user.user_id,
-          mission: missionInput,
-          extra_dean_info: extraInfoInput
-        })
-      });
-      if (res.ok) {
-        setMsg('✅ Club dossier & Dean notes updated!');
-        loadData();
-      }
-    } catch {
-      setMsg('❌ Failed to update club info.');
+    const res = await fetch(`${apiUrl}/api/unicore/clubs/add-member`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ club_id: user.user_id, ...memberForm })
+    });
+    if (res.ok) {
+      setMsg(`✅ Added ${memberForm.name} (${memberForm.position}) to club roster!`);
+      setMemberForm({ name: '', roll: '', position: '', phone: '' });
+      loadClubData();
+    }
+  };
+
+  const handleRemoveMember = async (memberId) => {
+    const res = await fetch(`${apiUrl}/api/unicore/clubs/remove-member`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ club_id: user.user_id, member_id: memberId })
+    });
+    if (res.ok) {
+      setMsg('🗑️ Member removed from roster.');
+      loadClubData();
+    }
+  };
+
+  const handleAddGalleryItem = async (e) => {
+    e.preventDefault();
+    if (!galleryForm.media_url) {
+      setMsg('❌ Please select a photo/video from your gallery or paste a URL.');
+      return;
+    }
+    const res = await fetch(`${apiUrl}/api/unicore/clubs/add-gallery`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ club_id: user.user_id, ...galleryForm })
+    });
+    if (res.ok) {
+      setMsg('📸 Media added to Club Gallery!');
+      setGalleryForm({ media_type: 'image', media_url: '', caption: '' });
+      loadClubData();
     }
   };
 
   const handleProposeEvent = async (e) => {
     e.preventDefault();
-    setMsg(null);
-    try {
-      const res = await fetch(`${apiUrl}/api/unicore/events/propose`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...eventForm,
-          club_id: user.user_id,
-          submitted_by: user.full_name
-        })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setMsg('✅ Event proposal sent to Dean with AI Clash Verification!');
-        setEventForm({
-          title: '',
-          date: '2026-10-29',
-          start_time: '10:00',
-          end_time: '13:00',
-          venue: 'CRC Auditorium',
-          description: '',
-          image_url: '',
-          registration_link: ''
-        });
-        loadData();
-      } else {
-        setMsg(`❌ ${data.detail || 'Venue Clash Detected'}`);
-      }
-    } catch {
-      setMsg('❌ Server error.');
+    const res = await fetch(`${apiUrl}/api/unicore/events/propose`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...eventForm, club_id: user.user_id, submitted_by: dossier.name || user.user_id })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      setMsg(`✅ ${data.message}`);
+      setEventForm({ title: '', date: '2026-10-29', start_time: '16:00', end_time: '19:00', venue: '', description: '', image_url: '', registration_link: '' });
+      loadClubData();
     }
   };
 
-  const getStatusColor = (status) => {
-    if (status === 'Approved') return '#a78bfa';
-    if (status === 'Pending Dean Approval') return '#fbbf24';
-    return '#ef4444';
+  const handleMarkEventCompleted = async (eventId) => {
+    const res = await fetch(`${apiUrl}/api/unicore/events/approve?event_id=${eventId}&action=Completed`, { method: 'POST' });
+    if (res.ok) {
+      setMsg('🏁 Event marked as Completed! Students can now submit ratings and reviews.');
+      loadClubData();
+    }
   };
 
-  const myClub = clubs.find((c) => c.club_id.toUpperCase() === user.user_id.toUpperCase()) || clubs[0] || {};
-  const myEvents = events.filter((e) => e.club_id.toUpperCase() === (user.user_id || '').toUpperCase());
+  const handleSendNotice = async (e) => {
+    e.preventDefault();
+    const res = await fetch(`${apiUrl}/api/unicore/notices/create`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...noticeForm, club_id: user.user_id })
+    });
+    if (res.ok) {
+      setMsg('📢 Notice submitted to Dean for approval!');
+      setNoticeForm({ title: '', message: '', target_branch: 'All', target_year: 'All', attachment_link: '' });
+      loadClubData();
+    }
+  };
+
+  const myClub = clubs.find((c) => c.club_id.toUpperCase() === user.user_id.toUpperCase()) || {};
+  const myEvents = events.filter((e) => e.club_id.toUpperCase() === user.user_id.toUpperCase());
+  const myNotices = notices.filter((n) => n.club_id.toUpperCase() === user.user_id.toUpperCase());
 
   return (
-    <div style={styles.appWrapper}>
-      {msg && (
-        <div style={styles.toast} onClick={() => setMsg(null)}>
-          {msg}
+    <div className="hms-container">
+      {msg && <div className="hms-toast" onClick={() => setMsg(null)}>{msg}</div>}
+
+      {/* Instagram-Style Live Club Header Preview */}
+      <div className="hms-ig-banner" style={{ backgroundImage: `url(${dossier.banner_url || 'https://images.unsplash.com/photo-1523580494863-6f3031224c94?w=1000&q=80'})` }}>
+        <div className="hms-ig-avatar">
+          {dossier.avatar_url ? <img src={dossier.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : user.user_id.slice(0, 3)}
         </div>
-      )}
+      </div>
 
-      {activeTab === 'ledger' && (
-        <div style={styles.tabContent}>
-          <div style={styles.sheetCard}>
-            <div style={styles.badge}>SVNIT OFFICIAL CHAPTER</div>
-            <h2 style={{ margin: '8px 0 4px 0', color: '#f8fafc', fontSize: '21px' }}>{myClub.name || user.full_name}</h2>
-            <div style={styles.detailBox}>
-              <div style={styles.infoRow}><span>Faculty Advisor:</span> <strong>{myClub.faculty_advisor}</strong></div>
-              <div style={styles.infoRow}><span>Head Coordinator:</span> <strong>{myClub.head_coordinator}</strong></div>
-              <div style={styles.infoRow}><span>Events Organized:</span> <strong style={{ color: '#c084fc' }}>{myEvents.length} Events</strong></div>
-              <div style={styles.infoRow}><span>Active Members:</span> <strong style={{ color: '#4ade80' }}>{myClub.members?.length || 0} Core Members</strong></div>
-            </div>
+      <div className="hms-desktop-tabs">
+        <button className={`hms-dtab ${activeTab === 'profile' ? 'active' : ''}`} onClick={() => setActiveTab('profile')}>
+          🎨 Club Profile & Roster ({myClub.members?.length || 0})
+        </button>
+        <button className={`hms-dtab ${activeTab === 'gallery' ? 'active' : ''}`} onClick={() => setActiveTab('gallery')}>
+          📸 Media Gallery ({myClub.gallery?.length || 0})
+        </button>
+        <button className={`hms-dtab ${activeTab === 'events' ? 'active' : ''}`} onClick={() => setActiveTab('events')}>
+          🎪 Propose Events & Feedbacks ({myEvents.length})
+        </button>
+        <button className={`hms-dtab ${activeTab === 'notices' ? 'active' : ''}`} onClick={() => setActiveTab('notices')}>
+          📢 Student Notices ({myNotices.length})
+        </button>
+      </div>
 
-            <form onSubmit={handleSaveClubInfo} style={{ marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <label style={styles.label}>Update Club Mission & Additional Info for Dean</label>
-              <textarea
-                rows="2"
-                value={missionInput}
-                onChange={(e) => setMissionInput(e.target.value)}
-                placeholder="Club Mission"
-                style={styles.input}
-              />
-              <textarea
-                rows="2"
-                value={extraInfoInput}
-                onChange={(e) => setExtraInfoInput(e.target.value)}
-                placeholder="Extra achievements, budget notes, or equipment requests to show Dean..."
-                style={styles.input}
-              />
-              <button type="submit" style={styles.primaryBtn}>💾 Save Info for Dean Portal</button>
-            </form>
-          </div>
-
-          <div style={styles.sectionHeader}>👥 Position-Wise Member Roster</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {myClub.members?.map((m, idx) => (
-              <div key={idx} style={styles.memberCard}>
+      {/* TAB 1: 100% MANUAL CLUB PROFILE & MEMBER ROSTER */}
+      {activeTab === 'profile' && (
+        <div className="hms-grid-2">
+          <div className="hms-card">
+            <div className="hms-section-label">✏️ Customize Club Identity, Photos & Dossier</div>
+            <form onSubmit={handleSaveDossier} className="hms-stack">
+              <div>
+                <label className="hms-label">Official Club Name</label>
+                <input type="text" className="hms-input" placeholder="Enter Full Club Name" value={dossier.name} onChange={(e) => setDossier({ ...dossier, name: e.target.value })} required />
+              </div>
+              <div>
+                <label className="hms-label">Short Tagline</label>
+                <input type="text" className="hms-input" placeholder="e.g. Official Robotics & AI Society of SVNIT" value={dossier.tagline} onChange={(e) => setDossier({ ...dossier, tagline: e.target.value })} />
+              </div>
+              <div className="hms-grid-2" style={{ gap: '8px' }}>
                 <div>
-                  <div style={{ color: '#f8fafc', fontWeight: '700' }}>{m.name}</div>
-                  <div style={{ fontSize: '11px', color: '#94a3b8' }}>{m.roll} • {m.phone}</div>
+                  <label className="hms-label">Faculty Advisor</label>
+                  <input type="text" className="hms-input" placeholder="e.g. Dr. R. K. Gupta" value={dossier.faculty_advisor} onChange={(e) => setDossier({ ...dossier, faculty_advisor: e.target.value })} />
                 </div>
-                <span style={styles.posBadge}>{m.position}</span>
+                <div>
+                  <label className="hms-label">Head Coordinator</label>
+                  <input type="text" className="hms-input" placeholder="Student Head Name" value={dossier.head_coordinator} onChange={(e) => setDossier({ ...dossier, head_coordinator: e.target.value })} />
+                </div>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
+              <div>
+                <label className="hms-label">Club Mission & Complete Description</label>
+                <textarea rows="3" className="hms-input" placeholder="Describe what your club does..." value={dossier.mission} onChange={(e) => setDossier({ ...dossier, mission: e.target.value })} />
+              </div>
 
-      {activeTab === 'clash' && (
-        <div style={styles.tabContent}>
-          <div style={styles.sheetCard}>
-            <h3 style={{ margin: '0 0 12px 0', color: '#f8fafc', fontSize: '16px' }}>
-              + Submit Event Venue & Rich Media Proposal
-            </h3>
-            <form onSubmit={handleProposeEvent} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <input
-                type="text"
-                placeholder="Event Title (e.g. Winter CodeFest 2026)"
-                value={eventForm.title}
-                onChange={(e) => setEventForm({ ...eventForm, title: e.target.value })}
-                required
-                style={styles.input}
-              />
-              <textarea
-                rows="3"
-                placeholder="Full Event Description (What happens at the event, eligibility, prizes...)"
-                value={eventForm.description}
-                onChange={(e) => setEventForm({ ...eventForm, description: e.target.value })}
-                required
-                style={styles.input}
-              />
-              <input
-                type="url"
-                placeholder="Previous Year Photo / Poster URL (https://...)"
-                value={eventForm.image_url}
-                onChange={(e) => setEventForm({ ...eventForm, image_url: e.target.value })}
-                style={styles.input}
-              />
-              <input
-                type="url"
-                placeholder="Audition / Registration Google Form Link (Optional)"
-                value={eventForm.registration_link}
-                onChange={(e) => setEventForm({ ...eventForm, registration_link: e.target.value })}
-                style={styles.input}
-              />
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <input
-                  type="date"
-                  value={eventForm.date}
-                  onChange={(e) => setEventForm({ ...eventForm, date: e.target.value })}
-                  required
-                  style={{ ...styles.input, flex: 1 }}
-                />
-                <select
-                  value={eventForm.venue}
-                  onChange={(e) => setEventForm({ ...eventForm, venue: e.target.value })}
-                  style={{ ...styles.input, flex: 1 }}
-                >
-                  <option value="CRC Auditorium">CRC Auditorium</option>
-                  <option value="SAC Amphitheatre">SAC Amphitheatre</option>
-                  <option value="CCC Seminar Hall">CCC Seminar Hall</option>
-                </select>
+              <div className="hms-grid-2" style={{ gap: '8px' }}>
+                <div>
+                  <label className="hms-label">Profile Photo (Gallery or URL)</label>
+                  <label className="hms-file-label">
+                    📁 Upload Avatar from Device
+                    <input type="file" accept="image/*" hidden onChange={(e) => handleFileUpload(e.target.files[0], (res) => setDossier({ ...dossier, avatar_url: res }))} />
+                  </label>
+                  <input type="text" className="hms-input" style={{ marginTop: '6px' }} placeholder="Or paste Avatar Image URL" value={dossier.avatar_url} onChange={(e) => setDossier({ ...dossier, avatar_url: e.target.value })} />
+                </div>
+                <div>
+                  <label className="hms-label">Cover Banner (Gallery or URL)</label>
+                  <label className="hms-file-label">
+                    🖼️ Upload Banner from Device
+                    <input type="file" accept="image/*" hidden onChange={(e) => handleFileUpload(e.target.files[0], (res) => setDossier({ ...dossier, banner_url: res }))} />
+                  </label>
+                  <input type="text" className="hms-input" style={{ marginTop: '6px' }} placeholder="Or paste Banner Image URL" value={dossier.banner_url} onChange={(e) => setDossier({ ...dossier, banner_url: e.target.value })} />
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <input
-                  type="time"
-                  value={eventForm.start_time}
-                  onChange={(e) => setEventForm({ ...eventForm, start_time: e.target.value })}
-                  required
-                  style={{ ...styles.input, flex: 1 }}
-                />
-                <input
-                  type="time"
-                  value={eventForm.end_time}
-                  onChange={(e) => setEventForm({ ...eventForm, end_time: e.target.value })}
-                  required
-                  style={{ ...styles.input, flex: 1 }}
-                />
+
+              <div>
+                <label className="hms-label">Additional Notes / Achievements for Dean</label>
+                <textarea rows="2" className="hms-input" placeholder="Budget notes, equipment list, competition wins..." value={dossier.extra_dean_info} onChange={(e) => setDossier({ ...dossier, extra_dean_info: e.target.value })} />
               </div>
-              <button type="submit" style={styles.primaryBtn}>🚀 Send Venue Request to Dean</button>
+              <button type="submit" className="hms-btn-primary">💾 Save All Club Details</button>
             </form>
           </div>
 
-          <div style={styles.sectionHeader}>📊 My Club Events & Live Student RSVPs</div>
-          <div style={styles.listContainer}>
-            {myEvents.map((ev) => (
-              <div key={ev.event_id} style={styles.chatRow}>
-                <div style={styles.rowAvatar}>🎟️</div>
-                <div style={styles.rowCenter}>
-                  <div style={styles.rowTopLine}>
-                    <span style={styles.rowTitle}>{ev.title}</span>
-                    <span style={{ color: getStatusColor(ev.status), fontSize: '11px', fontWeight: '700' }}>
-                      {ev.status}
-                    </span>
+          <div className="hms-card">
+            <div className="hms-section-label">➕ Manually Add Club Members & Positions</div>
+            <p className="hms-muted" style={{ marginBottom: '12px' }}>
+              Add your Head Member, Technical Head, Stage & Logistics Head, Promotional Members, etc.
+            </p>
+            <form onSubmit={handleAddMember} className="hms-stack" style={{ marginBottom: '20px' }}>
+              <div className="hms-grid-2" style={{ gap: '8px' }}>
+                <input type="text" className="hms-input" placeholder="Member Full Name" value={memberForm.name} onChange={(e) => setMemberForm({ ...memberForm, name: e.target.value })} required />
+                <input type="text" className="hms-input" placeholder="Roll No (e.g. U24CS011)" value={memberForm.roll} onChange={(e) => setMemberForm({ ...memberForm, roll: e.target.value })} required />
+              </div>
+              <div className="hms-grid-2" style={{ gap: '8px' }}>
+                <input type="text" className="hms-input" placeholder="Role (e.g. Stage & Logistics Head)" value={memberForm.position} onChange={(e) => setMemberForm({ ...memberForm, position: e.target.value })} required />
+                <input type="text" className="hms-input" placeholder="Contact Phone" value={memberForm.phone} onChange={(e) => setMemberForm({ ...memberForm, phone: e.target.value })} required />
+              </div>
+              <button type="submit" className="hms-btn-primary">+ Add Member to Club Roster</button>
+            </form>
+
+            <div className="hms-section-label">👥 Current Club Roster ({myClub.members?.length || 0})</div>
+            <div className="hms-stack" style={{ maxHeight: '320px', overflowY: 'auto' }}>
+              {myClub.members?.map((m) => (
+                <div key={m.id || m.roll} className="hms-row-item">
+                  <div>
+                    <div className="hms-item-title">{m.name}</div>
+                    <div className="hms-item-sub">{m.roll} • {m.phone}</div>
                   </div>
-                  <div style={styles.rowSub}>📍 {ev.venue} • 📅 {ev.date} ({ev.start_time} - {ev.end_time})</div>
-                  <div style={{ fontSize: '12px', color: '#4ade80', marginTop: '4px', fontWeight: '800' }}>
-                    👥 {ev.rsvps?.length || 0} Students Confirmed Coming
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span className="hms-pill-badge">{m.position}</span>
+                    {m.id && <button className="hms-btn-ghost-sm" onClick={() => handleRemoveMember(m.id)}>✕</button>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: GALLERY UPLOADS (FROM DEVICE GALLERY OR URL) */}
+      {activeTab === 'gallery' && (
+        <div className="hms-grid-2">
+          <div className="hms-card">
+            <div className="hms-section-label">📸 Upload Photos & Videos to Club Gallery</div>
+            <form onSubmit={handleAddGalleryItem} className="hms-stack">
+              <select className="hms-input" value={galleryForm.media_type} onChange={(e) => setGalleryForm({ ...galleryForm, media_type: e.target.value })}>
+                <option value="image">🖼️ Photo / Image</option>
+                <option value="video">🎥 Video Clip</option>
+              </select>
+
+              <label className="hms-file-label">
+                📂 Choose Photo / Video from Device Gallery
+                <input
+                  type="file"
+                  accept="image/*,video/*"
+                  hidden
+                  onChange={(e) => {
+                    const file = e.target.files[0];
+                    if (file) {
+                      const isVid = file.type.startsWith('video');
+                      handleFileUpload(file, (base64) => setGalleryForm({ ...galleryForm, media_type: isVid ? 'video' : 'image', media_url: base64 }));
+                    }
+                  }}
+                />
+              </label>
+
+              <input type="text" className="hms-input" placeholder="Or paste Image / Video URL" value={galleryForm.media_url} onChange={(e) => setGalleryForm({ ...galleryForm, media_url: e.target.value })} />
+              <input type="text" className="hms-input" placeholder="Caption / Event Moment Description" value={galleryForm.caption} onChange={(e) => setGalleryForm({ ...galleryForm, caption: e.target.value })} required />
+              <button type="submit" className="hms-btn-primary">✨ Publish to Club Gallery</button>
+            </form>
+          </div>
+
+          <div className="hms-card">
+            <div className="hms-section-label">🖼️ Published Club Gallery ({myClub.gallery?.length || 0})</div>
+            <div className="hms-gallery-grid">
+              {myClub.gallery?.map((g, i) => (
+                <div key={i} className="hms-gallery-item">
+                  {g.media_type === 'video' ? <video src={g.media_url} controls /> : <img src={g.media_url} alt={g.caption} />}
+                  <div style={{ padding: '10px', fontSize: '12px' }}>{g.caption}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: MANUAL VENUE EVENT PROPOSALS & EVENT-WISE STUDENT FEEDBACKS */}
+      {activeTab === 'events' && (
+        <div className="hms-grid-2">
+          <div className="hms-card">
+            <div className="hms-section-label">🚀 Propose Event to Dean (100% Manual Venue & Media)</div>
+            <form onSubmit={handleProposeEvent} className="hms-stack">
+              <input type="text" className="hms-input" placeholder="Event Title" value={eventForm.title} onChange={(e) => setEventForm({ ...eventForm, title: e.target.value })} required />
+              <div>
+                <label className="hms-label">Manual Event Venue (Type Any Campus Location)</label>
+                <input type="text" className="hms-input" placeholder="e.g. SAC Open Lawn, Mechanical Seminar Hall, Main Ground..." value={eventForm.venue} onChange={(e) => setEventForm({ ...eventForm, venue: e.target.value })} required />
+              </div>
+              <div className="hms-grid-2" style={{ gap: '8px' }}>
+                <div><label className="hms-label">Event Date</label><input type="date" className="hms-input" value={eventForm.date} onChange={(e) => setEventForm({ ...eventForm, date: e.target.value })} required /></div>
+                <div><label className="hms-label">Start & End Time</label>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <input type="time" className="hms-input" value={eventForm.start_time} onChange={(e) => setEventForm({ ...eventForm, start_time: e.target.value })} required />
+                    <input type="time" className="hms-input" value={eventForm.end_time} onChange={(e) => setEventForm({ ...eventForm, end_time: e.target.value })} required />
                   </div>
                 </div>
               </div>
-            ))}
+              <textarea rows="3" className="hms-input" placeholder="Complete Event Description for Students & Dean..." value={eventForm.description} onChange={(e) => setEventForm({ ...eventForm, description: e.target.value })} required />
+
+              <label className="hms-file-label">
+                🖼️ Upload Event Poster from Device Gallery
+                <input type="file" accept="image/*" hidden onChange={(e) => handleFileUpload(e.target.files[0], (res) => setEventForm({ ...eventForm, image_url: res }))} />
+              </label>
+              <input type="text" className="hms-input" placeholder="Or paste Poster Image URL" value={eventForm.image_url} onChange={(e) => setEventForm({ ...eventForm, image_url: e.target.value })} />
+              <input type="url" className="hms-input" placeholder="Google Form Registration / Audition Link (Optional)" value={eventForm.registration_link} onChange={(e) => setEventForm({ ...eventForm, registration_link: e.target.value })} />
+              <button type="submit" className="hms-btn-primary">⚡ Request Dean Permission</button>
+            </form>
+          </div>
+
+          <div className="hms-card">
+            <div className="hms-section-label">📊 My Club Events — Click to View Student Feedbacks ({myEvents.length})</div>
+            <div className="hms-stack">
+              {myEvents.map((ev) => (
+                <div key={ev.event_id} className="hms-card" style={{ background: '#090d16', cursor: 'pointer' }} onClick={() => setSelectedEventFeedback(ev)}>
+                  <div className="hms-row-between">
+                    <span className="hms-item-title">{ev.title}</span>
+                    <span className="hms-pill-badge">{ev.status}</span>
+                  </div>
+                  <div className="hms-item-sub" style={{ marginTop: '4px' }}>📍 {ev.venue} • 📅 {ev.date} ({ev.start_time} - {ev.end_time})</div>
+                  <div className="hms-row-between" style={{ marginTop: '10px' }}>
+                    <span style={{ fontSize: '12px', color: '#4ade80', fontWeight: 800 }}>
+                      👥 {ev.rsvps?.length || 0} Attending • ⭐ {ev.feedbacks?.length || 0} Feedbacks
+                    </span>
+                    {ev.status === 'Approved' && (
+                      <button
+                        className="hms-btn-ghost-sm"
+                        onClick={(e) => { e.stopPropagation(); handleMarkEventCompleted(ev.event_id); }}
+                      >
+                        🏁 Mark Event Completed
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
 
-      {activeTab === 'audit' && aiAudit && (
-        <div style={styles.tabContent}>
-          <div style={styles.sheetCard}>
-            <div style={{ color: '#c084fc', fontSize: '12px', fontWeight: '800', marginBottom: '6px' }}>
-              🤖 AI POST-EVENT FEEDBACK AUDIT
-            </div>
-            <h3 style={{ margin: '0 0 8px 0', color: '#f8fafc', fontSize: '17px' }}>{aiAudit.event_title}</h3>
-            <div style={{ display: 'flex', gap: '14px', marginBottom: '12px', fontSize: '13px', color: '#cbd5e1' }}>
-              <div>👥 Attendees: <strong>{aiAudit.total_attendees}</strong></div>
-              <div>⭐ Rating: <strong>{aiAudit.average_rating} / 5.0</strong></div>
-            </div>
-            <div style={styles.detailBox}>
-              <div style={{ color: '#4ade80', fontWeight: '700' }}>👍 Key Pros:</div>
-              <ul style={{ margin: '4px 0 10px 20px', padding: 0 }}>
-                {aiAudit.key_pros.map((p, i) => <li key={i}>{p}</li>)}
-              </ul>
-              <div style={{ color: '#f87171', fontWeight: '700' }}>⚠️ Areas of Improvement:</div>
-              <ul style={{ margin: '4px 0 10px 20px', padding: 0 }}>
-                {aiAudit.key_cons.map((c, i) => <li key={i}>{c}</li>)}
-              </ul>
-              <div><strong>Dean Recommendation:</strong> {aiAudit.recommendation}</div>
+      {/* TAB 4: TARGETED STUDENT NOTICES (BRANCH & YEAR WISE) */}
+      {activeTab === 'notices' && (
+        <div className="hms-grid-2">
+          <div className="hms-card">
+            <div className="hms-section-label">📢 Send Targeted Notice to Students (Requires Dean Approval)</div>
+            <form onSubmit={handleSendNotice} className="hms-stack">
+              <input type="text" className="hms-input" placeholder="Notice Title (e.g. 1st Year Civil Workshop / Audition Notice)" value={noticeForm.title} onChange={(e) => setNoticeForm({ ...noticeForm, title: e.target.value })} required />
+              <div className="hms-grid-2" style={{ gap: '8px' }}>
+                <div>
+                  <label className="hms-label">Target Branch / Dept</label>
+                  <select className="hms-input" value={noticeForm.target_branch} onChange={(e) => setNoticeForm({ ...noticeForm, target_branch: e.target.value })}>
+                    <option value="All">All Branches</option>
+                    <option value="Civil Engineering">Civil Engineering</option>
+                    <option value="Computer Engineering">Computer Engineering</option>
+                    <option value="Mechanical Engineering">Mechanical Engineering</option>
+                    <option value="Electrical Engineering">Electrical Engineering</option>
+                    <option value="Electronics Engineering">Electronics Engineering</option>
+                    <option value="Artificial Intelligence">Artificial Intelligence</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="hms-label">Target Year</label>
+                  <select className="hms-input" value={noticeForm.target_year} onChange={(e) => setNoticeForm({ ...noticeForm, target_year: e.target.value })}>
+                    <option value="All">All Years</option>
+                    <option value="1st Year">1st Year Only</option>
+                    <option value="2nd Year">2nd Year Only</option>
+                    <option value="3rd Year">3rd Year Only</option>
+                    <option value="4th Year">4th Year Only</option>
+                  </select>
+                </div>
+              </div>
+              <textarea rows="3" className="hms-input" placeholder="Notice message & instructions..." value={noticeForm.message} onChange={(e) => setNoticeForm({ ...noticeForm, message: e.target.value })} required />
+              <input type="url" className="hms-input" placeholder="Optional Google Form / Audition Link" value={noticeForm.attachment_link} onChange={(e) => setNoticeForm({ ...noticeForm, attachment_link: e.target.value })} />
+              <button type="submit" className="hms-btn-primary">🚀 Send Notice to Dean for Approval</button>
+            </form>
+          </div>
+
+          <div className="hms-card">
+            <div className="hms-section-label">📋 Sent Notices Status ({myNotices.length})</div>
+            <div className="hms-stack">
+              {myNotices.map((n) => (
+                <div key={n.notice_id} className="hms-row-item">
+                  <div>
+                    <div className="hms-item-title">{n.title}</div>
+                    <div className="hms-item-sub">Target: {n.target_branch} ({n.target_year}) • {n.message}</div>
+                  </div>
+                  <span className="hms-pill-badge">{n.status}</span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
       )}
 
-      <nav style={styles.bottomNav}>
-        <button onClick={() => setActiveTab('ledger')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'ledger' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>
-            <span style={{ fontSize: '18px' }}>⭐</span>
+      {/* MODAL: EVENT-WISE FEEDBACK & ATTENDANCE DETAILS */}
+      {selectedEventFeedback && (
+        <div className="hms-modal-backdrop" onClick={() => setSelectedEventFeedback(null)}>
+          <div className="hms-modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="hms-row-between" style={{ marginBottom: '12px' }}>
+              <span className="hms-pill-badge">EVENT ANALYTICS • {selectedEventFeedback.event_id}</span>
+              <button className="hms-close-btn" onClick={() => setSelectedEventFeedback(null)}>✕</button>
+            </div>
+            <h3>{selectedEventFeedback.title}</h3>
+            <div className="hms-detail-box" style={{ marginBottom: '14px' }}>
+              <div>📍 <strong>Venue:</strong> {selectedEventFeedback.venue}</div>
+              <div style={{ marginTop: '4px' }}>👥 <strong>Students Attended / RSVP'd ({selectedEventFeedback.rsvps?.length || 0}):</strong> {selectedEventFeedback.rsvps?.join(', ') || 'None yet'}</div>
+            </div>
+            <div className="hms-section-label">⭐ Student Feedbacks ({selectedEventFeedback.feedbacks?.length || 0})</div>
+            {(!selectedEventFeedback.feedbacks || selectedEventFeedback.feedbacks.length === 0) ? (
+              <div className="hms-empty-card" style={{ padding: '18px' }}>No student feedbacks yet.</div>
+            ) : (
+              <div className="hms-stack">
+                {selectedEventFeedback.feedbacks.map((f, i) => (
+                  <div key={i} className="hms-row-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+                    <div className="hms-row-between" style={{ width: '100%' }}>
+                      <strong>{f.student_name} ({f.student_id})</strong>
+                      <span style={{ color: '#fbbf24' }}>{'⭐'.repeat(f.rating)}</span>
+                    </div>
+                    <div className="hms-item-sub" style={{ color: '#e2e8f0', marginTop: '4px' }}>{f.review}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'ledger' ? '#c084fc' : '#94a3b8' }}>Club Ledger</span>
-        </button>
+        </div>
+      )}
 
-        <button onClick={() => setActiveTab('clash')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'clash' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>
-            <span style={{ fontSize: '18px' }}>⚡</span>
-          </div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'clash' ? '#c084fc' : '#94a3b8' }}>Proposals & RSVPs</span>
-        </button>
-
-        <button onClick={() => setActiveTab('audit')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'audit' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>
-            <span style={{ fontSize: '18px' }}>🤖</span>
-          </div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'audit' ? '#c084fc' : '#94a3b8' }}>AI Audit</span>
-        </button>
+      <nav className="hms-bottom-nav">
+        <button onClick={() => setActiveTab('profile')} className={`hms-bnav-item ${activeTab === 'profile' ? 'active' : ''}`}><span>🎨</span><span>Profile</span></button>
+        <button onClick={() => setActiveTab('gallery')} className={`hms-bnav-item ${activeTab === 'gallery' ? 'active' : ''}`}><span>📸</span><span>Gallery</span></button>
+        <button onClick={() => setActiveTab('events')} className={`hms-bnav-item ${activeTab === 'events' ? 'active' : ''}`}><span>🎪</span><span>Events</span></button>
+        <button onClick={() => setActiveTab('notices')} className={`hms-bnav-item ${activeTab === 'notices' ? 'active' : ''}`}><span>📢</span><span>Notices</span></button>
       </nav>
     </div>
   );
 }
-
-const styles = {
-  appWrapper: { maxWidth: '680px', margin: '0 auto', paddingBottom: '90px', minHeight: 'calc(100vh - 70px)' },
-  tabContent: { padding: '14px' },
-  toast: { margin: '10px 14px 0 14px', background: '#1e293b', borderLeft: '4px solid #8b5cf6', padding: '12px', borderRadius: '10px', color: '#f8fafc', fontSize: '13px', fontWeight: '600', cursor: 'pointer' },
-  badge: { display: 'inline-block', background: 'rgba(139, 92, 246, 0.18)', color: '#c084fc', padding: '3px 10px', borderRadius: '999px', fontSize: '10px', fontWeight: '800', marginBottom: '8px' },
-  sheetCard: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: '18px', padding: '18px', marginBottom: '16px' },
-  detailBox: { background: '#090d16', border: '1px solid #1e293b', borderRadius: '12px', padding: '14px', fontSize: '13px', color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: '8px' },
-  infoRow: { display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(30, 41, 59, 0.5)', paddingBottom: '6px' },
-  sectionHeader: { color: '#c084fc', fontSize: '12px', fontWeight: '800', margin: '12px 0 8px 0', textTransform: 'uppercase' },
-  memberCard: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' },
-  posBadge: { fontSize: '11px', background: 'rgba(139, 92, 246, 0.18)', color: '#c084fc', padding: '3px 9px', borderRadius: '999px', fontWeight: '700' },
-  listContainer: { display: 'flex', flexDirection: 'column' },
-  chatRow: { display: 'flex', alignItems: 'center', gap: '14px', padding: '14px 6px', borderBottom: '1px solid rgba(30, 41, 59, 0.65)' },
-  rowAvatar: { width: '46px', height: '46px', borderRadius: '50%', background: '#1e293b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', flexShrink: 0 },
-  rowCenter: { flex: 1, minWidth: 0 },
-  rowTopLine: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '4px' },
-  rowTitle: { color: '#f8fafc', fontSize: '15px', fontWeight: '700', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  rowSub: { color: '#94a3b8', fontSize: '13px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  label: { fontSize: '11px', fontWeight: '700', color: '#94a3b8', textTransform: 'uppercase' },
-  input: { width: '100%', background: '#090d16', border: '1px solid #334155', borderRadius: '10px', padding: '12px', color: '#fff', fontSize: '14px', boxSizing: 'border-box' },
-  primaryBtn: { width: '100%', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: '10px', padding: '13px', fontWeight: '800', fontSize: '14px', cursor: 'pointer' },
-  bottomNav: { position: 'fixed', bottom: 0, left: 0, right: 0, height: '70px', background: '#0b141a', borderTop: '1px solid #1e293b', display: 'flex', justifyContent: 'space-around', alignItems: 'center', zIndex: 100 },
-  navItem: { background: 'transparent', border: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', cursor: 'pointer', flex: 1 },
-  iconPill: { position: 'relative', width: '56px', height: '30px', borderRadius: '999px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-  navLabel: { fontSize: '11px', fontWeight: '600' }
-};
