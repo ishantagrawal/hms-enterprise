@@ -11,13 +11,12 @@ export default function WardenView({ user, complaints, apiUrl }) {
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [resetTarget, setResetTarget] = useState(null);
 
-  // === DEAN CLUBS HUB & EVENT STATE (ERROR WAS HERE) ===
+  // === DEAN CLUBS HUB & EVENT STATE ===
   const [clubs, setClubs] = useState([]);
   const [events, setEvents] = useState([]);
   const [selectedClub, setSelectedClub] = useState(null);
   const [selectedEventAudit, setSelectedEventAudit] = useState(null);
 
-  // === PDF & SETTINGS STATE ===
   const [newPassword, setNewPassword] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
@@ -84,19 +83,42 @@ export default function WardenView({ user, complaints, apiUrl }) {
   };
 
   const openCount = complaints.filter((c) => c.status !== 'Completed').length;
-  const pendingEventsCount = events.filter((e) => e.status === 'Pending Dean Approval').length;
+  
+  // Calendars categorizations
+  const pendingEvents = events.filter(e => e.status === 'Pending Dean Approval');
+  const upcomingEvents = events.filter(e => e.status === 'Approved');
+  const pastEvents = events.filter(e => e.status === 'Completed');
+  const pendingEventsCount = pendingEvents.length;
+
+  const renderEventCard = (ev, isPending = false) => (
+    <div key={ev.event_id} onClick={() => setSelectedEventAudit(ev)} style={styles.chatRow}>
+      <div style={styles.calDateBox}>
+        <div style={styles.calMonth}>{new Date(ev.date).toLocaleString('default', { month: 'short' }).toUpperCase()}</div>
+        <div style={styles.calDay}>{new Date(ev.date).getDate()}</div>
+      </div>
+      <div style={styles.rowCenter}>
+        <div style={styles.rowTopLine}>
+          <span style={styles.rowTitle}>{ev.title}</span>
+          <span style={{ color: getStatusColor(ev.status), fontSize: '11px', fontWeight: '700' }}>{ev.status}</span>
+        </div>
+        <div style={styles.rowSub}>📍 {ev.venue} • ⏰ {ev.start_time}</div>
+        <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px' }}>Club: <strong>{ev.club_id}</strong></div>
+        
+        {isPending && isDean && (
+          <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }} onClick={e => e.stopPropagation()}>
+            <button onClick={() => handleApproveEvent(ev.event_id, 'Approved')} style={styles.approveBtn}>✓ Approve Venue</button>
+            <button onClick={() => handleApproveEvent(ev.event_id, 'Rejected')} style={styles.rejectBtn}>✕ Reject</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <div style={styles.appWrapper}>
-      {statusMsg && (
-        <div style={styles.toast} onClick={() => setStatusMsg(null)}>
-          {statusMsg}
-        </div>
-      )}
+      {statusMsg && <div style={styles.toast} onClick={() => setStatusMsg(null)}>{statusMsg}</div>}
 
-      {/* ========================================================= */}
-      {/* TAB 1: HOSTELS (DEAN) OR COMPLAINTS (WARDEN)              */}
-      {/* ========================================================= */}
+      {/* TAB 1: HOSTELS */}
       {isDean && activeTab === 'hostels' && (
         <div style={styles.tabContent}>
           <div style={styles.listContainer}>
@@ -124,6 +146,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
+      {/* TAB 2: COMPLAINTS */}
       {activeTab === 'complaints' && (
         <div style={styles.tabContent}>
           <div style={styles.listContainer}>
@@ -150,39 +173,42 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* TAB 2: DEAN CLUBS & EVENTS HUB                            */}
-      {/* ========================================================= */}
+      {/* TAB 3: DEAN CLUBS & EVENTS CALENDAR HUB */}
       {activeTab === 'clubshub' && (
         <div style={styles.tabContent}>
-          <div style={{ color: '#38bdf8', fontSize: '13px', fontWeight: '800', marginBottom: '8px' }}>
-            📅 SVNIT Event Calendar & Clash Matrix Approvals
-          </div>
-          <div style={styles.listContainer}>
-            {events.map((ev) => (
-              <div key={ev.event_id} onClick={() => setSelectedEventAudit(ev)} style={styles.chatRow}>
-                <div style={styles.rowAvatar}>{ev.status === 'Completed' ? '🤖' : '🎟️'}</div>
-                <div style={styles.rowCenter}>
-                  <div style={styles.rowTopLine}>
-                    <span style={styles.rowTitle}>{ev.title}</span>
-                    <span style={{ color: getStatusColor(ev.status), fontSize: '11px', fontWeight: '700' }}>
-                      {ev.status}
-                    </span>
-                  </div>
-                  <div style={styles.rowSub}>📍 {ev.venue} • 📅 {ev.date}</div>
-                  {isDean && ev.status === 'Pending Dean Approval' && (
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }} onClick={e => e.stopPropagation()}>
-                      <button onClick={() => handleApproveEvent(ev.event_id, 'Approved')} style={styles.approveBtn}>✓ Approve Venue</button>
-                      <button onClick={() => handleApproveEvent(ev.event_id, 'Rejected')} style={styles.rejectBtn}>✕ Reject</button>
-                    </div>
-                  )}
-                </div>
+          
+          {/* PENDING APPROVALS SECTION */}
+          {pendingEvents.length > 0 && (
+            <>
+              <div style={styles.sectionHeader}>⚠️ Action Required: Venue Approvals</div>
+              <div style={styles.listContainer}>
+                {pendingEvents.map(ev => renderEventCard(ev, true))}
               </div>
-            ))}
+            </>
+          )}
+
+          {/* UPCOMING EVENTS SECTION */}
+          <div style={styles.sectionHeader}>📅 Upcoming Approved Schedule</div>
+          <div style={styles.listContainer}>
+            {upcomingEvents.length === 0 ? (
+              <div style={{...styles.emptyState, padding: '20px'}}>No upcoming events.</div>
+            ) : (
+              upcomingEvents.map(ev => renderEventCard(ev, false))
+            )}
           </div>
 
-          <div style={{ color: '#4ade80', fontSize: '13px', fontWeight: '800', margin: '20px 0 8px 0' }}>
-            ⭐ Master Club Ledgers & Rosters
+          {/* COMPLETED EVENTS SECTION */}
+          <div style={{...styles.sectionHeader, color: '#94a3b8', marginTop: '20px'}}>⏮️ Past Events & AI Audits</div>
+          <div style={styles.listContainer}>
+            {pastEvents.length === 0 ? (
+              <div style={{...styles.emptyState, padding: '20px'}}>No past events.</div>
+            ) : (
+              pastEvents.map(ev => renderEventCard(ev, false))
+            )}
+          </div>
+
+          <div style={{ color: '#4ade80', fontSize: '13px', fontWeight: '800', margin: '30px 0 8px 0', textTransform: 'uppercase' }}>
+            ⭐ Master Club Ledgers
           </div>
           <div style={styles.listContainer}>
             {clubs.map((club) => (
@@ -201,9 +227,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* TAB 3: PDF AUDIT REPORTS                                  */}
-      {/* ========================================================= */}
+      {/* TAB 4: REPORTS */}
       {activeTab === 'reports' && (
         <div style={styles.tabContent}>
           <div style={styles.sheetCard}>
@@ -230,9 +254,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* TAB 4: PASSWORDS (DEAN) OR PROFILE (WARDEN)               */}
-      {/* ========================================================= */}
+      {/* TAB 5: SETTINGS */}
       {activeTab === 'settings' && (
         <div style={styles.tabContent}>
           {isDean ? (
@@ -254,17 +276,13 @@ export default function WardenView({ user, complaints, apiUrl }) {
             <div style={styles.sheetCard}>
               <h3 style={{ margin: '0 0 6px 0', color: '#f8fafc' }}>{user.full_name}</h3>
               <p style={{ margin: '0 0 14px 0', color: '#38bdf8', fontSize: '13px' }}>ID: {user.user_id}</p>
-              <div style={styles.detailBox}>
-                <div><strong>Hostel:</strong> {user.hostel_block}</div>
-              </div>
+              <div style={styles.detailBox}><div><strong>Hostel:</strong> {user.hostel_block}</div></div>
             </div>
           )}
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* MODAL 1: CLUB MEMBERS ROSTER SHEET                        */}
-      {/* ========================================================= */}
+      {/* MODAL 1: CLUB MEMBERS ROSTER */}
       {selectedClub && (
         <div style={styles.modalOverlay} onClick={() => setSelectedClub(null)}>
           <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
@@ -288,9 +306,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* MODAL 2: EVENT DETAILS & AI AUDIT SUMMARY SHEET           */}
-      {/* ========================================================= */}
+      {/* MODAL 2: EVENT DETAILS & AI AUDIT */}
       {selectedEventAudit && (
         <div style={styles.modalOverlay} onClick={() => setSelectedEventAudit(null)}>
           <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
@@ -301,7 +317,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
               <button onClick={() => setSelectedEventAudit(null)} style={styles.closeBtn}>✕</button>
             </div>
             
-            {/* Display Rich Media (Image) */}
             {selectedEventAudit.image_url && (
               <img src={selectedEventAudit.image_url} alt="Event" style={{ width: '100%', height: '160px', objectFit: 'cover', borderRadius: '12px', marginBottom: '12px' }} />
             )}
@@ -309,14 +324,12 @@ export default function WardenView({ user, complaints, apiUrl }) {
             <h4 style={{ margin: '0 0 8px 0', color: '#38bdf8', fontSize: '18px' }}>{selectedEventAudit.title}</h4>
             <div style={{ color: '#cbd5e1', fontSize: '13px', marginBottom: '12px' }}>📍 {selectedEventAudit.venue} • 📅 {selectedEventAudit.date}</div>
 
-            {/* Display Rich Event Description */}
             {selectedEventAudit.description && (
               <p style={{ background: '#090d16', padding: '12px', borderRadius: '10px', color: '#cbd5e1', fontSize: '13px', border: '1px solid #1e293b' }}>
                 {selectedEventAudit.description}
               </p>
             )}
 
-            {/* Display AI Audit Details if Event is Completed */}
             {selectedEventAudit.ai_audit && (
               <div style={styles.detailBox}>
                 <div style={{ display: 'flex', gap: '14px', marginBottom: '12px' }}>
@@ -334,9 +347,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* MODAL 3: PASSWORD RESET                                   */}
-      {/* ========================================================= */}
+      {/* MODAL 3: PASSWORD RESET */}
       {resetTarget && (
         <div style={styles.modalOverlay} onClick={() => setResetTarget(null)}>
           <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
@@ -364,16 +375,16 @@ export default function WardenView({ user, complaints, apiUrl }) {
           <span style={{ ...styles.navLabel, color: activeTab === 'complaints' ? '#f8fafc' : '#94a3b8' }}>Grievances</span>
         </button>
         <button onClick={() => setActiveTab('clubshub')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'clubshub' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}><span style={{ fontSize: '18px' }}>⭐</span>{pendingEventsCount > 0 && <span style={styles.badgeCount}>{pendingEventsCount}</span>}</div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'clubshub' ? '#f8fafc' : '#94a3b8' }}>Clubs Hub</span>
+          <div style={{ ...styles.iconPill, background: activeTab === 'clubshub' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}><span style={{ fontSize: '18px' }}>📅</span>{pendingEventsCount > 0 && <span style={styles.badgeCount}>{pendingEventsCount}</span>}</div>
+          <span style={{ ...styles.navLabel, color: activeTab === 'clubshub' ? '#f8fafc' : '#94a3b8' }}>Calendar</span>
         </button>
         <button onClick={() => setActiveTab('reports')} style={styles.navItem}>
           <div style={{ ...styles.iconPill, background: activeTab === 'reports' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}><span style={{ fontSize: '18px' }}>📥</span></div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'reports' ? '#f8fafc' : '#94a3b8' }}>PDF Report</span>
+          <span style={{ ...styles.navLabel, color: activeTab === 'reports' ? '#f8fafc' : '#94a3b8' }}>Reports</span>
         </button>
         <button onClick={() => setActiveTab('settings')} style={styles.navItem}>
           <div style={{ ...styles.iconPill, background: activeTab === 'settings' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}><span style={{ fontSize: '18px' }}>{isDean ? '🔑' : '👤'}</span></div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'settings' ? '#f8fafc' : '#94a3b8' }}>{isDean ? 'Passwords' : 'Profile'}</span>
+          <span style={{ ...styles.navLabel, color: activeTab === 'settings' ? '#f8fafc' : '#94a3b8' }}>{isDean ? 'Settings' : 'Profile'}</span>
         </button>
       </nav>
     </div>
@@ -385,8 +396,11 @@ const styles = {
   tabContent: { padding: '14px' },
   toast: { margin: '10px 14px 0 14px', background: '#1e293b', borderLeft: '4px solid #22c55e', padding: '12px', borderRadius: '10px', color: '#f8fafc', fontSize: '13px', fontWeight: '600', cursor: 'pointer' },
   listContainer: { display: 'flex', flexDirection: 'column' },
-  chatRow: { display: 'flex', alignItems: 'center', gap: '14px', padding: '14px 6px', borderBottom: '1px solid rgba(30, 41, 59, 0.65)', cursor: 'pointer' },
+  chatRow: { display: 'flex', alignItems: 'flex-start', gap: '14px', padding: '14px 6px', borderBottom: '1px solid rgba(30, 41, 59, 0.65)', cursor: 'pointer' },
   rowAvatar: { width: '48px', height: '48px', borderRadius: '50%', background: '#1e293b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '21px', flexShrink: 0 },
+  calDateBox: { width: '50px', height: '56px', background: '#1e293b', borderRadius: '10px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', border: '1px solid #334155', flexShrink: 0 },
+  calMonth: { background: '#ef4444', color: '#fff', width: '100%', textAlign: 'center', fontSize: '10px', fontWeight: '800', padding: '2px 0' },
+  calDay: { color: '#f8fafc', fontSize: '18px', fontWeight: '800', marginTop: '2px' },
   rowCenter: { flex: 1, minWidth: 0 },
   rowTopLine: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '4px' },
   rowTitle: { color: '#f8fafc', fontSize: '15px', fontWeight: '700', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
@@ -397,6 +411,7 @@ const styles = {
   statusBadge: { fontSize: '10px', fontWeight: '700', border: '1px solid', padding: '2px 8px', borderRadius: '999px', flexShrink: 0 },
   codePill: { background: '#1e293b', color: '#38bdf8', fontSize: '11px', fontWeight: '800', padding: '2px 8px', borderRadius: '999px' },
   emptyState: { textAlign: 'center', padding: '40px 20px', color: '#64748b', fontSize: '14px' },
+  sectionHeader: { color: '#38bdf8', fontSize: '13px', fontWeight: '800', margin: '10px 0 8px 0', textTransform: 'uppercase', letterSpacing: '0.5px' },
   sheetCard: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: '18px', padding: '20px' },
   detailBox: { background: '#090d16', border: '1px solid #1e293b', borderRadius: '12px', padding: '14px', fontSize: '13px', color: '#cbd5e1', marginTop: '12px' },
   label: { display: 'block', fontSize: '11px', fontWeight: '700', color: '#94a3b8', marginBottom: '6px', textTransform: 'uppercase' },

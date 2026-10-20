@@ -37,7 +37,8 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
       const data = await res.json();
       if (res.ok) {
         setMsg({ type: 'success', text: '🎟️ RSVP Confirmed! Seat reserved.' });
-        setSelectedEvent(null);
+        setEvents(events.map(ev => ev.event_id === eventId ? { ...ev, rsvps: data.rsvps } : ev));
+        setSelectedEvent(prev => ({ ...prev, rsvps: data.rsvps }));
       } else {
         setMsg({ type: 'error', text: data.detail || 'RSVP failed' });
       }
@@ -67,15 +68,55 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
     }
   };
 
-  // Check if feedback is active (Only 1 day after event date)
   const isFeedbackActive = (eventDateStr) => {
     if (!eventDateStr) return false;
     const eventDate = new Date(eventDateStr);
     const today = new Date();
     const diffTime = today - eventDate;
     const diffDays = diffTime / (1000 * 60 * 60 * 24);
-    // Active from event day up to 1 day after
     return diffDays >= 0 && diffDays <= 1.0;
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setMsg(null);
+    try {
+      const res = await fetch(`${apiUrl}/api/complaints`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ student_id: user.user_id, category, summary, description })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setMsg({ type: 'success', text: `✅ Ticket ${data.ticket.ticket_id} registered!` });
+        setSummary('');
+        setDescription('');
+        setShowNewModal(false);
+        onRefresh();
+      } else {
+        setMsg({ type: 'error', text: data.detail || 'Failed' });
+      }
+    } catch {
+      setMsg({ type: 'error', text: 'Server connection error.' });
+    }
+    setSubmitting(false);
+  };
+
+  const handleStudentVerify = async (ticketId, satisfied) => {
+    try {
+      const res = await fetch(`${apiUrl}/api/complaints/student-verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticket_id: ticketId, satisfied })
+      });
+      if (res.ok) {
+        setSelectedTicket(null);
+        onRefresh();
+      }
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const getCategoryIcon = (catName) => {
@@ -97,6 +138,27 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
   );
 
   const actionPendingCount = complaints.filter((c) => c.status === 'Awaiting Confirmation').length;
+
+  // STRICTLY NO PENDING EVENTS FOR STUDENTS
+  const upcomingEvents = events.filter(e => e.status === 'Approved');
+  const pastEvents = events.filter(e => e.status === 'Completed');
+
+  const renderCalCard = (ev) => (
+    <div key={ev.event_id} onClick={() => setSelectedEvent(ev)} style={styles.chatRow}>
+      <div style={styles.calDateBox}>
+        <div style={styles.calMonth}>{new Date(ev.date).toLocaleString('default', { month: 'short' }).toUpperCase()}</div>
+        <div style={styles.calDay}>{new Date(ev.date).getDate()}</div>
+      </div>
+      <div style={styles.rowCenter}>
+        <div style={styles.rowTopLine}>
+          <span style={styles.rowTitle}>{ev.title}</span>
+          <span style={{ color: '#c084fc', fontSize: '11px', fontWeight: '800' }}>{ev.status}</span>
+        </div>
+        <div style={styles.rowSub}>📍 {ev.venue} • ⏰ {ev.start_time}</div>
+        <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '3px' }}>Club: <strong>{ev.club_id}</strong> • Tap for RSVP</div>
+      </div>
+    </div>
+  );
 
   return (
     <div style={styles.appWrapper}>
@@ -142,7 +204,7 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
             ) : (
               filteredComplaints.map((c) => (
                 <div key={c.ticket_id} onClick={() => setSelectedTicket(c)} style={styles.chatRow}>
-                  <div style={styles.rowAvatar}>{getCategoryIcon(c.category)}</div>
+                  <div style={{...styles.rowAvatar, background: '#1e293b'}}>{getCategoryIcon(c.category)}</div>
                   <div style={styles.rowCenter}>
                     <div style={styles.rowTopLine}>
                       <span style={styles.rowTitle}>{c.summary}</span>
@@ -165,7 +227,7 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
       )}
 
       {/* ========================================================= */}
-      {/* TAB 2: EVENTRADAR (PURPLE THEME + RSVP + FEEDBACK WINDOW) */}
+      {/* TAB 2: EVENTRADAR (CALENDAR TIMELINE UI)                  */}
       {/* ========================================================= */}
       {activeTab === 'eventradar' && (
         <div className="hms-anim" style={styles.tabContent}>
@@ -175,23 +237,21 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
             <p style={{ margin: 0, color: '#94a3b8', fontSize: '12px' }}>Approved campus fests, hackathons, and club events in real-time.</p>
           </div>
 
+          <div style={styles.sectionHeader}>📅 Upcoming Events</div>
           <div style={styles.listContainer}>
-            {events.length === 0 ? (
-              <div style={styles.emptyState}>No active events on the radar right now.</div>
+            {upcomingEvents.length === 0 ? (
+              <div style={styles.emptyState}>No upcoming events on the radar right now.</div>
             ) : (
-              events.map((ev) => (
-                <div key={ev.event_id} onClick={() => setSelectedEvent(ev)} style={styles.chatRow}>
-                  <div style={styles.rowAvatar}>📡</div>
-                  <div style={styles.rowCenter}>
-                    <div style={styles.rowTopLine}>
-                      <span style={styles.rowTitle}>{ev.title}</span>
-                      <span style={{ color: '#c084fc', fontSize: '11px', fontWeight: '800' }}>{ev.status}</span>
-                    </div>
-                    <div style={styles.rowSub}>📍 {ev.venue} • 📅 {ev.date} ({ev.start_time} - {ev.end_time})</div>
-                    <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '3px' }}>Tap for RSVP & Details</div>
-                  </div>
-                </div>
-              ))
+              upcomingEvents.map(ev => renderCalCard(ev))
+            )}
+          </div>
+
+          <div style={{...styles.sectionHeader, marginTop: '20px', color: '#94a3b8'}}>⏮️ Past Events & Memories</div>
+          <div style={styles.listContainer}>
+            {pastEvents.length === 0 ? (
+              <div style={{...styles.emptyState, padding: '15px'}}>No past events available.</div>
+            ) : (
+              pastEvents.map(ev => renderCalCard(ev))
             )}
           </div>
         </div>
@@ -254,26 +314,53 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
               <button onClick={() => setSelectedEvent(null)} style={styles.closeBtn}>✕</button>
             </div>
 
-            <h2 style={{ margin: '0 0 6px 0', color: '#f8fafc', fontSize: '18px' }}>{selectedEvent.title}</h2>
-            <p style={{ margin: '0 0 14px 0', color: '#94a3b8', fontSize: '13px' }}>Organized by Chapter: <strong>{selectedEvent.club_id}</strong></p>
+            {selectedEvent.image_url && (
+              <img src={selectedEvent.image_url} alt="Event Cover" style={{ width: '100%', height: '180px', objectFit: 'cover', borderRadius: '12px', marginBottom: '12px' }} />
+            )}
+            
+            <h2 style={{ margin: '0 0 6px 0', color: '#f8fafc', fontSize: '20px' }}>{selectedEvent.title}</h2>
+            <p style={{ margin: '0 0 12px 0', color: '#94a3b8', fontSize: '13px' }}>Organized by Chapter: <strong>{selectedEvent.club_id}</strong></p>
+            
+            {selectedEvent.description && (
+              <p style={{ background: '#090d16', padding: '12px', borderRadius: '10px', color: '#cbd5e1', fontSize: '13px', lineHeight: '1.5', border: '1px solid #1e293b' }}>
+                {selectedEvent.description}
+              </p>
+            )}
 
             <div style={styles.detailBox}>
               <div>📍 <strong>Venue:</strong> {selectedEvent.venue}</div>
               <div style={{ marginTop: '6px' }}>📅 <strong>Date:</strong> {selectedEvent.date}</div>
               <div style={{ marginTop: '6px' }}>⏰ <strong>Time:</strong> {selectedEvent.start_time} - {selectedEvent.end_time}</div>
-              <div style={{ marginTop: '6px' }}>📌 <strong>Status:</strong> <span style={{ color: '#c084fc' }}>{selectedEvent.status}</span></div>
+              <div style={{ marginTop: '6px', color: '#4ade80' }}>
+                👥 <strong>{selectedEvent.rsvps?.length || 0} Students</strong> currently attending
+              </div>
             </div>
 
-            {/* RSVP Button for Upcoming/Approved Events */}
+            {selectedEvent.registration_link && selectedEvent.status !== 'Completed' && (
+              <div style={{ marginTop: '12px' }}>
+                <a href={selectedEvent.registration_link} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', background: '#2563eb', color: '#fff', padding: '12px', borderRadius: '10px', textDecoration: 'none', fontWeight: '700', fontSize: '13px' }}>
+                  🔗 Open Official Registration Form
+                </a>
+              </div>
+            )}
+
             {selectedEvent.status !== 'Completed' && (
-              <div style={{ marginTop: '16px' }}>
-                <button onClick={() => handleRsvp(selectedEvent.event_id)} style={styles.primaryBtn}>
-                  🎟️ I'm Coming / RSVP Now
+              <div style={{ marginTop: '12px' }}>
+                <button 
+                  onClick={() => handleRsvp(selectedEvent.event_id)} 
+                  disabled={selectedEvent.rsvps?.includes(user.user_id)}
+                  style={{ 
+                    ...styles.primaryBtn, 
+                    background: selectedEvent.rsvps?.includes(user.user_id) ? '#1e293b' : '#8b5cf6',
+                    color: selectedEvent.rsvps?.includes(user.user_id) ? '#4ade80' : '#fff',
+                    cursor: selectedEvent.rsvps?.includes(user.user_id) ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  {selectedEvent.rsvps?.includes(user.user_id) ? '✅ You are Attending' : "🎟️ I'm Coming / RSVP Now"}
                 </button>
               </div>
             )}
 
-            {/* Feedback Form (Active ONLY 1 day after event date) */}
             {selectedEvent.status === 'Completed' && isFeedbackActive(selectedEvent.date) && (
               <form onSubmit={(e) => handleFeedbackSubmit(e, selectedEvent.event_id)} style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <div style={{ fontSize: '13px', fontWeight: '700', color: '#4ade80' }}>⭐ Post-Event Feedback (Active Window)</div>
@@ -298,7 +385,9 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
         </div>
       )}
 
-      {/* Ticket Details Modal */}
+      {/* ========================================================= */}
+      {/* MODAL: COMPLAINT DETAILS & VERIFY TICKETS                 */}
+      {/* ========================================================= */}
       {selectedTicket && (
         <div style={styles.modalOverlay} onClick={() => setSelectedTicket(null)}>
           <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
@@ -326,7 +415,9 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
         </div>
       )}
 
-      {/* New Complaint Modal */}
+      {/* ========================================================= */}
+      {/* MODAL: NEW COMPLAINT FORM                                 */}
+      {/* ========================================================= */}
       {showNewModal && (
         <div style={styles.modalOverlay} onClick={() => setShowNewModal(false)}>
           <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
@@ -348,13 +439,15 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
               </div>
               <input type="text" placeholder="Short Summary (e.g. Fan regulator sparking)" value={summary} onChange={(e) => setSummary(e.target.value)} required style={styles.input} />
               <textarea rows="3" placeholder="Describe exact issue details..." value={description} onChange={(e) => setDescription(e.target.value)} required style={styles.input} />
-              <button type="submit" disabled={submitting} style={styles.submitBtn}>{submitting ? 'Submitting...' : '🚀 Submit Grievance'}</button>
+              <button type="submit" disabled={submitting} style={styles.primaryBtn}>{submitting ? 'Submitting...' : '🚀 Submit Grievance'}</button>
             </form>
           </div>
         </div>
       )}
 
-      {/* Student Bottom Navigation (Purple Active Aesthetic) */}
+      {/* ========================================================= */}
+      {/* STUDENT BOTTOM NAVIGATION (PURPLE AESTHETIC)              */}
+      {/* ========================================================= */}
       <nav style={styles.bottomNav}>
         <button onClick={() => setActiveTab('complaints')} style={styles.navItem}>
           <div style={{ ...styles.iconPill, background: activeTab === 'complaints' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>
@@ -404,7 +497,14 @@ const styles = {
   searchInput: { background: 'transparent', border: 'none', outline: 'none', color: '#f8fafc', fontSize: '14px', width: '100%' },
   toast: { background: '#0f172a', borderLeft: '4px solid', padding: '12px 14px', borderRadius: '10px', fontSize: '13px', fontWeight: '600', marginBottom: '12px', color: '#f8fafc', cursor: 'pointer' },
   listContainer: { display: 'flex', flexDirection: 'column' },
-  chatRow: { display: 'flex', alignItems: 'center', gap: '14px', padding: '14px 8px', borderBottom: '1px solid rgba(30, 41, 59, 0.7)', cursor: 'pointer' },
+  chatRow: { display: 'flex', alignItems: 'flex-start', gap: '14px', padding: '14px 8px', borderBottom: '1px solid rgba(30, 41, 59, 0.7)', cursor: 'pointer' },
+  
+  // Calender View Date Box styling
+  calDateBox: { width: '50px', height: '56px', background: '#1e293b', borderRadius: '10px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', border: '1px solid #334155', flexShrink: 0 },
+  calMonth: { background: '#8b5cf6', color: '#fff', width: '100%', textAlign: 'center', fontSize: '10px', fontWeight: '800', padding: '2px 0' },
+  calDay: { color: '#f8fafc', fontSize: '18px', fontWeight: '800', marginTop: '2px' },
+  sectionHeader: { color: '#c084fc', fontSize: '13px', fontWeight: '800', margin: '10px 0 8px 0', textTransform: 'uppercase', letterSpacing: '0.5px' },
+  
   rowAvatar: { width: '48px', height: '48px', borderRadius: '50%', background: '#1e293b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px', flexShrink: 0 },
   rowCenter: { flex: 1, minWidth: 0 },
   rowTopLine: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '4px' },
@@ -413,7 +513,7 @@ const styles = {
   rowBottomLine: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' },
   rowSub: { color: '#94a3b8', fontSize: '13px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   statusBadge: { fontSize: '10px', fontWeight: '700', border: '1px solid', padding: '2px 8px', borderRadius: '999px', flexShrink: 0 },
-  emptyState: { textAlign: 'center', padding: '50px 20px', background: '#0f172a', borderRadius: '18px', border: '1px solid #1e293b', marginTop: '12px' },
+  emptyState: { textAlign: 'center', padding: '50px 20px', background: '#0f172a', borderRadius: '18px', border: '1px solid #1e293b', marginTop: '12px', color: '#94a3b8' },
   fabBtn: { position: 'fixed', right: '22px', bottom: '88px', width: '56px', height: '56px', borderRadius: '16px', background: '#8b5cf6', color: '#fff', border: 'none', fontSize: '30px', fontWeight: '800', cursor: 'pointer', boxShadow: '0 10px 25px rgba(139, 92, 246, 0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 90 },
   comingSoonWrap: { padding: '40px 20px', textAlign: 'center', margin: '16px', background: '#0f172a', borderRadius: '22px', border: '1px solid #1e293b' },
   comingSoonBadge: { display: 'inline-block', background: 'rgba(139, 92, 246, 0.18)', color: '#c084fc', border: '1px solid rgba(139, 92, 246, 0.35)', padding: '5px 12px', borderRadius: '999px', fontSize: '11px', fontWeight: '800', letterSpacing: '0.8px', marginBottom: '16px' },

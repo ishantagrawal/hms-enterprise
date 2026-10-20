@@ -255,3 +255,27 @@ const styles = {
   iconPill: { position: 'relative', width: '56px', height: '30px', borderRadius: '999px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
   navLabel: { fontSize: '11px', fontWeight: '600' }
 };
+// Open ClubView.jsx and find the "My Submitted Requisitions" list section and update the rowSub div:
+
+          <div style={styles.listContainer}>
+            {myEvents.length === 0 ? (
+              <div style={styles.emptyState}>No event requisitions found.</div>
+            ) : (
+              myEvents.map(ev => (
+                <div key={ev.event_id} style={styles.chatRow}>
+                  <div style={styles.rowAvatar}>🎟️</div>
+                  <div style={styles.rowCenter}>
+                    <div style={styles.rowTopLine}>
+                      <span style={styles.rowTitle}>{ev.title}</span>
+                      <span style={{ color: getStatusColor(ev.status), fontSize: '11px', fontWeight: '700' }}>{ev.status}</span>
+                    </div>
+                    <div style={styles.rowSub}>📍 {ev.venue} • 📅 {ev.date}</div>
+                    {/* Live Count visible to Clubs */}
+                    <div style={{ fontSize: '11px', color: '#4ade80', marginTop: '4px', fontWeight: '700' }}>
+                      👥 {ev.rsvps?.length || 0} Students RSVP'd
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>

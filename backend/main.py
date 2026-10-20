@@ -552,3 +552,51 @@ def propose_event(req: EventRequisitionReq):
     return {"success": True, "message": "Proposal submitted to Clash Matrix!", "event": new_evt}
 
 # (Optional: Add these keys 'description', 'image_url', 'registration_link' to your existing mock events in EVENTS_DB so they don't break)
+# 1. Add Clubs into USERS_DB so they can login with password '123'
+# (Paste this inside your existing USERS_DB array)
+    { "user_id": "ACM", "password": "123", "full_name": "ACM SVNIT Chapter", "role": "ClubOrganizer", "authority_title": "Coordinator (ACM)", "institute_id": "SVNIT", "hostel_block": "All", "floor": "-", "room": "SAC Club Room", "phone": "123", "email": "acm@svnit.ac.in", "department": "Clubs" },
+    { "user_id": "GDSC", "password": "123", "full_name": "Google Developer Student Club", "role": "ClubOrganizer", "authority_title": "Coordinator (GDSC)", "institute_id": "SVNIT", "hostel_block": "All", "floor": "-", "room": "SAC Club Room", "phone": "123", "email": "gdsc@svnit.ac.in", "department": "Clubs" },
+    { "user_id": "CHRD", "password": "123", "full_name": "Creative & Hobby Club (CHRD)", "role": "ClubOrganizer", "authority_title": "Coordinator (CHRD)", "institute_id": "SVNIT", "hostel_block": "All", "floor": "-", "room": "SAC Club Room", "phone": "123", "email": "chrd@svnit.ac.in", "department": "Clubs" }
+
+# 2. Update EVENTS_DB with descriptions, image_url, and rsvps array
+EVENTS_DB = [
+    {
+        "event_id": "EVT-101", "club_id": "ACM", "title": "Algothon 2026 - Annual Hackathon",
+        "date": "2026-11-15", "start_time": "10:00", "end_time": "18:00", "venue": "CRC Auditorium",
+        "status": "Pending Dean Approval", "submitted_by": "Aarav Sharma", "type": "Upcoming",
+        "description": "SVNIT's biggest annual 8-hour hackathon! Bring your laptops, build scalable tech, and win cash prizes.",
+        "image_url": "https://images.unsplash.com/photo-1504384308090-c894fdcc538d?w=800&q=80",
+        "registration_link": "https://forms.gle/demo",
+        "rsvps": ["U26CE011", "U26CS012"]
+    },
+    {
+        "event_id": "EVT-099", "club_id": "CHRD", "title": "Sparsh Cultural Night 2026",
+        "date": "2026-03-10", "start_time": "18:00", "end_time": "22:00", "venue": "SAC Amphitheatre",
+        "status": "Completed", "submitted_by": "Ishant Agrawal", "type": "Completed",
+        "description": "The flagship cultural night featuring music, dance, and drama performances by the SVNIT student community.",
+        "image_url": "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80",
+        "registration_link": "",
+        "rsvps": ["U26CE011", "U26EE014", "U26EC045"],
+        "ai_audit": {
+            "total_attendees": 1200, "average_rating": 4.8, "sentiment": "Extremely Positive",
+            "key_pros": ["Outstanding stage lighting and sound", "Punctual timeline execution"],
+            "key_cons": ["Seating capacity fell short for late attendees"],
+            "recommendation": "Grant annual cultural fest priority funding."
+        }
+    }
+]
+
+# 3. Update the RSVP Endpoint to handle live counts
+class EventRsvpReq(BaseModel):
+    event_id: str
+    student_id: str
+
+@app.post("/api/unicore/events/rsvp")
+def rsvp_event(req: EventRsvpReq):
+    for ev in EVENTS_DB:
+        if ev["event_id"] == req.event_id:
+            if "rsvps" not in ev: ev["rsvps"] = []
+            if req.student_id not in ev["rsvps"]:
+                ev["rsvps"].append(req.student_id)
+            return {"success": True, "message": "RSVP recorded successfully! Seat reserved.", "rsvps": ev["rsvps"]}
+    raise HTTPException(status_code=404, detail="Event not found")
