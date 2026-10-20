@@ -3,8 +3,9 @@ import Header from "./components/Header";
 import StudentView from "./components/StudentView";
 import StaffView from "./components/StaffView";
 import WardenView from "./components/WardenView";
+import FounderView from "./components/FounderView";
 
-const API_URL = "https://hms-enterprise-mqvx.onrender.com";
+const API_URL = import.meta.env.VITE_API_URL || "https://hms-enterprise-mqvx.onrender.com";
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -109,8 +110,9 @@ export default function App() {
   }
 
   return (
-    <div style={{ background: "#090d16", minHeight: "100vh", color: "#f8fafc", fontFamily: "sans-serif" }}>
+    <div style={{ background: "#090d16", minHeight: "100vh", color: "#f8fafc", fontFamily: "system-ui, sans-serif" }}>
       <Header user={user} tenant={tenant} onLogout={() => setUser(null)} />
+      {user.role === "PlatformOwner" && <FounderView user={user} apiUrl={API_URL} />}
       {user.role === "Student" && <StudentView user={user} complaints={complaints} apiUrl={API_URL} onRefresh={() => fetchComplaints(user)} />}
       {user.role === "DepartmentStaff" && <StaffView user={user} complaints={complaints} apiUrl={API_URL} onRefresh={() => fetchComplaints(user)} />}
       {user.role === "Warden" && <WardenView user={user} complaints={complaints} apiUrl={API_URL} onRefresh={() => fetchComplaints(user)} />}
@@ -124,6 +126,6 @@ const styles = {
   brandBadge: { background: "#2563eb", color: "#fff", display: "inline-block", padding: "4px 10px", borderRadius: "6px", fontSize: "11px", fontWeight: "800", letterSpacing: "1px" },
   errorBox: { background: "rgba(239, 68, 68, 0.1)", border: "1px solid #ef4444", color: "#f87171", padding: "10px", borderRadius: "8px", fontSize: "13px", marginBottom: "14px" },
   input: { width: "100%", background: "#030712", border: "1px solid #334155", borderRadius: "10px", padding: "12px", color: "#fff", fontSize: "14px", boxSizing: "border-box" },
-  loginBtn: { width: "100%", background: "#2563eb", color: "#fff", border: "none", borderRadius: "10px", padding: "12px", fontWeight: "700", cursor: "pointer", fontSize: "15px" },
+  loginBtn: { width: "100%", background: "#2563eb", color: "#fff", border: "none", borderRadius: "10px", padding: "12px", fontWeight: "700", cursor: 'pointer', fontSize: '15px' },
   demoBox: { marginTop: "20px", background: "#030712", border: "1px solid #1e293b", borderRadius: "10px", padding: "12px", fontSize: "12px", color: "#94a3b8", lineHeight: "1.6" }
 };
