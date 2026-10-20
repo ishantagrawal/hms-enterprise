@@ -545,3 +545,59 @@ const styles = {
   navLabel: { fontSize: '10px', fontWeight: '600' },
   badgeCount: { position: 'absolute', top: '-2px', right: '4px', background: '#8b5cf6', color: '#fff', fontSize: '9px', fontWeight: '800', padding: '1px 5px', borderRadius: '999px' }
 };
+{/* ========================================================= */}
+      {/* TAB 2: EVENTRADAR (GOOGLE CALENDAR MONTH GRID VIEW)       */}
+      {/* ========================================================= */}
+      {activeTab === 'eventradar' && (
+        <div className="hms-anim" style={styles.tabContent}>
+          <div style={styles.radarBanner}>
+            <div style={{ fontSize: '11px', fontWeight: '800', color: '#c084fc', letterSpacing: '0.8px' }}>SVNIT CAMPUS CALENDAR</div>
+            <h2 style={{ margin: '4px 0 2px 0', color: '#f8fafc', fontSize: '18px' }}>📅 EventRadar Month Grid</h2>
+            <p style={{ margin: 0, color: '#94a3b8', fontSize: '12px' }}>Tap any event badge on the calendar grid to view details, RSVP, or give feedback.</p>
+          </div>
+
+          {/* Month Calendar Grid UI */}
+          <div style={styles.calGridContainer}>
+            <div style={styles.calHeaderRow}>
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+                <div key={d} style={styles.calHeaderCell}>{d}</div>
+              ))}
+            </div>
+
+            <div style={styles.calDaysGrid}>
+              {Array.from({ length: 31 }).map((_, index) => {
+                const dayNum = index + 1;
+                // Format current day to match YYYY-MM-DD (assuming October 2026 for demo or dynamic)
+                const dayStr = `2026-10-${dayNum < 10 ? '0' + dayNum : dayNum}`;
+                const matchedEvents = events.filter(e => e.date === dayStr && (e.status === 'Approved' || e.status === 'Completed'));
+
+                return (
+                  <div key={index} style={styles.calCell}>
+                    <span style={styles.calCellNum}>{dayNum}</span>
+                    {matchedEvents.map(ev => (
+                      <div 
+                        key={ev.event_id} 
+                        onClick={() => setSelectedEvent(ev)} 
+                        style={{
+                          ...styles.calEventPill,
+                          background: ev.status === 'Completed' ? '#334155' : '#8b5cf6'
+                        }}
+                        title={ev.title}
+                      >
+                        {ev.title}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+      calGridContainer: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', overflow: 'hidden', marginTop: '12px' },
+  calHeaderRow: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', background: '#1e293b', padding: '10px 0', textAlign: 'center', fontSize: '12px', fontWeight: '800', color: '#94a3b8' },
+  calHeaderCell: { textTransform: 'uppercase' },
+  calDaysGrid: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '1px', background: '#1e293b' },
+  calCell: { background: '#090d16', minHeight: '85px', padding: '6px', display: 'flex', flexDirection: 'column', gap: '4px', overflow: 'hidden' },
+  calCellNum: { fontSize: '11px', fontWeight: '700', color: '#64748b' },
+  calEventPill: { color: '#fff', fontSize: '10px', fontWeight: '700', padding: '3px 6px', borderRadius: '6px', cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }

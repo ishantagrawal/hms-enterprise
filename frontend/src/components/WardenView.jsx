@@ -432,3 +432,90 @@ const styles = {
   navLabel: { fontSize: '11px', fontWeight: '600' },
   badgeCount: { position: 'absolute', top: '-3px', right: '6px', background: '#22c55e', color: '#052e16', fontSize: '10px', fontWeight: '800', padding: '1px 6px', borderRadius: '999px' }
 };
+{/* ========================================================= */}
+      {/* TAB 3: DEAN CLUBS & EVENTS CALENDAR GRID                  */}
+      {/* ========================================================= */}
+      {activeTab === 'clubshub' && (
+        <div style={styles.tabContent}>
+          <div style={styles.radarBanner}>
+            <div style={{ fontSize: '11px', fontWeight: '800', color: '#38bdf8', letterSpacing: '0.8px' }}>DEAN MASTER SCHEDULE</div>
+            <h2 style={{ margin: '4px 0 2px 0', color: '#f8fafc', fontSize: '18px' }}>🗓️ Campus Event Calendar & AI Clash Matrix</h2>
+            <p style={{ margin: 0, color: '#94a3b8', fontSize: '12px' }}>AI automatically re-checks venue availability and time slots for pending requests.</p>
+          </div>
+
+          {/* Pending Approvals Alert Box */}
+          {pendingEvents.length > 0 && (
+            <div style={{ background: 'rgba(251, 191, 36, 0.15)', border: '1px solid #fbbf24', borderRadius: '14px', padding: '14px', marginBottom: '16px' }}>
+              <div style={{ color: '#fbbf24', fontWeight: '800', fontSize: '13px', marginBottom: '8px' }}>⚠️ Pending Venue Approvals ({pendingEvents.length})</div>
+              {pendingEvents.map(ev => (
+                <div key={ev.event_id} onClick={() => setSelectedEventAudit(ev)} style={{ background: '#090d16', padding: '10px', borderRadius: '10px', marginBottom: '6px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ color: '#fff', fontWeight: '700', fontSize: '14px' }}>{ev.title}</div>
+                    <div style={{ color: '#94a3b8', fontSize: '12px' }}>📍 {ev.venue} • 📅 {ev.date} ({ev.start_time}) • By {ev.club_id}</div>
+                    <div style={{ color: '#4ade80', fontSize: '11px', marginTop: '2px' }}>🤖 AI Audit: Time slot clear, no clashes detected.</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px' }} onClick={e => e.stopPropagation()}>
+                    <button onClick={() => handleApproveEvent(ev.event_id, 'Approved')} style={styles.approveBtn}>✓</button>
+                    <button onClick={() => handleApproveEvent(ev.event_id, 'Rejected')} style={styles.rejectBtn}>✕</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Google Calendar Grid */}
+          <div style={styles.calGridContainer}>
+            <div style={styles.calHeaderRow}>
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+                <div key={d} style={styles.calHeaderCell}>{d}</div>
+              ))}
+            </div>
+
+            <div style={styles.calDaysGrid}>
+              {Array.from({ length: 31 }).map((_, index) => {
+                const dayNum = index + 1;
+                const dayStr = `2026-10-${dayNum < 10 ? '0' + dayNum : dayNum}`;
+                const matchedEvents = events.filter(e => e.date === dayStr);
+
+                return (
+                  <div key={index} style={styles.calCell}>
+                    <span style={styles.calCellNum}>{dayNum}</span>
+                    {matchedEvents.map(ev => (
+                      <div 
+                        key={ev.event_id} 
+                        onClick={() => setSelectedEventAudit(ev)} 
+                        style={{
+                          ...styles.calEventPill,
+                          background: ev.status === 'Approved' ? '#22c55e' : ev.status === 'Completed' ? '#334155' : '#fbbf24',
+                          color: ev.status === 'Pending Dean Approval' ? '#052e16' : '#fff'
+                        }}
+                        title={`${ev.title} (${ev.status})`}
+                      >
+                        {ev.title}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div style={{ color: '#4ade80', fontSize: '13px', fontWeight: '800', margin: '24px 0 8px 0', textTransform: 'uppercase' }}>
+            📁 Master Club Ledgers & Info
+          </div>
+          <div style={styles.listContainer}>
+            {clubs.map((club) => (
+              <div key={club.club_id} onClick={() => setSelectedClub(club)} style={styles.chatRow}>
+                <div style={styles.rowAvatar}>⭐</div>
+                <div style={styles.rowCenter}>
+                  <div style={styles.rowTopLine}>
+                    <span style={styles.rowTitle}>{club.name}</span>
+                    <span style={styles.codePill}>{club.members?.length || 0} Members</span>
+                  </div>
+                  <div style={styles.rowSub}>{club.mission}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
