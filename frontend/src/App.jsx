@@ -4,7 +4,7 @@ import StudentView from "./components/StudentView";
 import StaffView from "./components/StaffView";
 import WardenView from "./components/WardenView";
 
-const API_URL = import.meta.env.VITE_API_URL || "https://hms-enterprise-mqvx.onrender.com";
+const API_URL = "https://hms-enterprise-mqvx.onrender.com";
 
 export default function App() {
   const [user, setUser] = useState(null);
