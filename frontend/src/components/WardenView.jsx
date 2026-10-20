@@ -1,14 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 
 export default function WardenView({ user, complaints, apiUrl }) {
   const [selectedHostel, setSelectedHostel] = useState('All');
   const [statusMsg, setStatusMsg] = useState(null);
-  
-  // Modal / Form state for updating warden
   const [editWarden, setEditWarden] = useState(null);
   const [wForm, setWForm] = useState({ user_id: '', full_name: '', hostel_block: 'Bhabha Bhawan', phone: '', email: '', authority_title: 'Chief Warden' });
 
-  // Official SVNIT Hostels list from Brochure
+  // Reference for smooth scrolling like a door opening
+  const complaintsRef = useRef(null);
+
+  const handleInspect = (hostelName) => {
+    setSelectedHostel(hostelName);
+    // Smooth scroll down to complaints section instantly
+    if (complaintsRef.current) {
+      complaintsRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
   const [hostels, setHostels] = useState([
     { name: "Bhabha Bhawan", warden: "Dr. Vikram P. Rathod", role: "Chief Warden", phone: "9876543210", email: "cw1_bhabha@svnit.ac.in" },
     { name: "Gajjar Bhawan", warden: "Dr. Jogender Singh", role: "Chief Warden", phone: "9876543211", email: "cw1_gajjar@svnit.ac.in" },
@@ -30,7 +38,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
     const data = await res.json();
     if (res.ok && data.success) {
       setStatusMsg(`✅ ${data.message}`);
-      // Update local state table
       setHostels(hostels.map(h => h.name === wForm.hostel_block ? { ...h, warden: wForm.full_name, phone: wForm.phone, email: wForm.email, role: wForm.authority_title } : h));
       setEditWarden(null);
     } else {
@@ -47,7 +54,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h2 style={{ margin: 0, color: '#f8fafc', fontSize: '20px' }}>🏛️ SVNIT Council of Wardens Directory</h2>
-          <p style={{ margin: '4px 0 0 0', color: '#94a3b8', fontSize: '13px' }}>Manage 10 Campus Hostels & Inspect Complaints without Mess.</p>
+          <p style={{ margin: '4px 0 0 0', color: '#94a3b8', fontSize: '13px' }}>Click 'Inspect' to instantly jump to localized hostel grievances.</p>
         </div>
         <button onClick={() => window.open(`${apiUrl}/api/complaints/export-pdf?institute_id=${user.institute_id}&hostel_block=${selectedHostel}`, '_blank')} style={styles.pdfBtn}>
           📥 Download PDF Report ({selectedHostel})
@@ -56,7 +63,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
 
       {statusMsg && <div style={{ background: '#1e293b', padding: '12px', borderRadius: '8px', color: '#34d399', marginBottom: '16px', fontWeight: '600' }}>{statusMsg}</div>}
 
-      {/* Edit Warden Modal / Form Popup */}
+      {/* Edit Warden Modal */}
       {editWarden && (
         <div style={{ background: '#0f172a', border: '2px solid #3b82f6', borderRadius: '16px', padding: '20px', marginBottom: '24px' }}>
           <h3 style={{ margin: '0 0 12px 0', color: '#60a5fa' }}>✏️ Update Warden for {wForm.hostel_block}</h3>
@@ -92,7 +99,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
               <td style={styles.td}>Dean Office / Council of Wardens</td>
               <td style={styles.td}>0261-2201528</td>
               <td style={styles.td}><span style={{ color: '#38bdf8', fontWeight: 'bold' }}>{complaints.filter(c => c.status !== 'Completed').length}</span></td>
-              <td style={styles.td}><button onClick={() => setSelectedHostel('All')} style={styles.filterBtn}>View All</button></td>
+              <td style={styles.td}><button onClick={() => handleInspect('All')} style={styles.filterBtn}>View All</button></td>
             </tr>
             {hostels.map((h, i) => {
               const activeCount = complaints.filter(c => c.hostel_block === h.name && c.status !== 'Completed').length;
@@ -103,7 +110,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
                   <td style={styles.td}>{h.phone}</td>
                   <td style={styles.td}><span style={{ color: activeCount > 0 ? '#fbbf24' : '#34d399', fontWeight: 'bold' }}>{activeCount}</span></td>
                   <td style={styles.td}>
-                    <button onClick={() => setSelectedHostel(h.name)} style={{...styles.filterBtn, marginRight: '6px'}}>Inspect</button>
+                    <button onClick={() => handleInspect(h.name)} style={{...styles.filterBtn, marginRight: '6px'}}>Inspect</button>
                     <button onClick={() => { setWForm({...wForm, hostel_block: h.name, full_name: h.warden, phone: h.phone, email: h.email}); setEditWarden(true); }} style={styles.editBtn}>✏️ Change</button>
                   </td>
                 </tr>
@@ -113,8 +120,8 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </table>
       </div>
 
-      {/* Filtered Complaints */}
-      <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', padding: '20px' }}>
+      {/* Complaints Section with Ref for Smooth Scroll */}
+      <div ref={complaintsRef} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', padding: '20px', scrollMarginTop: '20px' }}>
         <h3 style={{ margin: '0 0 14px 0', color: '#f8fafc', fontSize: '15px' }}>
           Grievance Register — <span style={{ color: '#38bdf8' }}>{selectedHostel}</span> ({filtered.length})
         </h3>
