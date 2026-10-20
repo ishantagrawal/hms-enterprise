@@ -8,8 +8,25 @@ import FounderView from "./components/FounderView";
 const API_URL = "https://hms-enterprise-mqvx.onrender.com";
 
 export default function App() {
-  const [user, setUser] = useState(null);
-  const [tenant, setTenant] = useState(null);
+  // Load saved session from localStorage so page refresh doesn't log you out
+  const [user, setUser] = useState(() => {
+    try {
+      const savedUser = localStorage.getItem("hms_user");
+      return savedUser ? JSON.parse(savedUser) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [tenant, setTenant] = useState(() => {
+    try {
+      const savedTenant = localStorage.getItem("hms_tenant");
+      return savedTenant ? JSON.parse(savedTenant) : null;
+    } catch {
+      return null;
+    }
+  });
+
   const [userId, setUserId] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
@@ -30,6 +47,9 @@ export default function App() {
       if (res.ok && data.success) {
         setUser(data.user);
         setTenant(data.tenant);
+        // Save session in browser localStorage
+        localStorage.setItem("hms_user", JSON.stringify(data.user));
+        localStorage.setItem("hms_tenant", JSON.stringify(data.tenant));
         if (data.user.role !== "PlatformOwner") {
           fetchComplaints(data.user);
         }
@@ -40,6 +60,14 @@ export default function App() {
       setError("Server waking up or unreachable. Wait 20 seconds and try again.");
     }
     setLoading(false);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("hms_user");
+    localStorage.removeItem("hms_tenant");
+    setUser(null);
+    setTenant(null);
+    setComplaints([]);
   };
 
   const fetchComplaints = async (currUser) => {
@@ -62,6 +90,7 @@ export default function App() {
 
   useEffect(() => {
     if (user && user.role !== "PlatformOwner") {
+      fetchComplaints(user);
       const interval = setInterval(() => fetchComplaints(user), 8000);
       return () => clearInterval(interval);
     }
@@ -127,7 +156,7 @@ export default function App() {
 
   return (
     <div style={{ background: "#090d16", minHeight: "100vh", color: "#f8fafc", fontFamily: "system-ui, -apple-system, sans-serif" }}>
-      <Header user={user} tenant={tenant} onLogout={() => setUser(null)} />
+      <Header user={user} tenant={tenant} onLogout={handleLogout} />
       {user.role === "PlatformOwner" && <FounderView user={user} apiUrl={API_URL} />}
       {user.role === "Student" && <StudentView user={user} complaints={complaints} apiUrl={API_URL} onRefresh={() => fetchComplaints(user)} />}
       {user.role === "DepartmentStaff" && <StaffView user={user} complaints={complaints} apiUrl={API_URL} onRefresh={() => fetchComplaints(user)} />}

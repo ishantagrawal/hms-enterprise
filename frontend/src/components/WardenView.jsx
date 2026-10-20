@@ -4,21 +4,16 @@ import { COMPLAINT_CATEGORIES } from '../config/categories';
 export default function WardenView({ user, complaints, apiUrl }) {
   const isDean = user.role === 'Dean' || user.hostel_block === 'All';
 
-  // For Dean: which hostel is currently opened in the inspection modal/drawer
   const [inspectedHostel, setInspectedHostel] = useState(null);
-  // For Hostel Warden: filter by category
   const [filterCat, setFilterCat] = useState('All');
 
-  // Date filter for PDF Export
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
 
-  // Password Reset state for Dean
   const [resetTarget, setResetTarget] = useState(null);
   const [newPassword, setNewPassword] = useState('');
   const [statusMsg, setStatusMsg] = useState(null);
 
-  // Student onboarding state for Hostel Warden
   const [studentCount, setStudentCount] = useState(1);
   const [singleStudent, setSingleStudent] = useState({ user_id: '', full_name: '', floor: '1st Floor', room: '', phone: '' });
 
@@ -147,7 +142,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
           <div>
             <h2 style={{ margin: 0, color: '#f8fafc', fontSize: '20px' }}>🏛️ Dean (Student Welfare) — Campus Command Portal</h2>
             <p style={{ margin: '4px 0 0 0', color: '#94a3b8', fontSize: '13px' }}>
-              Position-Based Hostel Directory • Click "Open Hostel Door" to view any hostel's complaints instantly in a popup.
+              Position-Based Hostel Directory • Click "View Complaints" to inspect any hostel's grievance register instantly.
             </p>
           </div>
 
@@ -184,13 +179,13 @@ export default function WardenView({ user, complaints, apiUrl }) {
           </div>
         )}
 
-        {/* Instant Door Modal: Opens immediately when Dean clicks Inspect on any hostel! */}
+        {/* Instant Inspection Modal */}
         {inspectedHostel && (
           <div style={styles.modalOverlay} onClick={() => setInspectedHostel(null)}>
             <div style={{ ...styles.modalCard, maxWidth: '800px', maxHeight: '85vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #1e293b', paddingBottom: '12px' }}>
                 <div>
-                  <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '18px' }}>🚪 {inspectedHostel} — Grievance Register ({modalComplaints.length})</h3>
+                  <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '18px' }}>📋 {inspectedHostel} — Grievance Register ({modalComplaints.length})</h3>
                   <p style={{ margin: '2px 0 0 0', color: '#94a3b8', fontSize: '12px' }}>Direct Hostel Inspection View</p>
                 </div>
                 <div style={{ display: 'flex', gap: '8px' }}>
@@ -226,7 +221,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
         <div style={styles.card}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
             <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '16px' }}>🏢 SVNIT 10 Hostels — Position Portals & Live Grievance Count</h3>
-            <button onClick={() => setInspectedHostel('All')} style={styles.filterBtn}>🌟 Open All Campus Grievances ({complaints.length})</button>
+            <button onClick={() => setInspectedHostel('All')} style={styles.filterBtn}>🌟 View All Campus Grievances ({complaints.length})</button>
           </div>
 
           <div style={{ overflowX: 'auto' }}>
@@ -260,7 +255,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
                         <span style={{ color: activeCount > 0 ? '#fbbf24' : '#34d399', fontWeight: '800' }}>{activeCount} Open</span>
                       </td>
                       <td style={styles.td}>
-                        <button onClick={() => setInspectedHostel(h.name)} style={styles.inspectDoorBtn}>🚪 Open Hostel Door</button>
+                        <button onClick={() => setInspectedHostel(h.name)} style={styles.inspectDoorBtn}>📋 View Complaints</button>
                       </td>
                     </tr>
                   );
@@ -282,7 +277,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
 
   return (
     <div style={styles.container}>
-      {/* Hostel Specific Banner */}
       <div style={styles.topBar}>
         <div>
           <h2 style={{ margin: 0, color: '#f8fafc', fontSize: '20px' }}>🏢 {user.hostel_block} — Official Administration Portal</h2>
@@ -302,7 +296,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
 
       {statusMsg && <div style={styles.alert}>{statusMsg}</div>}
 
-      {/* Student Onboarding Panel for this Hostel */}
       <div style={{ ...styles.card, marginBottom: '20px', borderLeft: '4px solid #3b82f6' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '12px' }}>
           <div>
@@ -325,7 +318,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </form>
       </div>
 
-      {/* Category Filter Cards for this Hostel */}
       <div style={styles.statsGrid}>
         {COMPLAINT_CATEGORIES.map(cat => {
           const count = complaints.filter(c => c.category === cat.id && c.status !== 'Completed').length;
@@ -345,7 +337,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
         })}
       </div>
 
-      {/* Strictly Scoped Hostel Complaints Register */}
       <div style={styles.card}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
           <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '16px' }}>
