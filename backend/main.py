@@ -434,3 +434,53 @@ def export_pdf_html(institute_id: str, hostel_block: Optional[str] = "All", from
         html_content += f"<tr><td><b>{c['ticket_id']}</b></td><td>{c['category']}</td><td>{c['student_name']} ({c['hostel_block']}, Rm {c['room']})</td><td>{c['summary']}</td><td><b>{c['status']}</b></td></tr>"
     html_content += "</table><script>window.onload = function() { window.print(); }</script></body></html>"
     return Response(content=html_content, media_type="text/html")
+# Update CLUBS_DB in backend/main.py with complete member rosters and positions
+CLUBS_DB = [
+    {
+        "club_id": "ACM", "name": "ACM SVNIT Chapter", "mission": "Promoting competitive programming and advanced algorithmic research.",
+        "faculty_advisor": "Dr. R. K. Gupta", "head_coordinator": "Aarav Sharma",
+        "members": [
+            {"name": "Aarav Sharma", "roll": "U26CS012", "position": "Head Coordinator", "branch": "CSE"},
+            {"name": "Ishant Agrawal", "roll": "U26CE011", "position": "Tech Lead", "branch": "Civil"},
+            {"name": "Kashish Patel", "roll": "U26EC045", "position": "Event Manager", "branch": "ECE"}
+        ]
+    },
+    {
+        "club_id": "GDSC", "name": "Google Developer Student Club", "mission": "Building scalable web, mobile, and cloud solutions for social impact.",
+        "faculty_advisor": "Dr. D. C. Jinwala", "head_coordinator": "Priya Verma",
+        "members": [
+            {"name": "Priya Verma", "roll": "U26IT022", "position": "Lead Organizer", "branch": "IT"},
+            {"name": "Yashika Shah", "roll": "U26CS089", "position": "Android Core", "branch": "CSE"}
+        ]
+    },
+    {
+        "club_id": "CHRD", "name": "Creative & Hobby Club (CHRD)", "mission": "Fostering arts, drama, music, and literary culture across SVNIT.",
+        "faculty_advisor": "Dr. Alka A. Mungray", "head_coordinator": "Ishant Agrawal",
+        "members": [
+            {"name": "Ishant Agrawal", "roll": "U26CE011", "position": "President", "branch": "Civil"},
+            {"name": "Shubhi Agrawal", "roll": "U26EE014", "position": "Design Head", "branch": "Electrical"}
+        ]
+    }
+]
+
+# Add completed events with AI audit mapping in backend/main.py
+EVENTS_DB = [
+    {
+        "event_id": "EVT-101", "club_id": "ACM", "title": "Algothon 2026 - Annual Hackathon",
+        "date": "2026-11-15", "start_time": "10:00", "end_time": "18:00", "venue": "CRC Auditorium",
+        "status": "Pending Dean Approval", "submitted_by": "Aarav Sharma", "type": "Upcoming"
+    },
+    {
+        "event_id": "EVT-099", "club_id": "CHRD", "README": "Completed Event with AI Audit", "title": "Sparsh Cultural Night 2026",
+        "date": "2026-03-10", "start_time": "18:00", "end_time": "22:00", "venue": "SAC Amphitheatre",
+        "status": "Completed", "submitted_by": "Ishant Agrawal", "type": "Completed",
+        "ai_audit": {
+            "total_attendees": 1200,
+            "average_rating": 4.8,
+            "sentiment": "Extremely Positive (95% satisfaction)",
+            "key_pros": ["Outstanding stage lighting and sound", "Flawless crowd management by volunteers", "Punctual timeline execution"],
+            "key_cons": ["Seating capacity fell short for late attendees"],
+            "recommendation": "Grant annual cultural fest priority funding."
+        }
+    }
+]
