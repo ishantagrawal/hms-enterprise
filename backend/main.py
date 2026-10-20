@@ -5,6 +5,7 @@ from typing import List, Optional
 import random
 import datetime
 import requests
+import re
 
 app = FastAPI(title="HMS Enterprise - Multi-Tenant Campus Engine")
 
@@ -16,7 +17,7 @@ app.add_middleware(
 )
 
 # ==========================================
-# 1. MULTI-TENANT INSTITUTE REGISTRY (Oracle / Tally Style)
+# 1. MULTI-TENANT INSTITUTE REGISTRY
 # ==========================================
 TENANTS = {
     "SVNIT": {
@@ -26,7 +27,16 @@ TENANTS = {
         "logo_url": "https://upload.wikimedia.org/wikipedia/en/1/1b/NIT_Surat_Logo.svg",
         "ccc_osticket_url": "https://help.ccc.svnit.ac.in/api/tickets.json",
         "ccc_api_key": "PASTE_SVNIT_OSTICKET_API_KEY_HERE",
-        "hostels": ["Gajjar Bhawan", "Bhabha Bhawan", "Swami Vivekananda Bhawan", "Mother Teresa Bhawan"],
+        "hostels": [
+            "Gajjar Bhawan",
+            "Bhabha Bhawan",
+            "Swami Vivekananda Bhawan",
+            "Mother Teresa Bhawan",
+            "Tagore Bhawan",
+            "Nehru Bhawan",
+            "Raman Bhawan",
+            "Sarabhai Bhawan"
+        ],
         "modules": {
             "complaints": True,   # Phase 1: ACTIVE for 30-Day Pilot
             "attendance": False,  # Phase 2: Locked until Day 31
@@ -57,21 +67,157 @@ CATEGORY_ROUTING = {
     "Wi-Fi & Internet": "Central Computer Center (CCC)"
 }
 
-# Pre-seeded Demo Accounts
+# ==========================================
+# 3. PRE-SEEDED ACCOUNTS (REAL-USE READY)
+# ==========================================
 USERS_DB = [
-    # High-Level Campus Authorities (Super Admins seeing ALL hostels)
-    {"user_id": "CW01", "password": "123", "full_name": "Dr. S. Kumar (Chief Warden)", "role": "Warden", "institute_id": "SVNIT", "hostel_block": "All", "floor": "-", "room": "Main Office", "phone": "9876543220", "email": "cw@svnit.ac.in", "department": "All"},
-    {"user_id": "AD01", "password": "123", "full_name": "Dr. M. Sharma (Associate Dean)", "role": "Warden", "institute_id": "SVNIT", "hostel_block": "All", "floor": "-", "room": "AD Office", "phone": "9876543221", "email": "adsw@svnit.ac.in", "department": "All"},
-    {"user_id": "DEAN01", "password": "123", "full_name": "Dr. V. Singh (Dean SW)", "role": "Warden", "institute_id": "SVNIT", "hostel_block": "All", "floor": "-", "room": "Dean Office", "phone": "9876543222", "email": "dosw@svnit.ac.in", "department": "All"},
-    
-    # Regular Wardens, Students, and Staff
-    {"user_id": "W01", "password": "123", "full_name": "Dr. R. Patel (Chief Warden)", "role": "Warden", "institute_id": "SVNIT", "hostel_block": "Gajjar Bhawan", "floor": "Ground", "room": "Warden Office", "phone": "9876543210", "email": "warden.gajjar@svnit.ac.in", "department": "All"},
-    {"user_id": "U26CE011", "password": "123", "full_name": "Ishant Agrawal", "role": "Student", "institute_id": "SVNIT", "hostel_block": "Gajjar Bhawan", "floor": "2nd Floor", "room": "B-204", "phone": "9876543211", "email": "u26ce011@ced.svnit.ac.in", "department": "None"},
-    {"user_id": "STAFF_CCC", "password": "123", "full_name": "CCC Network Engineer", "role": "DepartmentStaff", "institute_id": "SVNIT", "hostel_block": "All", "floor": "-", "room": "-", "phone": "9876543213", "email": "helpdesk@ccc.svnit.ac.in", "department": "Wi-Fi & Internet"},
-    {"user_id": "STAFF_ELEC", "password": "123", "full_name": "Ramesh Kumar (JE Electrical)", "role": "DepartmentStaff", "institute_id": "SVNIT", "hostel_block": "All", "floor": "-", "room": "-", "phone": "9876543212", "email": "elec@svnit.ac.in", "department": "Electricity"},
-    {"user_id": "STAFF_WATER", "password": "123", "full_name": "Suresh Verma (Plumbing)", "role": "DepartmentStaff", "institute_id": "SVNIT", "hostel_block": "All", "floor": "-", "room": "-", "phone": "9876543214", "email": "water@svnit.ac.in", "department": "Water Issue"},
-    {"user_id": "STAFF_FURN", "password": "123", "full_name": "Maheshbhai (Civil/Carpentry)", "role": "DepartmentStaff", "institute_id": "SVNIT", "hostel_block": "All", "floor": "-", "room": "-", "phone": "9876543215", "email": "civil@svnit.ac.in", "department": "Furniture"},
-    {"user_id": "STAFF_MESS", "password": "123", "full_name": "Mess Coordinator", "role": "DepartmentStaff", "institute_id": "SVNIT", "hostel_block": "Gajjar Bhawan", "floor": "-", "room": "-", "phone": "9876543216", "email": "mess@svnit.ac.in", "department": "Mess Food Quality"},
+    # Super Admins (Campus-Wide Access: hostel_block = "All", Strong Passwords)
+    {
+        "user_id": "DEAN01",
+        "password": "SvnitDean@2026!",
+        "full_name": "Dr. V. Singh (Dean SW)",
+        "role": "Warden",
+        "authority_title": "Dean of Student Welfare",
+        "institute_id": "SVNIT",
+        "hostel_block": "All",
+        "floor": "-",
+        "room": "Dean Office",
+        "phone": "9876543222",
+        "email": "dosw@svnit.ac.in",
+        "department": "All"
+    },
+    {
+        "user_id": "AD01",
+        "password": "SvnitAd@2026!",
+        "full_name": "Dr. M. Sharma (Associate Dean)",
+        "role": "Warden",
+        "authority_title": "Associate Dean",
+        "institute_id": "SVNIT",
+        "hostel_block": "All",
+        "floor": "-",
+        "room": "AD Office",
+        "phone": "9876543221",
+        "email": "adsw@svnit.ac.in",
+        "department": "All"
+    },
+    {
+        "user_id": "CW01",
+        "password": "SvnitCw@2026!",
+        "full_name": "Dr. S. Kumar (Chief Warden)",
+        "role": "Warden",
+        "authority_title": "Chief Warden",
+        "institute_id": "SVNIT",
+        "hostel_block": "All",
+        "floor": "-",
+        "room": "Main Office",
+        "phone": "9876543220",
+        "email": "cw@svnit.ac.in",
+        "department": "All"
+    },
+
+    # Local Hostel Warden (Scoped to Specific Hostel)
+    {
+        "user_id": "W01",
+        "password": "123",
+        "full_name": "Dr. R. Patel (Warden)",
+        "role": "Warden",
+        "authority_title": "Local Warden",
+        "institute_id": "SVNIT",
+        "hostel_block": "Gajjar Bhawan",
+        "floor": "Ground",
+        "room": "Warden Office",
+        "phone": "9876543210",
+        "email": "warden.gajjar@svnit.ac.in",
+        "department": "All"
+    },
+
+    # Sample Student Account
+    {
+        "user_id": "U26CE011",
+        "password": "123",
+        "full_name": "Ishant Agrawal",
+        "role": "Student",
+        "authority_title": "Student",
+        "institute_id": "SVNIT",
+        "hostel_block": "Gajjar Bhawan",
+        "floor": "2nd Floor",
+        "room": "B-204",
+        "phone": "9876543211",
+        "email": "u26ce011@ced.svnit.ac.in",
+        "department": "None"
+    },
+
+    # Department Staff Accounts (Scoped by Category)
+    {
+        "user_id": "STAFF_CCC",
+        "password": "123",
+        "full_name": "CCC Network Engineer",
+        "role": "DepartmentStaff",
+        "authority_title": "Department Staff",
+        "institute_id": "SVNIT",
+        "hostel_block": "All",
+        "floor": "-",
+        "room": "-",
+        "phone": "9876543213",
+        "email": "helpdesk@ccc.svnit.ac.in",
+        "department": "Wi-Fi & Internet"
+    },
+    {
+        "user_id": "STAFF_ELEC",
+        "password": "123",
+        "full_name": "Ramesh Kumar (JE Electrical)",
+        "role": "DepartmentStaff",
+        "authority_title": "Department Staff",
+        "institute_id": "SVNIT",
+        "hostel_block": "All",
+        "floor": "-",
+        "room": "-",
+        "phone": "9876543212",
+        "email": "elec@svnit.ac.in",
+        "department": "Electricity"
+    },
+    {
+        "user_id": "STAFF_WATER",
+        "password": "123",
+        "full_name": "Suresh Verma (Plumbing)",
+        "role": "DepartmentStaff",
+        "authority_title": "Department Staff",
+        "institute_id": "SVNIT",
+        "hostel_block": "All",
+        "floor": "-",
+        "room": "-",
+        "phone": "9876543214",
+        "email": "water@svnit.ac.in",
+        "department": "Water Issue"
+    },
+    {
+        "user_id": "STAFF_FURN",
+        "password": "123",
+        "full_name": "Maheshbhai (Civil/Carpentry)",
+        "role": "DepartmentStaff",
+        "authority_title": "Department Staff",
+        "institute_id": "SVNIT",
+        "hostel_block": "All",
+        "floor": "-",
+        "room": "-",
+        "phone": "9876543215",
+        "email": "civil@svnit.ac.in",
+        "department": "Furniture"
+    },
+    {
+        "user_id": "STAFF_MESS",
+        "password": "123",
+        "full_name": "Mess Coordinator",
+        "role": "DepartmentStaff",
+        "authority_title": "Department Staff",
+        "institute_id": "SVNIT",
+        "hostel_block": "Gajjar Bhawan",
+        "floor": "-",
+        "room": "-",
+        "phone": "9876543216",
+        "email": "mess@svnit.ac.in",
+        "department": "Mess Food Quality"
+    }
 ]
 
 # Pre-seeded Sample Tickets
@@ -121,7 +267,7 @@ COMPLAINTS_DB = [
 ]
 
 # ==========================================
-# 3. OFFICIAL OSTICKET API BRIDGE FOR SVNIT CCC
+# 4. OFFICIAL OSTICKET API BRIDGE FOR SVNIT CCC
 # ==========================================
 def push_to_ccc_osticket(tenant, student, summary, details):
     api_url = tenant.get("ccc_osticket_url")
@@ -164,8 +310,12 @@ def push_to_ccc_osticket(tenant, student, summary, details):
     return {"synced": False, "ccc_ticket_id": "Pending-Sync", "mode": "Local Queue"}
 
 # ==========================================
-# 4. API ENDPOINTS
+# 5. CORE AUTH & COMPLAINT WORKFLOW ENDPOINTS
 # ==========================================
+@app.get("/")
+def health_check():
+    return {"status": "HMS Enterprise Backend is Live", "total_users": len(USERS_DB), "total_complaints": len(COMPLAINTS_DB)}
+
 class LoginReq(BaseModel):
     user_id: str
     password: str
@@ -176,7 +326,7 @@ def login(req: LoginReq):
         if u["user_id"].lower() == req.user_id.strip().lower() and u["password"] == req.password.strip():
             tenant = TENANTS.get(u["institute_id"], TENANTS["SVNIT"])
             return {"success": True, "user": u, "tenant": tenant}
-    raise HTTPException(status_code=401, detail="Invalid ID or Password")
+    raise HTTPException(status_code=401, detail="Invalid User ID or Password")
 
 class ComplaintCreate(BaseModel):
     student_id: str
@@ -186,7 +336,7 @@ class ComplaintCreate(BaseModel):
 
 @app.post("/api/complaints")
 def create_complaint(req: ComplaintCreate):
-    student = next((u for u in USERS_DB if u["user_id"] == req.student_id), None)
+    student = next((u for u in USERS_DB if u["user_id"].lower() == req.student_id.strip().lower()), None)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
@@ -225,12 +375,12 @@ def create_complaint(req: ComplaintCreate):
 def get_complaints(institute_id: str, role: str, user_id: str, department: Optional[str] = None, hostel_block: Optional[str] = None):
     scoped = [c for c in COMPLAINTS_DB if c["institute_id"] == institute_id]
     if role == "Student":
-        return [c for c in scoped if c["student_id"] == user_id]
+        return [c for c in scoped if c["student_id"].lower() == user_id.lower()]
     elif role == "DepartmentStaff":
         return [c for c in scoped if c["category"] == department]
     elif role == "Warden":
         if hostel_block and hostel_block != "All":
-            return [c for c in scoped if c["hostel_block"] == hostel_block]
+            return [c for c in scoped if c["hostel_block"].lower() == hostel_block.lower()]
         return scoped
     return scoped
 
@@ -243,7 +393,7 @@ def staff_resolve_complaint(req: StaffResolveReq):
     for c in COMPLAINTS_DB:
         if c["ticket_id"] == req.ticket_id:
             c["status"] = "Awaiting Confirmation"
-            c["staff_remark"] = req.staff_remark.strip() or "Issue resolved by department."
+            c["staff_remark"] = (req.staff_remark or "").strip() or "Issue resolved by department."
             return {"success": True, "message": "Marked resolved! Waiting for student confirmation."}
     raise HTTPException(status_code=404, detail="Ticket not found")
 
@@ -264,6 +414,9 @@ def student_verify_complaint(req: StudentVerifyReq):
                 return {"success": True, "message": "Ticket Reopened and escalated back to department!"}
     raise HTTPException(status_code=404, detail="Ticket not found")
 
+# ==========================================
+# 6. STUDENT PROVISIONING (BULK CSV & SINGLE)
+# ==========================================
 class BulkStudent(BaseModel):
     user_id: str
     full_name: str
@@ -271,66 +424,169 @@ class BulkStudent(BaseModel):
     floor: str
     room: str
     phone: str
-    email: str
+    email: Optional[str] = None
+    password: Optional[str] = "123"
 
 @app.post("/api/warden/bulk-upload")
 def bulk_upload(institute_id: str, students: List[BulkStudent]):
     added = 0
     for s in students:
-        if not any(u["user_id"].lower() == s.user_id.lower() for u in USERS_DB):
+        uid = s.user_id.strip().upper()
+        if not any(u["user_id"].lower() == uid.lower() for u in USERS_DB):
             USERS_DB.append({
-                "user_id": s.user_id.upper(),
-                "password": "123",
-                "full_name": s.full_name,
+                "user_id": uid,
+                "password": s.password.strip() if s.password else "123",
+                "full_name": s.full_name.strip(),
                 "role": "Student",
+                "authority_title": "Student",
                 "institute_id": institute_id,
-                "hostel_block": s.hostel_block,
-                "floor": s.floor,
-                "room": s.room,
-                "phone": s.phone,
-                "email": s.email,
+                "hostel_block": s.hostel_block.strip(),
+                "floor": s.floor.strip(),
+                "room": s.room.strip(),
+                "phone": s.phone.strip(),
+                "email": s.email.strip() if s.email else f"{uid.lower()}@svnit.ac.in",
                 "department": "None"
             })
             added += 1
     return {"success": True, "added": added, "total_users": len(USERS_DB)}
 
-@app.get("/api/warden/students")
-def get_students(institute_id: str):
-    return [u for u in USERS_DB if u["institute_id"] == institute_id and u["role"] == "Student"]
-
-# ==========================================
-# 5. SUPER ADMIN (DEAN/CHIEF WARDEN) WARDEN CREATION API
-# ==========================================
-class WardenCreate(BaseModel):
-    user_id: str
-    full_name: str
-    hostel_block: str
-    phone: str
-    email: str
-
-@app.post("/api/admin/create-warden")
-def create_warden(req: WardenCreate, admin_id: str):
-    admin = next((u for u in USERS_DB if u["user_id"] == admin_id), None)
-    
-    # Only Super Admins (hostel_block == "All") can create wardens
-    if not admin or admin["hostel_block"] != "All":
-        raise HTTPException(status_code=403, detail="Only Campus Super Admins can create Wardens")
-
-    # Check if Warden ID already exists
-    if any(u["user_id"].lower() == req.user_id.lower() for u in USERS_DB):
-        raise HTTPException(status_code=400, detail="Warden ID already exists!")
+@app.post("/api/warden/create-student")
+def create_single_student(req: BulkStudent, institute_id: str = "SVNIT"):
+    uid = req.user_id.strip().upper()
+    if any(u["user_id"].lower() == uid.lower() for u in USERS_DB):
+        raise HTTPException(status_code=400, detail="Student User ID already exists!")
 
     USERS_DB.append({
-        "user_id": req.user_id.upper(),
-        "password": "123", # Default password
-        "full_name": req.full_name,
+        "user_id": uid,
+        "password": req.password.strip() if req.password else "123",
+        "full_name": req.full_name.strip(),
+        "role": "Student",
+        "authority_title": "Student",
+        "institute_id": institute_id,
+        "hostel_block": req.hostel_block.strip(),
+        "floor": req.floor.strip(),
+        "room": req.room.strip(),
+        "phone": req.phone.strip(),
+        "email": req.email.strip() if req.email else f"{uid.lower()}@svnit.ac.in",
+        "department": "None"
+    })
+    return {"success": True, "message": f"Student {uid} created for {req.hostel_block}!"}
+
+@app.get("/api/warden/students")
+def get_students(institute_id: str, hostel_block: Optional[str] = None):
+    students = [u for u in USERS_DB if u["institute_id"] == institute_id and u["role"] == "Student"]
+    if hostel_block and hostel_block != "All":
+        return [s for s in students if s["hostel_block"].lower() == hostel_block.lower()]
+    return students
+
+# ==========================================
+# 7. SUPER ADMIN: ROLE CREATION & PASSWORD SECURITY
+# ==========================================
+class AdminCreate(BaseModel):
+    user_id: str
+    full_name: str
+    authority_type: Optional[str] = "Local Warden"  # 'Local Warden', 'Chief Warden', 'Associate Dean'
+    hostel_block: Optional[str] = ""
+    phone: str
+    email: Optional[str] = ""
+    password: Optional[str] = "123"
+
+@app.post("/api/admin/create-admin")
+@app.post("/api/admin/create-warden")  # Backward-compatible alias
+def create_admin(req: AdminCreate, admin_id: str):
+    admin = next((u for u in USERS_DB if u["user_id"].lower() == admin_id.strip().lower()), None)
+    if not admin or admin["hostel_block"] != "All":
+        raise HTTPException(status_code=403, detail="Only Campus Super Admins (Dean / Chief Warden / Assoc. Dean) can create authorities")
+
+    uid = req.user_id.strip().upper()
+    if any(u["user_id"].lower() == uid.lower() for u in USERS_DB):
+        raise HTTPException(status_code=400, detail=f"User ID {uid} already exists!")
+
+    auth_type = req.authority_type or "Local Warden"
+    is_campus_wide = auth_type in ["Chief Warden", "Associate Dean", "Dean of Student Welfare"]
+    assigned_block = "All" if is_campus_wide else (req.hostel_block or "Gajjar Bhawan").strip()
+
+    raw_pass = (req.password or "").strip()
+    if not raw_pass:
+        raw_pass = "SvnitAdmin@2026!" if is_campus_wide else "123"
+
+    # Enforce strong password if creating a Campus-Wide Super Admin with a custom password
+    if is_campus_wide and raw_pass != "123":
+        if len(raw_pass) < 8 or not re.search(r"[!@#$%^&*]", raw_pass):
+            raise HTTPException(
+                status_code=400,
+                detail="Security Policy: Super Admin passwords must be 8+ characters and include a special character (!@#$%^&*)"
+            )
+
+    display_name = req.full_name.strip()
+    if auth_type not in display_name:
+        display_name = f"{display_name} ({auth_type})"
+
+    USERS_DB.append({
+        "user_id": uid,
+        "password": raw_pass,
+        "full_name": display_name,
         "role": "Warden",
+        "authority_title": auth_type,
         "institute_id": admin["institute_id"],
-        "hostel_block": req.hostel_block,
+        "hostel_block": assigned_block,
         "floor": "-",
-        "room": "Warden Office",
-        "phone": req.phone,
-        "email": req.email,
+        "room": "Admin Office" if is_campus_wide else "Warden Office",
+        "phone": req.phone.strip(),
+        "email": req.email.strip() if req.email else f"{uid.lower()}@svnit.ac.in",
         "department": "All"
     })
-    return {"success": True, "message": f"Warden account created for {req.hostel_block}!"}
+    return {
+        "success": True,
+        "message": f"{auth_type} account ({uid}) created for {assigned_block}! Initial Password: {raw_pass}"
+    }
+
+class PasswordChange(BaseModel):
+    target_user_id: str
+    new_password: str
+
+@app.post("/api/admin/change-password")
+def change_password(req: PasswordChange, admin_id: str):
+    admin = next((u for u in USERS_DB if u["user_id"].lower() == admin_id.strip().lower()), None)
+    if not admin or admin["hostel_block"] != "All":
+        raise HTTPException(status_code=403, detail="Only Super Admins can override passwords")
+
+    target_user = next((u for u in USERS_DB if u["user_id"].lower() == req.target_user_id.strip().lower()), None)
+    if not target_user:
+        raise HTTPException(status_code=404, detail=f"User ID '{req.target_user_id}' not found in database")
+
+    new_pass = req.new_password.strip()
+
+    # Enforce Strong Password Policy for Super Admins (Dean, Assoc. Dean, Chief Warden)
+    if target_user["hostel_block"] == "All" and target_user["role"] == "Warden":
+        if len(new_pass) < 8 or not re.search(r"[!@#$%^&*]", new_pass):
+            raise HTTPException(
+                status_code=400,
+                detail="Security Policy: Super Admin (Dean/CW/AD) passwords must be at least 8 characters and contain a special character (!@#$%^&*)"
+            )
+
+    if len(new_pass) < 3:
+        raise HTTPException(status_code=400, detail="Password must be at least 3 characters long")
+
+    target_user["password"] = new_pass
+    return {
+        "success": True,
+        "message": f"Password successfully updated for {target_user['user_id']} ({target_user['full_name']})"
+    }
+
+@app.get("/api/admin/users")
+def list_all_users(admin_id: str):
+    admin = next((u for u in USERS_DB if u["user_id"].lower() == admin_id.strip().lower()), None)
+    if not admin or admin["hostel_block"] != "All":
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    return [
+        {
+            "user_id": u["user_id"],
+            "full_name": u["full_name"],
+            "role": u["role"],
+            "authority_title": u.get("authority_title", u["role"]),
+            "hostel_block": u["hostel_block"],
+            "phone": u["phone"]
+        }
+        for u in USERS_DB
+    ]
