@@ -114,7 +114,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
       newYear -= 1;
     } else if (newMonth > 11) {
       newMonth = 0;
-      newYear += 1;
     }
     setCalMonth(newMonth);
     setCalYear(newYear);
