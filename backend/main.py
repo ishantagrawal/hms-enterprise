@@ -2,11 +2,11 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 import random
 
-app = FastAPI(title="SVNIT UniCore ERP & HMS API")
+app = FastAPI(title="SVNIT HMS & Multi-NIT Campus API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,10 +17,83 @@ app.add_middleware(
 )
 
 # =========================================================
-# 1. MASTER USERS DATABASE (Students, Dean, Wardens, Clubs, Staff)
+# 1. MULTI-NIT TENANT CONFIGURATION (FOUNDER CONTROL)
+# =========================================================
+NIT_TENANTS_DB = [
+    {
+        "institute_id": "SVNIT",
+        "name": "Sardar Vallabhbhai National Institute of Technology (Surat)",
+        "city": "Surat, Gujarat",
+        "modules": {
+            "complaints": True,
+            "eventradar": True,
+            "attendance": True,
+            "leave_pass": True,
+            "clubs_hub": True,
+            "ai_audit": True
+        },
+        "hostels": [
+            "Gajjar Bhawan", "Bhabha Bhawan", "Mother Teresa Bhawan",
+            "Swami Vivekananda Bhawan", "Nehru Bhawan", "Tagore Bhawan",
+            "Sarabhai Bhawan", "Raman Bhawan", "Atal Bihari Vajpayee Bhawan"
+        ]
+    },
+    {
+        "institute_id": "NITT",
+        "name": "National Institute of Technology Tiruchirappalli",
+        "city": "Tiruchirappalli, Tamil Nadu",
+        "modules": {
+            "complaints": True,
+            "eventradar": False,
+            "attendance": True,
+            "leave_pass": True,
+            "clubs_hub": False,
+            "ai_audit": False
+        },
+        "hostels": ["Agate", "Coral", "Diamond", "Garnet", "Opal", "Zircon"]
+    },
+    {
+        "institute_id": "NITK",
+        "name": "National Institute of Technology Karnataka (Surathkal)",
+        "city": "Surathkal, Karnataka",
+        "modules": {
+            "complaints": True,
+            "eventradar": True,
+            "attendance": True,
+            "leave_pass": False,
+            "clubs_hub": True,
+            "ai_audit": True
+        },
+        "hostels": ["Aravali", "Himalaya", "Nilgiri", "Sahyadri", "Vindhya"]
+    },
+    {
+        "institute_id": "NITW",
+        "name": "National Institute of Technology Warangal",
+        "city": "Warangal, Telangana",
+        "modules": {
+            "complaints": True,
+            "eventradar": True,
+            "attendance": True,
+            "leave_pass": True,
+            "clubs_hub": True,
+            "ai_audit": False
+        },
+        "hostels": ["1.8k Ultra Mega Hostel", "BTech Block 1", "Priyadarshini Hall", "Sarojini Hall"]
+    }
+]
+
+# =========================================================
+# 2. MASTER USERS DATABASE (Founder, Dean, Students, Wardens, Clubs, Staff)
 # =========================================================
 USERS_DB = [
-    # DEAN
+    # FOUNDER / MULTI-NIT SUPER ADMIN
+    {
+        "user_id": "FOUNDER", "password": "123", "full_name": "Chief Architect & Founder",
+        "role": "Founder", "authority_title": "Multi-NIT System Architect & Super Admin", "institute_id": "GLOBAL",
+        "hostel_block": "All Campuses", "floor": "-", "room": "HQ Core",
+        "phone": "+91 9876543210", "email": "founder@nit-hms.in", "department": "Multi-Tenant Administration"
+    },
+    # DEAN (SVNIT)
     {
         "user_id": "DEAN", "password": "123", "full_name": "Prof. S. R. Patel (Dean SW)",
         "role": "Dean", "authority_title": "Dean Student Welfare", "institute_id": "SVNIT",
@@ -94,7 +167,7 @@ USERS_DB = [
 ]
 
 # =========================================================
-# 2. MASTER CLUBS DATABASE (With Position-Wise Members & Dean Info)
+# 3. MASTER CLUBS DATABASE
 # =========================================================
 CLUBS_DB = [
     {
@@ -143,7 +216,7 @@ CLUBS_DB = [
 ]
 
 # =========================================================
-# 3. MASTER EVENTS DATABASE (Rich Media, RSVPs, Feedbacks, Dates)
+# 4. MASTER EVENTS DATABASE
 # =========================================================
 EVENTS_DB = [
     {
@@ -157,7 +230,7 @@ EVENTS_DB = [
         "status": "Approved",
         "submitted_by": "Aarav Sharma",
         "type": "Upcoming",
-        "description": "SVNIT's biggest annual 8-hour competitive coding & AI hackathon! Bring your laptops, build real-world prototypes, and compete for ₹50,000 in prizes. Free refreshments provided.",
+        "description": "SVNIT's biggest annual 8-hour competitive coding & AI hackathon! Bring your laptops, build prototypes, and compete for ₹50,000 in prizes.",
         "image_url": "https://images.unsplash.com/photo-1504384308090-c894fdcc538d?w=800&q=80",
         "registration_link": "https://docs.google.com/forms",
         "rsvps": ["U26CE011", "U26CS012"],
@@ -174,7 +247,7 @@ EVENTS_DB = [
         "status": "Pending Dean Approval",
         "submitted_by": "Devansh Joshi",
         "type": "Upcoming",
-        "description": "Hands-on workshop on Gemini API, Vertex AI, and Kubernetes deployment. Open to all 1st and 2nd-year B.Tech students. Audition/quiz link attached for core team recruitment!",
+        "description": "Hands-on workshop on Gemini API, Vertex AI, and cloud deployment. Open to all students.",
         "image_url": "https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=800&q=80",
         "registration_link": "https://docs.google.com/forms",
         "rsvps": ["U26CS012"],
@@ -191,10 +264,10 @@ EVENTS_DB = [
         "status": "Completed",
         "submitted_by": "Kashish Verma",
         "type": "Completed",
-        "description": "Cultural evening celebrating Navratri & unplugged band performances by CHRD music club. (Happened yesterday — 1-day feedback window is currently ACTIVE!)",
+        "description": "Cultural evening celebrating unplugged music performances. 1-day feedback window active!",
         "image_url": "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80",
         "registration_link": "",
-        "rsvps": ["U26CE011", "U26CS012", "U24CE029"],
+        "rsvps": ["U26CE011", "U26CS012"],
         "feedbacks": [
             {"student_id": "U26CS012", "rating": 5, "review": "Awesome sound quality and great crowd management!"}
         ],
@@ -202,40 +275,15 @@ EVENTS_DB = [
             "total_attendees": 850,
             "average_rating": 4.9,
             "sentiment": "Extremely Positive",
-            "key_pros": ["Vibrant acoustic setlist and lighting", "Zero discipline issues reported"],
-            "key_cons": ["Water dispenser near SAC gate ran out by 9:30 PM"],
-            "recommendation": "Approve CHRD winter fest budget with 15% bonus allocation."
-        }
-    },
-    {
-        "event_id": "EVT-099",
-        "club_id": "CHRD",
-        "title": "Sparsh Cultural Night 2026",
-        "date": "2026-10-10",
-        "start_time": "18:00",
-        "end_time": "22:00",
-        "venue": "SAC Amphitheatre",
-        "status": "Completed",
-        "submitted_by": "Kashish Verma",
-        "type": "Completed",
-        "description": "The flagship cultural night featuring music, dance, and drama performances by the SVNIT student community.",
-        "image_url": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&q=80",
-        "registration_link": "",
-        "rsvps": ["U26CE011", "U26CS012"],
-        "feedbacks": [],
-        "ai_audit": {
-            "total_attendees": 1200,
-            "average_rating": 4.8,
-            "sentiment": "Extremely Positive",
-            "key_pros": ["Outstanding stage lighting and sound", "Punctual timeline execution"],
-            "key_cons": ["Seating capacity fell short for late attendees"],
-            "recommendation": "Grant annual cultural fest priority funding."
+            "key_pros": ["Vibrant acoustic setlist and lighting", "Zero discipline issues"],
+            "key_cons": ["Water dispenser ran out by 9:30 PM"],
+            "recommendation": "Approve winter fest budget with 15% bonus allocation."
         }
     }
 ]
 
 # =========================================================
-# 4. MASTER COMPLAINTS DATABASE
+# 5. MASTER COMPLAINTS DATABASE
 # =========================================================
 COMPLAINTS_DB = [
     {
@@ -269,7 +317,7 @@ COMPLAINTS_DB = [
 ]
 
 # =========================================================
-# 5. PYDANTIC MODELS
+# 6. PYDANTIC MODELS
 # =========================================================
 class LoginReq(BaseModel):
     user_id: str
@@ -320,12 +368,46 @@ class ClubUpdateInfoReq(BaseModel):
     mission: str
     extra_dean_info: str
 
+class ModuleToggleReq(BaseModel):
+    institute_id: str
+    module_key: str
+    enabled: bool
+
+class AddHostelReq(BaseModel):
+    institute_id: str
+    hostel_name: str
+
 # =========================================================
-# 6. API ENDPOINTS
+# 7. FOUNDER / MULTI-NIT API ENDPOINTS
+# =========================================================
+@app.get("/api/founder/tenants")
+def get_tenants():
+    return NIT_TENANTS_DB
+
+@app.post("/api/founder/toggle-module")
+def toggle_module(req: ModuleToggleReq):
+    for nit in NIT_TENANTS_DB:
+        if nit["institute_id"].upper() == req.institute_id.upper():
+            if req.module_key in nit["modules"]:
+                nit["modules"][req.module_key] = req.enabled
+                return {"success": True, "message": f"{req.module_key} updated for {nit['institute_id']}", "modules": nit["modules"]}
+    raise HTTPException(status_code=404, detail="Institute not found")
+
+@app.post("/api/founder/add-hostel")
+def add_hostel(req: AddHostelReq):
+    for nit in NIT_TENANTS_DB:
+        if nit["institute_id"].upper() == req.institute_id.upper():
+            if req.hostel_name not in nit["hostels"]:
+                nit["hostels"].append(req.hostel_name)
+            return {"success": True, "hostels": nit["hostels"]}
+    raise HTTPException(status_code=404, detail="Institute not found")
+
+# =========================================================
+# 8. STANDARD CORE API ENDPOINTS
 # =========================================================
 @app.get("/")
 def root():
-    return {"status": "online", "service": "SVNIT UniCore ERP & HMS Backend"}
+    return {"status": "online", "service": "NIT Multi-Campus HMS Backend"}
 
 @app.post("/api/auth/login")
 def login(req: LoginReq):
@@ -404,10 +486,10 @@ def export_pdf(institute_id: str = "SVNIT", hostel_block: str = "All", from_date
         for c in rows
     ])
     html = f"""
-    <html><head><title>SVNIT Official Grievance Report</title>
+    <html><head><title>Hostel Grievance Audit Report</title>
     <style>body{{font-family:Arial,sans-serif;padding:30px;}} table{{width:100%;border-collapse:collapse;margin-top:20px;}} th,td{{border:1px solid #ccc;padding:10px;text-align:left;font-size:13px;}} th{{background:#f1f5f9;}}</style>
     </head><body onload="window.print()">
-    <h2>SVNIT Surat — Official Hostel Grievance Audit Report</h2>
+    <h2>National Institute of Technology — Official Grievance Audit Report</h2>
     <p><strong>Scope:</strong> {hostel_block} | <strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
     <table><thead><tr><th>Ticket ID</th><th>Hostel & Room</th><th>Category</th><th>Summary</th><th>Status</th><th>Timestamp</th></tr></thead>
     <tbody>{tr_html}</tbody></table></body></html>
@@ -415,7 +497,7 @@ def export_pdf(institute_id: str = "SVNIT", hostel_block: str = "All", from_date
     return HTMLResponse(content=html)
 
 # =========================================================
-# 7. UNICORE CLUBS & EVENTRADAR ENDPOINTS
+# 9. CLUBS & EVENTRADAR ENDPOINTS
 # =========================================================
 @app.get("/api/unicore/clubs")
 def get_clubs():
@@ -441,7 +523,7 @@ def propose_event(req: EventRequisitionReq):
             if not (req.end_time <= ev["start_time"] or req.start_time >= ev["end_time"]):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Venue Clash Detected! {ev['venue']} is already booked by {ev['club_id']} ({ev['title']}) from {ev['start_time']} to {ev['end_time']}."
+                    detail=f"Venue Clash! {ev['venue']} is already booked by {ev['club_id']} ({ev['title']}) from {ev['start_time']} to {ev['end_time']}."
                 )
     new_evt = {
         "event_id": f"EVT-{random.randint(103, 999)}",
@@ -493,15 +575,14 @@ def submit_event_feedback(req: EventFeedbackReq):
                 "rating": req.rating,
                 "review": req.review
             })
-            # Dynamically update AI Audit rating & attendee feedback summary
             if "ai_audit" not in ev or not ev["ai_audit"]:
                 ev["ai_audit"] = {
                     "total_attendees": max(len(ev.get("rsvps", [])), 1),
                     "average_rating": float(req.rating),
                     "sentiment": "Positive" if req.rating >= 4 else "Mixed",
-                    "key_pros": [req.review] if req.rating >= 4 else ["Good student participation"],
-                    "key_cons": [req.review] if req.rating < 4 else ["No major issues reported"],
-                    "recommendation": "Verified by AI post-event feedback loop."
+                    "key_pros": [req.review] if req.rating >= 4 else ["Good participation"],
+                    "key_cons": [req.review] if req.rating < 4 else ["No major complaints"],
+                    "recommendation": "Audited by AI feedback loop."
                 }
             else:
                 all_ratings = [f["rating"] for f in ev["feedbacks"]]
@@ -528,7 +609,7 @@ def get_audit_summary():
         "total_attendees": 850,
         "average_rating": 4.9,
         "sentiment": "Extremely Positive",
-        "key_pros": ["Vibrant acoustic setlist and lighting", "Zero discipline issues"],
-        "key_cons": ["Water dispenser near SAC gate ran out by 9:30 PM"],
-        "recommendation": "Approve CHRD winter fest budget with 15% bonus allocation."
+        "key_pros": ["Vibrant acoustic setlist", "Zero discipline issues"],
+        "key_cons": ["Water dispenser ran out early"],
+        "recommendation": "Approve winter fest budget with bonus allocation."
     }

@@ -5,6 +5,177 @@ import WardenView from './components/WardenView';
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // =========================================================
+// FOUNDER / MULTI-NIT SUPER ADMIN PORTAL
+// =========================================================
+function FounderView({ user, apiUrl }) {
+  const [tenants, setTenants] = useState([]);
+  const [selectedTenant, setSelectedTenant] = useState(null);
+  const [newHostelName, setNewHostelName] = useState('');
+  const [msg, setMsg] = useState(null);
+
+  const loadTenants = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiUrl}/api/founder/tenants`);
+      if (res.ok) {
+        const data = await res.json();
+        setTenants(data);
+        if (data.length > 0 && !selectedTenant) setSelectedTenant(data[0]);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }, [apiUrl, selectedTenant]);
+
+  useEffect(() => {
+    loadTenants();
+  }, [loadTenants]);
+
+  const handleToggleModule = async (instId, modKey, currentVal) => {
+    try {
+      const res = await fetch(`${apiUrl}/api/founder/toggle-module`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          institute_id: instId,
+          module_key: modKey,
+          enabled: !currentVal
+        })
+      });
+      if (res.ok) {
+        setMsg(`✅ Module '${modKey}' ${!currentVal ? 'ENABLED' : 'DISABLED'} for ${instId}!`);
+        loadTenants();
+      }
+    } catch {
+      setMsg('❌ Failed to update module setting.');
+    }
+  };
+
+  const handleAddHostel = async (e) => {
+    e.preventDefault();
+    if (!newHostelName.trim() || !selectedTenant) return;
+    try {
+      const res = await fetch(`${apiUrl}/api/founder/add-hostel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          institute_id: selectedTenant.institute_id,
+          hostel_name: newHostelName.trim()
+        })
+      });
+      if (res.ok) {
+        setMsg(`🏢 Added hostel '${newHostelName}' to ${selectedTenant.institute_id}!`);
+        setNewHostelName('');
+        loadTenants();
+      }
+    } catch {
+      setMsg('❌ Failed to add hostel.');
+    }
+  };
+
+  const activeNit = tenants.find((t) => t.institute_id === selectedTenant?.institute_id) || tenants[0] || {};
+
+  return (
+    <div style={founderStyles.wrapper}>
+      {msg && (
+        <div style={founderStyles.toast} onClick={() => setMsg(null)}>
+          {msg}
+        </div>
+      )}
+
+      {/* Founder Master Dashboard Banner */}
+      <div style={founderStyles.banner}>
+        <div style={founderStyles.badge}>👑 MULTI-NIT FOUNDER HQ • GLOBAL TENANCY</div>
+        <h2 style={{ margin: '6px 0 4px 0', color: '#f8fafc', fontSize: '20px' }}>
+          National Institute HMS Cloud Manager
+        </h2>
+        <p style={{ margin: 0, color: '#94a3b8', fontSize: '13px' }}>
+          Configure, activate, and toggle modules per NIT campus deployment.
+        </p>
+      </div>
+
+      {/* NIT Campus Selector Strip */}
+      <div style={founderStyles.campusStrip}>
+        {tenants.map((nit) => (
+          <button
+            key={nit.institute_id}
+            onClick={() => setSelectedTenant(nit)}
+            style={{
+              ...founderStyles.campusBtn,
+              background: selectedTenant?.institute_id === nit.institute_id ? '#8b5cf6' : '#1e293b',
+              color: selectedTenant?.institute_id === nit.institute_id ? '#fff' : '#cbd5e1'
+            }}
+          >
+            🏛️ {nit.institute_id}
+          </button>
+        ))}
+      </div>
+
+      {/* Selected NIT Details & Module Toggles */}
+      <div style={founderStyles.card}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+          <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '17px' }}>{activeNit.name}</h3>
+          <span style={founderStyles.locPill}>📍 {activeNit.city}</span>
+        </div>
+        <p style={{ margin: '0 0 16px 0', color: '#94a3b8', fontSize: '12px' }}>
+          Unique Campus ID: <strong style={{ color: '#c084fc' }}>{activeNit.institute_id}</strong>
+        </p>
+
+        {/* Feature & Module Toggle Matrix */}
+        <div style={founderStyles.sectionHead}>⚡ Module Feature Flags (Live Toggles for this NIT)</div>
+        <div style={founderStyles.toggleGrid}>
+          {activeNit.modules && Object.entries(activeNit.modules).map(([modKey, isEnabled]) => (
+            <div key={modKey} style={founderStyles.toggleItem}>
+              <div>
+                <div style={{ color: '#f8fafc', fontWeight: '700', fontSize: '13px', textTransform: 'capitalize' }}>
+                  {modKey.replace('_', ' ')}
+                </div>
+                <div style={{ fontSize: '11px', color: isEnabled ? '#4ade80' : '#64748b' }}>
+                  {isEnabled ? '● Active in this Campus' : '○ Deactivated'}
+                </div>
+              </div>
+              <button
+                onClick={() => handleToggleModule(activeNit.institute_id, modKey, isEnabled)}
+                style={{
+                  ...founderStyles.toggleSwitch,
+                  background: isEnabled ? '#8b5cf6' : '#334155',
+                  color: '#fff'
+                }}
+              >
+                {isEnabled ? 'ENABLED' : 'DISABLED'}
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {/* Hostel Infrastructure for this NIT */}
+        <div style={{ ...founderStyles.sectionHead, marginTop: '22px' }}>
+          🏢 Configured Hostel Bhawans ({activeNit.hostels?.length || 0})
+        </div>
+        <div style={founderStyles.hostelPillsWrap}>
+          {activeNit.hostels?.map((h, i) => (
+            <span key={i} style={founderStyles.hostelChip}>
+              🏠 {h}
+            </span>
+          ))}
+        </div>
+
+        {/* Add New Hostel Form */}
+        <form onSubmit={handleAddHostel} style={{ display: 'flex', gap: '8px', marginTop: '14px' }}>
+          <input
+            type="text"
+            placeholder={`Add new hostel to ${activeNit.institute_id}...`}
+            value={newHostelName}
+            onChange={(e) => setNewHostelName(e.target.value)}
+            style={founderStyles.input}
+          />
+          <button type="submit" style={founderStyles.addBtn}>+ Add Hostel</button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// =========================================================
 // CLUB COORDINATOR PORTAL
 // =========================================================
 function ClubView({ user, apiUrl }) {
@@ -445,7 +616,6 @@ export default function App() {
     fetchComplaints();
   }, [fetchComplaints]);
 
-  // Handle server waking progress bar simulation
   useEffect(() => {
     let timer;
     if (loading) {
@@ -507,7 +677,7 @@ export default function App() {
         <div style={styles.loginCard}>
           <div style={styles.logoBadge}>HMS</div>
           <h1 style={styles.loginTitle}>Hostel Management System</h1>
-          <p style={styles.loginSub}>SVNIT Campus Portal</p>
+          <p style={styles.loginSub}>National Institute of Technology</p>
 
           {loginError && <div style={styles.errorBox}>{loginError}</div>}
 
@@ -525,7 +695,7 @@ export default function App() {
             <form onSubmit={handleLogin} style={styles.form}>
               <input
                 type="text"
-                placeholder="Position ID / Roll No (e.g., DEAN, U26CE011)"
+                placeholder="Position ID / Roll No (e.g., DEAN, FOUNDER, U26CE011)"
                 value={userIdInput}
                 onChange={(e) => setUserIdInput(e.target.value)}
                 required
@@ -565,9 +735,11 @@ export default function App() {
         <div style={styles.headerLeft}>
           <div style={styles.appAvatar}>HMS</div>
           <div>
-            <div style={styles.headerTitle}>SVNIT Hostel Management System</div>
+            <div style={styles.headerTitle}>Hostel Management System</div>
             <div style={styles.headerSub}>
-              {user.role === 'Student'
+              {user.role === 'Founder'
+                ? `👑 ${user.authority_title}`
+                : user.role === 'Student'
                 ? `${user.hostel_block} • Rm ${user.room}`
                 : `${user.authority_title || user.role}`}
             </div>
@@ -577,6 +749,12 @@ export default function App() {
       </header>
 
       <main>
+        {user.role === 'Founder' && (
+          <FounderView
+            user={user}
+            apiUrl={API_URL}
+          />
+        )}
         {user.role === 'Student' && (
           <StudentView
             user={user}
@@ -611,6 +789,25 @@ export default function App() {
     </div>
   );
 }
+
+const founderStyles = {
+  wrapper: { maxWidth: '680px', margin: '0 auto', padding: '16px' },
+  toast: { background: '#1e293b', borderLeft: '4px solid #8b5cf6', padding: '12px 14px', borderRadius: '10px', color: '#f8fafc', fontSize: '13px', fontWeight: '600', marginBottom: '14px', cursor: 'pointer' },
+  banner: { background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.25), rgba(59, 130, 246, 0.25))', border: '1px solid rgba(139, 92, 246, 0.45)', borderRadius: '18px', padding: '18px', marginBottom: '16px' },
+  badge: { display: 'inline-block', background: 'rgba(139, 92, 246, 0.2)', color: '#c084fc', border: '1px solid rgba(139, 92, 246, 0.4)', padding: '3px 10px', borderRadius: '999px', fontSize: '10px', fontWeight: '800', letterSpacing: '0.8px', marginBottom: '6px' },
+  campusStrip: { display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '6px', marginBottom: '16px' },
+  campusBtn: { flexShrink: 0, border: '1px solid #334155', borderRadius: '10px', padding: '8px 14px', fontSize: '12px', fontWeight: '800', cursor: 'pointer' },
+  card: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: '18px', padding: '20px' },
+  locPill: { background: '#1e293b', color: '#38bdf8', fontSize: '11px', fontWeight: '700', padding: '3px 8px', borderRadius: '999px' },
+  sectionHead: { color: '#c084fc', fontSize: '12px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '10px' },
+  toggleGrid: { display: 'grid', gridTemplateColumns: '1fr', gap: '8px' },
+  toggleItem: { background: '#090d16', border: '1px solid #1e293b', borderRadius: '12px', padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  toggleSwitch: { border: 'none', padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: '800', cursor: 'pointer' },
+  hostelPillsWrap: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' },
+  hostelChip: { background: '#090d16', border: '1px solid #334155', color: '#cbd5e1', fontSize: '12px', padding: '6px 10px', borderRadius: '8px', fontWeight: '600' },
+  input: { flex: 1, background: '#090d16', border: '1px solid #334155', borderRadius: '10px', padding: '10px 12px', color: '#fff', fontSize: '13px', outline: 'none' },
+  addBtn: { background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: '10px', padding: '10px 16px', fontWeight: '800', fontSize: '12px', cursor: 'pointer' }
+};
 
 const clubStyles = {
   appWrapper: { maxWidth: '680px', margin: '0 auto', paddingBottom: '90px', minHeight: 'calc(100vh - 70px)' },
