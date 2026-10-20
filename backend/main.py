@@ -54,6 +54,13 @@ USERS_DB = [
         "phone": "0261-2201528", "email": "deansw@svnit.ac.in", "department": "All"
     },
     {
+        "user_id": "W_ROHIT", "password": "123",
+        "full_name": "Dr. Rohit Kumar", "role": "Warden",
+        "authority_title": "Warden", "institute_id": "SVNIT",
+        "hostel_block": "Gajjar Bhawan", "floor": "Ground", "room": "Office",
+        "phone": "9876543219", "email": "rohitkumar@aid.svnit.ac.in", "department": "All"
+    },
+    {
         "user_id": "U26CE011", "password": "123",
         "full_name": "Ishant Agrawal", "role": "Student",
         "authority_title": "Student", "institute_id": "SVNIT",
@@ -138,6 +145,42 @@ def create_complaint(req: ComplaintCreate):
     }
     COMPLAINTS_DB.insert(0, new_ticket)
     return {"success": True, "ticket": new_ticket}
+
+class WardenUpdateReq(BaseModel):
+    user_id: str
+    full_name: str
+    hostel_block: str
+    phone: str
+    email: str
+    authority_title: str
+    password: Optional[str] = "123"
+
+@app.post("/api/admin/update-warden")
+def update_warden(req: WardenUpdateReq, admin_id: str):
+    admin = next((u for u in USERS_DB if u["user_id"].lower() == admin_id.strip().lower()), None)
+    if not admin or admin["hostel_block"] != "All":
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    
+    uid = req.user_id.strip().upper()
+    existing = next((u for u in USERS_DB if u["user_id"].lower() == uid.lower()), None)
+    if existing:
+        existing["full_name"] = req.full_name
+        existing["hostel_block"] = req.hostel_block
+        existing["phone"] = req.phone
+        existing["email"] = req.email
+        existing["authority_title"] = req.authority_title
+        if req.password and req.password.strip():
+            existing["password"] = req.password.strip()
+        return {"success": True, "message": f"Updated warden {uid} successfully!"}
+    else:
+        USERS_DB.append({
+            "user_id": uid, "password": req.password.strip() or "123",
+            "full_name": req.full_name, "role": "Warden",
+            "authority_title": req.authority_title, "institute_id": "SVNIT",
+            "hostel_block": req.hostel_block, "floor": "-", "room": "Office",
+            "phone": req.phone, "email": req.email, "department": "All"
+        })
+        return {"success": True, "message": f"Added warden {uid} with password!"}
 
 @app.get("/api/complaints/export-pdf")
 def export_pdf_html(institute_id: str, hostel_block: Optional[str] = "All"):
