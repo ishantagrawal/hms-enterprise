@@ -512,3 +512,43 @@ def submit_event_feedback(req: EventFeedbackReq):
             ev["feedbacks"].append({"student_id": req.student_id, "rating": req.rating, "review": req.review})
             return {"success": True, "message": "Feedback submitted to AI audit engine successfully!"}
     raise HTTPException(status_code=404, detail="Event not found")
+# Update EventRequisitionReq in backend/main.py
+class EventRequisitionReq(BaseModel):
+    club_id: str
+    title: str
+    date: str
+    start_time: str
+    end_time: str
+    venue: str
+    submitted_by: str
+    description: Optional[str] = ""
+    image_url: Optional[str] = ""
+    registration_link: Optional[str] = ""
+
+# Update the propose_event function inside backend/main.py
+@app.post("/api/unicore/events/propose")
+def propose_event(req: EventRequisitionReq):
+    for ev in EVENTS_DB:
+        if ev["date"] == req.date and ev["venue"].lower() == req.venue.lower() and ev["status"] == "Approved":
+            if not (req.end_time <= ev["start_time"] or req.start_time >= ev["end_time"]):
+                raise HTTPException(status_code=400, detail=f"❌ Venue Clash! {ev['venue']} is booked from {ev['start_time']} to {ev['end_time']}.")
+    
+    new_evt = {
+        "event_id": f"EVT-{random.randint(100, 999)}",
+        "club_id": req.club_id,
+        "title": req.title,
+        "date": req.date,
+        "start_time": req.start_time,
+        "end_time": req.end_time,
+        "venue": req.venue,
+        "status": "Pending Dean Approval",
+        "submitted_by": req.submitted_by,
+        "description": req.description,
+        "image_url": req.image_url,
+        "registration_link": req.registration_link,
+        "type": "Upcoming"
+    }
+    EVENTS_DB.append(new_evt)
+    return {"success": True, "message": "Proposal submitted to Clash Matrix!", "event": new_evt}
+
+# (Optional: Add these keys 'description', 'image_url', 'registration_link' to your existing mock events in EVENTS_DB so they don't break)

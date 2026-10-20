@@ -462,3 +462,45 @@ const styles = {
   navLabel: { fontSize: '11px', fontWeight: '600' },
   badgeCount: { position: 'absolute', top: '-3px', right: '6px', background: '#22c55e', color: '#052e16', fontSize: '10px', fontWeight: '800', padding: '1px 6px', borderRadius: '999px' }
 };
+// Open WardenView.jsx, find the selectedEventAudit modal and replace/update it to support rich descriptions:
+
+      {/* ========================================================= */}
+      {/* MODAL 2: EVENT DETAILS & AI AUDIT SUMMARY SHEET           */}
+      {/* ========================================================= */}
+      {selectedEventAudit && (
+        <div style={styles.modalOverlay} onClick={() => setSelectedEventAudit(null)}>
+          <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '17px' }}>{selectedEventAudit.ai_audit ? '🤖 Event Audit & Details' : '🎟️ Event Details'}</h3>
+              <button onClick={() => setSelectedEventAudit(null)} style={styles.closeBtn}>✕</button>
+            </div>
+            
+            {selectedEventAudit.image_url && (
+              <img src={selectedEventAudit.image_url} alt="Event" style={{ width: '100%', height: '160px', objectFit: 'cover', borderRadius: '12px', marginBottom: '12px' }} />
+            )}
+
+            <h4 style={{ margin: '0 0 8px 0', color: '#38bdf8', fontSize: '18px' }}>{selectedEventAudit.title}</h4>
+            <div style={{ color: '#cbd5e1', fontSize: '13px', marginBottom: '12px' }}>📍 {selectedEventAudit.venue} • 📅 {selectedEventAudit.date}</div>
+
+            {selectedEventAudit.description && (
+              <p style={{ background: '#090d16', padding: '12px', borderRadius: '10px', color: '#cbd5e1', fontSize: '13px', border: '1px solid #1e293b' }}>
+                {selectedEventAudit.description}
+              </p>
+            )}
+
+            {selectedEventAudit.ai_audit && (
+              <div style={styles.detailBox}>
+                <div style={{ display: 'flex', gap: '14px', marginBottom: '12px' }}>
+                  <div>👥 Attendees: <strong>{selectedEventAudit.ai_audit.total_attendees}</strong></div>
+                  <div>⭐ Rating: <strong>{selectedEventAudit.ai_audit.average_rating} / 5.0</strong></div>
+                </div>
+                <div style={{ color: '#4ade80', fontWeight: '700' }}>👍 Key Pros:</div>
+                <ul style={{ margin: '4px 0 10px 20px', padding: 0 }}>{selectedEventAudit.ai_audit.key_pros.map((p, i) => <li key={i}>{p}</li>)}</ul>
+                <div style={{ color: '#f87171', fontWeight: '700' }}>⚠️ Areas of Improvement:</div>
+                <ul style={{ margin: '4px 0 10px 20px', padding: 0 }}>{selectedEventAudit.ai_audit.key_cons.map((c, i) => <li key={i}>{c}</li>)}</ul>
+                <div><strong>Recommendation:</strong> {selectedEventAudit.ai_audit.recommendation}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
