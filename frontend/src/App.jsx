@@ -5,13 +5,19 @@ import WardenView from './components/WardenView';
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // =========================================================
-// FOUNDER / MULTI-NIT SUPER ADMIN PORTAL
+// FOUNDER / MULTI-NIT SUPER ADMIN PORTAL (WITH PASSWORD MASTER)
 // =========================================================
 function FounderView({ user, apiUrl }) {
+  const [activeTab, setActiveTab] = useState('tenants'); // 'tenants' | 'security'
   const [tenants, setTenants] = useState([]);
   const [selectedTenant, setSelectedTenant] = useState(null);
   const [newHostelName, setNewHostelName] = useState('');
   const [msg, setMsg] = useState(null);
+
+  // Password Control State (Only Founder has this Master Control)
+  const [founderNewPass, setFounderNewPass] = useState('');
+  const [targetUserId, setTargetUserId] = useState('DEAN');
+  const [targetNewPass, setTargetNewPass] = useState('');
 
   const loadTenants = useCallback(async () => {
     try {
@@ -72,6 +78,56 @@ function FounderView({ user, apiUrl }) {
     }
   };
 
+  // Founder Direct Self-Password Change
+  const handleChangeFounderPassword = async (e) => {
+    e.preventDefault();
+    if (!founderNewPass.trim()) return;
+    try {
+      const res = await fetch(`${apiUrl}/api/dean/reset-password?admin_id=FOUNDER`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target_user_id: 'FOUNDER',
+          new_password: founderNewPass.trim()
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setMsg('🔒 Founder Master Password has been hardened & saved!');
+        setFounderNewPass('');
+      } else {
+        setMsg(`❌ ${data.detail || 'Password update failed'}`);
+      }
+    } catch {
+      setMsg('❌ Server connection error.');
+    }
+  };
+
+  // Founder Override for Dean / Warden / Student Passwords
+  const handleOverrideUserPassword = async (e) => {
+    e.preventDefault();
+    if (!targetUserId.trim() || !targetNewPass.trim()) return;
+    try {
+      const res = await fetch(`${apiUrl}/api/dean/reset-password?admin_id=FOUNDER`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target_user_id: targetUserId.trim().toUpperCase(),
+          new_password: targetNewPass.trim()
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setMsg(`✅ Password updated for user '${targetUserId.toUpperCase()}'!`);
+        setTargetNewPass('');
+      } else {
+        setMsg(`❌ ${data.detail || 'Override failed'}`);
+      }
+    } catch {
+      setMsg('❌ Server connection error.');
+    }
+  };
+
   const activeNit = tenants.find((t) => t.institute_id === selectedTenant?.institute_id) || tenants[0] || {};
 
   return (
@@ -89,88 +145,169 @@ function FounderView({ user, apiUrl }) {
           National Institute HMS Cloud Manager
         </h2>
         <p style={{ margin: 0, color: '#94a3b8', fontSize: '13px' }}>
-          Configure, activate, and toggle modules per NIT campus deployment.
+          Top of Institutional Hierarchy • Super Admin Control over all NITs & credentials.
         </p>
       </div>
 
-      {/* NIT Campus Selector Strip */}
-      <div style={founderStyles.campusStrip}>
-        {tenants.map((nit) => (
-          <button
-            key={nit.institute_id}
-            onClick={() => setSelectedTenant(nit)}
-            style={{
-              ...founderStyles.campusBtn,
-              background: selectedTenant?.institute_id === nit.institute_id ? '#8b5cf6' : '#1e293b',
-              color: selectedTenant?.institute_id === nit.institute_id ? '#fff' : '#cbd5e1'
-            }}
-          >
-            🏛️ {nit.institute_id}
-          </button>
-        ))}
+      {/* Navigation Sub-Tabs: Tenants vs Security & Passwords */}
+      <div style={founderStyles.navBar}>
+        <button
+          onClick={() => setActiveTab('tenants')}
+          style={{
+            ...founderStyles.tabBtn,
+            background: activeTab === 'tenants' ? '#8b5cf6' : 'transparent',
+            color: activeTab === 'tenants' ? '#fff' : '#94a3b8'
+          }}
+        >
+          🏛️ NIT Campuses & Modules
+        </button>
+        <button
+          onClick={() => setActiveTab('security')}
+          style={{
+            ...founderStyles.tabBtn,
+            background: activeTab === 'security' ? '#8b5cf6' : 'transparent',
+            color: activeTab === 'security' ? '#fff' : '#94a3b8'
+          }}
+        >
+          🔐 Master Passwords & Hierarchy
+        </button>
       </div>
 
-      {/* Selected NIT Details & Module Toggles */}
-      <div style={founderStyles.card}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-          <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '17px' }}>{activeNit.name}</h3>
-          <span style={founderStyles.locPill}>📍 {activeNit.city}</span>
-        </div>
-        <p style={{ margin: '0 0 16px 0', color: '#94a3b8', fontSize: '12px' }}>
-          Unique Campus ID: <strong style={{ color: '#c084fc' }}>{activeNit.institute_id}</strong>
-        </p>
-
-        {/* Feature & Module Toggle Matrix */}
-        <div style={founderStyles.sectionHead}>⚡ Module Feature Flags (Live Toggles for this NIT)</div>
-        <div style={founderStyles.toggleGrid}>
-          {activeNit.modules && Object.entries(activeNit.modules).map(([modKey, isEnabled]) => (
-            <div key={modKey} style={founderStyles.toggleItem}>
-              <div>
-                <div style={{ color: '#f8fafc', fontWeight: '700', fontSize: '13px', textTransform: 'capitalize' }}>
-                  {modKey.replace('_', ' ')}
-                </div>
-                <div style={{ fontSize: '11px', color: isEnabled ? '#4ade80' : '#64748b' }}>
-                  {isEnabled ? '● Active in this Campus' : '○ Deactivated'}
-                </div>
-              </div>
+      {/* TAB 1: CAMPUSES & MODULE FLAGS */}
+      {activeTab === 'tenants' && (
+        <>
+          <div style={founderStyles.campusStrip}>
+            {tenants.map((nit) => (
               <button
-                onClick={() => handleToggleModule(activeNit.institute_id, modKey, isEnabled)}
+                key={nit.institute_id}
+                onClick={() => setSelectedTenant(nit)}
                 style={{
-                  ...founderStyles.toggleSwitch,
-                  background: isEnabled ? '#8b5cf6' : '#334155',
-                  color: '#fff'
+                  ...founderStyles.campusBtn,
+                  background: selectedTenant?.institute_id === nit.institute_id ? '#8b5cf6' : '#1e293b',
+                  color: selectedTenant?.institute_id === nit.institute_id ? '#fff' : '#cbd5e1'
                 }}
               >
-                {isEnabled ? 'ENABLED' : 'DISABLED'}
+                🏛️ {nit.institute_id}
               </button>
+            ))}
+          </div>
+
+          <div style={founderStyles.card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '17px' }}>{activeNit.name}</h3>
+              <span style={founderStyles.locPill}>📍 {activeNit.city}</span>
             </div>
-          ))}
-        </div>
+            <p style={{ margin: '0 0 16px 0', color: '#94a3b8', fontSize: '12px' }}>
+              Campus ID: <strong style={{ color: '#c084fc' }}>{activeNit.institute_id}</strong>
+            </p>
 
-        {/* Hostel Infrastructure for this NIT */}
-        <div style={{ ...founderStyles.sectionHead, marginTop: '22px' }}>
-          🏢 Configured Hostel Bhawans ({activeNit.hostels?.length || 0})
-        </div>
-        <div style={founderStyles.hostelPillsWrap}>
-          {activeNit.hostels?.map((h, i) => (
-            <span key={i} style={founderStyles.hostelChip}>
-              🏠 {h}
-            </span>
-          ))}
-        </div>
+            <div style={founderStyles.sectionHead}>⚡ Live Module Toggles for this NIT</div>
+            <div style={founderStyles.toggleGrid}>
+              {activeNit.modules && Object.entries(activeNit.modules).map(([modKey, isEnabled]) => (
+                <div key={modKey} style={founderStyles.toggleItem}>
+                  <div>
+                    <div style={{ color: '#f8fafc', fontWeight: '700', fontSize: '13px', textTransform: 'capitalize' }}>
+                      {modKey.replace('_', ' ')}
+                    </div>
+                    <div style={{ fontSize: '11px', color: isEnabled ? '#4ade80' : '#64748b' }}>
+                      {isEnabled ? '● Active in this Campus' : '○ Deactivated'}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleToggleModule(activeNit.institute_id, modKey, isEnabled)}
+                    style={{
+                      ...founderStyles.toggleSwitch,
+                      background: isEnabled ? '#8b5cf6' : '#334155',
+                      color: '#fff'
+                    }}
+                  >
+                    {isEnabled ? 'ENABLED' : 'DISABLED'}
+                  </button>
+                </div>
+              ))}
+            </div>
 
-        {/* Add New Hostel Form */}
-        <form onSubmit={handleAddHostel} style={{ display: 'flex', gap: '8px', marginTop: '14px' }}>
-          <input
-            type="text"
-            placeholder={`Add new hostel to ${activeNit.institute_id}...`}
-            value={newHostelName}
-            onChange={(e) => setNewHostelName(e.target.value)}
-            style={founderStyles.input}
-          />
-          <button type="submit" style={founderStyles.addBtn}>+ Add Hostel</button>
-        </form>
-      </div>
+            <div style={{ ...founderStyles.sectionHead, marginTop: '22px' }}>
+              🏢 Configured Hostel Bhawans ({activeNit.hostels?.length || 0})
+            </div>
+            <div style={founderStyles.hostelPillsWrap}>
+              {activeNit.hostels?.map((h, i) => (
+                <span key={i} style={founderStyles.hostelChip}>
+                  🏠 {h}
+                </span>
+              ))}
+            </div>
+
+            <form onSubmit={handleAddHostel} style={{ display: 'flex', gap: '8px', marginTop: '14px' }}>
+              <input
+                type="text"
+                placeholder={`Add new hostel to ${activeNit.institute_id}...`}
+                value={newHostelName}
+                onChange={(e) => setNewHostelName(e.target.value)}
+                style={founderStyles.input}
+              />
+              <button type="submit" style={founderStyles.addBtn}>+ Add Hostel</button>
+            </form>
+          </div>
+        </>
+      )}
+
+      {/* TAB 2: MASTER SECURITY & HIERARCHY PASSWORD CONTROL */}
+      {activeTab === 'security' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {/* Card 1: Change Founder Password */}
+          <div style={founderStyles.card}>
+            <div style={founderStyles.sectionHead}>👑 1. Strengthen Founder Master Password</div>
+            <p style={{ margin: '0 0 14px 0', color: '#94a3b8', fontSize: '13px' }}>
+              Only you have access to this portal. Set a high-entropy hard password here.
+            </p>
+            <form onSubmit={handleChangeFounderPassword} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <input
+                type="text"
+                placeholder="Enter new hard password for FOUNDER (e.g., MyHardPass#2026!)"
+                value={founderNewPass}
+                onChange={(e) => setFounderNewPass(e.target.value)}
+                required
+                style={founderStyles.input}
+              />
+              <button type="submit" style={founderStyles.saveBtn}>🔒 Update Founder Password</button>
+            </form>
+          </div>
+
+          {/* Card 2: Override Dean / Wardens / Students */}
+          <div style={founderStyles.card}>
+            <div style={founderStyles.sectionHead}>🎯 2. Override Any Institutional Role Password</div>
+            <p style={{ margin: '0 0 14px 0', color: '#94a3b8', fontSize: '13px' }}>
+              Founder can change Dean, Chief Warden, Club Coordinator, or Student passwords at any time.
+            </p>
+            <form onSubmit={handleOverrideUserPassword} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div>
+                <label style={{ fontSize: '11px', color: '#94a3b8', fontWeight: '700', textTransform: 'uppercase' }}>Target Position ID</label>
+                <input
+                  type="text"
+                  placeholder="e.g. DEAN, CW_GAJJAR, U26CE011, ACM"
+                  value={targetUserId}
+                  onChange={(e) => setTargetUserId(e.target.value)}
+                  required
+                  style={{ ...founderStyles.input, marginTop: '4px' }}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: '11px', color: '#94a3b8', fontWeight: '700', textTransform: 'uppercase' }}>New Password to Assign</label>
+                <input
+                  type="text"
+                  placeholder="Enter new password for target"
+                  value={targetNewPass}
+                  onChange={(e) => setTargetNewPass(e.target.value)}
+                  required
+                  style={{ ...founderStyles.input, marginTop: '4px' }}
+                />
+              </div>
+              <button type="submit" style={founderStyles.saveBtn}>⚡ Execute Password Override</button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -573,7 +710,7 @@ function StaffView({ user, complaints, apiUrl, onRefresh }) {
 }
 
 // =========================================================
-// MAIN APP ENTRY & CLEAN LOGIN PORTAL (WITH WAKING SERVER BAR)
+// MAIN APP ENTRY & CLEAN HMS LOGIN PORTAL
 // =========================================================
 export default function App() {
   const [user, setUser] = useState(() => {
@@ -795,18 +932,21 @@ const founderStyles = {
   toast: { background: '#1e293b', borderLeft: '4px solid #8b5cf6', padding: '12px 14px', borderRadius: '10px', color: '#f8fafc', fontSize: '13px', fontWeight: '600', marginBottom: '14px', cursor: 'pointer' },
   banner: { background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.25), rgba(59, 130, 246, 0.25))', border: '1px solid rgba(139, 92, 246, 0.45)', borderRadius: '18px', padding: '18px', marginBottom: '16px' },
   badge: { display: 'inline-block', background: 'rgba(139, 92, 246, 0.2)', color: '#c084fc', border: '1px solid rgba(139, 92, 246, 0.4)', padding: '3px 10px', borderRadius: '999px', fontSize: '10px', fontWeight: '800', letterSpacing: '0.8px', marginBottom: '6px' },
+  navBar: { display: 'flex', gap: '8px', background: '#0f172a', padding: '6px', borderRadius: '12px', border: '1px solid #1e293b', marginBottom: '16px' },
+  tabBtn: { flex: 1, border: 'none', padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: '800', cursor: 'pointer' },
   campusStrip: { display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '6px', marginBottom: '16px' },
   campusBtn: { flexShrink: 0, border: '1px solid #334155', borderRadius: '10px', padding: '8px 14px', fontSize: '12px', fontWeight: '800', cursor: 'pointer' },
   card: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: '18px', padding: '20px' },
   locPill: { background: '#1e293b', color: '#38bdf8', fontSize: '11px', fontWeight: '700', padding: '3px 8px', borderRadius: '999px' },
-  sectionHead: { color: '#c084fc', fontSize: '12px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '10px' },
+  sectionHead: { color: '#c084fc', fontSize: '13px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '10px' },
   toggleGrid: { display: 'grid', gridTemplateColumns: '1fr', gap: '8px' },
   toggleItem: { background: '#090d16', border: '1px solid #1e293b', borderRadius: '12px', padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   toggleSwitch: { border: 'none', padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: '800', cursor: 'pointer' },
   hostelPillsWrap: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' },
   hostelChip: { background: '#090d16', border: '1px solid #334155', color: '#cbd5e1', fontSize: '12px', padding: '6px 10px', borderRadius: '8px', fontWeight: '600' },
-  input: { flex: 1, background: '#090d16', border: '1px solid #334155', borderRadius: '10px', padding: '10px 12px', color: '#fff', fontSize: '13px', outline: 'none' },
-  addBtn: { background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: '10px', padding: '10px 16px', fontWeight: '800', fontSize: '12px', cursor: 'pointer' }
+  input: { width: '100%', background: '#090d16', border: '1px solid #334155', borderRadius: '10px', padding: '12px', color: '#fff', fontSize: '13px', outline: 'none', boxSizing: 'border-box' },
+  addBtn: { background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: '10px', padding: '10px 16px', fontWeight: '800', fontSize: '12px', cursor: 'pointer', flexShrink: 0 },
+  saveBtn: { width: '100%', background: 'linear-gradient(135deg, #8b5cf6, #6366f1)', color: '#fff', border: 'none', borderRadius: '10px', padding: '13px', fontWeight: '800', fontSize: '13px', cursor: 'pointer' }
 };
 
 const clubStyles = {

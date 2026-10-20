@@ -83,10 +83,10 @@ NIT_TENANTS_DB = [
 ]
 
 # =========================================================
-# 2. MASTER USERS DATABASE (Founder, Dean, Students, Wardens, Clubs, Staff)
+# 2. MASTER USERS DATABASE
 # =========================================================
 USERS_DB = [
-    # FOUNDER / MULTI-NIT SUPER ADMIN
+    # FOUNDER / MULTI-NIT SUPER ADMIN (TOP OF HIERARCHY)
     {
         "user_id": "FOUNDER", "password": "123", "full_name": "Chief Architect & Founder",
         "role": "Founder", "authority_title": "Multi-NIT System Architect & Super Admin", "institute_id": "GLOBAL",
@@ -176,40 +176,35 @@ CLUBS_DB = [
         "mission": "Advancing computing as a science and profession through hackathons, CP contests, and research workshops.",
         "faculty_advisor": "Dr. R. K. Gupta (Comp. Engg.)",
         "head_coordinator": "Aarav Sharma",
-        "extra_dean_info": "Annual Budget Approved: ₹1,80,000 | Lab Equipment Inventory Verified | 3 National Hackathon Wins in 2026.",
+        "extra_dean_info": "Annual Budget Approved: ₹1,80,000 | Lab Equipment Inventory Verified.",
         "members": [
             {"name": "Aarav Sharma", "roll": "U23CS004", "position": "Chairperson", "phone": "+91 9811100001"},
             {"name": "Riya Mehta", "roll": "U23CS045", "position": "Vice-Chairperson", "phone": "+91 9811100002"},
             {"name": "Karan Verma", "roll": "U24CS019", "position": "Treasurer", "phone": "+91 9811100003"},
-            {"name": "Sneha Nair", "roll": "U24CS088", "position": "Webmaster & Tech Lead", "phone": "+91 9811100004"},
             {"name": "Ishant Agrawal", "roll": "U26CE011", "position": "Executive Member", "phone": "+91 9876543210"}
         ]
     },
     {
         "club_id": "GDSC",
         "name": "Google Developer Student Club (GDSC)",
-        "mission": "Bridging the gap between theory and practice using Google Cloud, Android, Flutter, and AI/ML technologies.",
+        "mission": "Bridging the gap between theory and practice using Google Cloud, Android, and AI.",
         "faculty_advisor": "Dr. M. A. Zaveri (Comp. Engg.)",
         "head_coordinator": "Devansh Joshi",
-        "extra_dean_info": "Google Cloud Study Jams completed with 240+ certified students. Requesting Seminar Hall projector upgrade.",
+        "extra_dean_info": "Google Cloud Study Jams completed with 240+ students.",
         "members": [
             {"name": "Devansh Joshi", "roll": "U23CS011", "position": "GDSC Lead", "phone": "+91 9822200001"},
-            {"name": "Ananya Iyer", "roll": "U23EC032", "position": "AI/ML Lead", "phone": "+91 9822200002"},
-            {"name": "Harshvardhan Singh", "roll": "U24CS056", "position": "Android & Cloud Lead", "phone": "+91 9822200003"},
-            {"name": "Pooja Desai", "roll": "U24EE021", "position": "PR & Outreach Head", "phone": "+91 9822200004"}
+            {"name": "Ananya Iyer", "roll": "U23EC032", "position": "AI/ML Lead", "phone": "+91 9822200002"}
         ]
     },
     {
         "club_id": "CHRD",
         "name": "Centre for Human Resource Development (CHRD)",
-        "mission": "Nurturing music, dance, drama, fine arts, and literary culture across the SVNIT student community.",
+        "mission": "Nurturing music, dance, drama, fine arts, and literary culture.",
         "faculty_advisor": "Dr. S. N. Sharma (Electrical)",
         "head_coordinator": "Kashish Verma",
-        "extra_dean_info": "Sparsh Cultural Night concluded with 1,200+ attendees. Sound system audit cleared by Estate Section.",
+        "extra_dean_info": "Sparsh Cultural Night concluded with 1,200+ attendees.",
         "members": [
             {"name": "Kashish Verma", "roll": "U23EE018", "position": "Cultural Secretary", "phone": "+91 9833300001"},
-            {"name": "Yashika Jain", "roll": "U24CE029", "position": "Joint Secretary (Dance & Music)", "phone": "+91 9833300002"},
-            {"name": "Rohan Kulkarni", "roll": "U24ME044", "position": "Logistics & Stage Head", "phone": "+91 9833300003"},
             {"name": "Ishant Agrawal", "roll": "U26CE011", "position": "Event Coordinator", "phone": "+91 9876543210"}
         ]
     }
@@ -230,7 +225,7 @@ EVENTS_DB = [
         "status": "Approved",
         "submitted_by": "Aarav Sharma",
         "type": "Upcoming",
-        "description": "SVNIT's biggest annual 8-hour competitive coding & AI hackathon! Bring your laptops, build prototypes, and compete for ₹50,000 in prizes.",
+        "description": "SVNIT's biggest annual 8-hour competitive coding & AI hackathon! ₹50,000 in prizes.",
         "image_url": "https://images.unsplash.com/photo-1504384308090-c894fdcc538d?w=800&q=80",
         "registration_link": "https://docs.google.com/forms",
         "rsvps": ["U26CE011", "U26CS012"],
@@ -247,7 +242,7 @@ EVENTS_DB = [
         "status": "Pending Dean Approval",
         "submitted_by": "Devansh Joshi",
         "type": "Upcoming",
-        "description": "Hands-on workshop on Gemini API, Vertex AI, and cloud deployment. Open to all students.",
+        "description": "Hands-on workshop on Gemini API, Vertex AI, and Kubernetes deployment.",
         "image_url": "https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=800&q=80",
         "registration_link": "https://docs.google.com/forms",
         "rsvps": ["U26CS012"],
@@ -264,20 +259,20 @@ EVENTS_DB = [
         "status": "Completed",
         "submitted_by": "Kashish Verma",
         "type": "Completed",
-        "description": "Cultural evening celebrating unplugged music performances. 1-day feedback window active!",
+        "description": "Cultural evening celebrating unplugged music. 1-day feedback window active!",
         "image_url": "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80",
         "registration_link": "",
         "rsvps": ["U26CE011", "U26CS012"],
         "feedbacks": [
-            {"student_id": "U26CS012", "rating": 5, "review": "Awesome sound quality and great crowd management!"}
+            {"student_id": "U26CS012", "rating": 5, "review": "Awesome sound quality and crowd management!"}
         ],
         "ai_audit": {
             "total_attendees": 850,
             "average_rating": 4.9,
             "sentiment": "Extremely Positive",
-            "key_pros": ["Vibrant acoustic setlist and lighting", "Zero discipline issues"],
+            "key_pros": ["Vibrant acoustics and lighting", "Zero discipline issues"],
             "key_cons": ["Water dispenser ran out by 9:30 PM"],
-            "recommendation": "Approve winter fest budget with 15% bonus allocation."
+            "recommendation": "Approve winter fest budget with bonus allocation."
         }
     }
 ]
@@ -378,7 +373,7 @@ class AddHostelReq(BaseModel):
     hostel_name: str
 
 # =========================================================
-# 7. FOUNDER / MULTI-NIT API ENDPOINTS
+# 7. FOUNDER & HIERARCHY-AWARE PASSWORD API
 # =========================================================
 @app.get("/api/founder/tenants")
 def get_tenants():
@@ -401,6 +396,35 @@ def add_hostel(req: AddHostelReq):
                 nit["hostels"].append(req.hostel_name)
             return {"success": True, "hostels": nit["hostels"]}
     raise HTTPException(status_code=404, detail="Institute not found")
+
+# =========================================================================
+# STRICT HIERARCHY GUARD: Dean CANNOT change Founder. Founder CAN change all!
+# =========================================================================
+@app.post("/api/dean/reset-password")
+def reset_password(req: PasswordResetReq, admin_id: str = Query(...)):
+    requester = next((u for u in USERS_DB if u["user_id"].upper() == admin_id.strip().upper()), None)
+    if not requester:
+        raise HTTPException(status_code=403, detail="Unauthorized operator.")
+
+    target_id = req.target_user_id.strip().upper()
+
+    # Rule 1: NO ONE below Founder can touch FOUNDER account
+    if target_id == "FOUNDER" and requester["role"] != "Founder":
+        raise HTTPException(
+            status_code=403,
+            detail="HIERARCHY VIOLATION: Dean cannot reset or modify the Founder / Super Admin password!"
+        )
+
+    # Rule 2: Dean cannot change other Deans or global settings if restricted
+    if requester["role"] == "Dean" and target_id == "DEAN" and requester["user_id"].upper() != "DEAN":
+        raise HTTPException(status_code=403, detail="Cannot alter another Dean's security credentials.")
+
+    target_user = next((u for u in USERS_DB if u["user_id"].upper() == target_id), None)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Target user ID not found.")
+
+    target_user["password"] = req.new_password.strip()
+    return {"success": True, "message": f"Password securely updated for {target_user['user_id']}!"}
 
 # =========================================================
 # 8. STANDARD CORE API ENDPOINTS
@@ -467,14 +491,6 @@ def staff_resolve(req: StaffResolveReq):
             c["staff_remark"] = req.staff_remark
             return {"success": True, "ticket": c}
     raise HTTPException(status_code=404, detail="Ticket not found")
-
-@app.post("/api/dean/reset-password")
-def reset_password(req: PasswordResetReq, admin_id: str = Query(...)):
-    for u in USERS_DB:
-        if u["user_id"].upper() == req.target_user_id.strip().upper():
-            u["password"] = req.new_password.strip()
-            return {"success": True, "message": f"Password updated for {u['user_id']}"}
-    raise HTTPException(status_code=404, detail="Target user ID not found")
 
 @app.get("/api/complaints/export-pdf", response_class=HTMLResponse)
 def export_pdf(institute_id: str = "SVNIT", hostel_block: str = "All", from_date: str = "", to_date: str = ""):
