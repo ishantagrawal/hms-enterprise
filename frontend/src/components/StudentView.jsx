@@ -1,25 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { COMPLAINT_CATEGORIES } from '../config/categories';
 
-// Safety fallback so activeTab is never undefined
-var activeTab = 'complaints';
-
 export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
   const [activeTab, setActiveTab] = useState('complaints');
   const [showNewModal, setShowNewModal] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // EventRadar & Interactive Calendar Month/Year state
   const [events, setEvents] = useState([]);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [calYear, setCalYear] = useState(2026);
-  const [calMonth, setCalMonth] = useState(9); // October 2026
+  const [calMonth, setCalMonth] = useState(9); // October
   const [feedbackRating, setFeedbackRating] = useState(5);
   const [feedbackReview, setFeedbackReview] = useState('');
   const [msg, setMsg] = useState(null);
 
-  // Complaint Form states
   const [category, setCategory] = useState('Electricity');
   const [summary, setSummary] = useState('');
   const [description, setDescription] = useState('');

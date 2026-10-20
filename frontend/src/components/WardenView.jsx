@@ -1,9 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { COMPLAINT_CATEGORIES } from '../config/categories';
 
-// Safety fallback so activeTab is never undefined
-var activeTab = 'hostels';
-
 export default function WardenView({ user, complaints, apiUrl }) {
   const isDean = user.role === 'Dean' || user.hostel_block === 'All';
 
