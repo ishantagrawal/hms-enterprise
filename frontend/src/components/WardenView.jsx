@@ -3,14 +3,40 @@ import React, { useState } from 'react';
 export default function WardenView({ user, complaints, apiUrl }) {
   const [selectedHostel, setSelectedHostel] = useState('All');
   const [statusMsg, setStatusMsg] = useState(null);
+  
+  // Modal / Form state for updating warden
+  const [editWarden, setEditWarden] = useState(null);
+  const [wForm, setWForm] = useState({ user_id: '', full_name: '', hostel_block: 'Bhabha Bhawan', phone: '', email: '', authority_title: 'Chief Warden' });
 
-  // Predefined Hostels for SVNIT (Expandable to 10+)
-  const hostels = [
-    { name: "Gajjar Bhawan", warden: "Dr. R. Patel", phone: "9876543210", activeIssues: complaints.filter(c => c.hostel_block === 'Gajjar Bhawan' && c.status !== 'Completed').length },
-    { name: "Bhabha Bhawan", warden: "Dr. S. Kumar", phone: "9876543220", activeIssues: complaints.filter(c => c.hostel_block === 'Bhabha Bhawan' && c.status !== 'Completed').length },
-    { name: "Swami Vivekananda Bhawan", warden: "Dr. M. Sharma", phone: "9876543221", activeIssues: 0 },
-    { name: "Mother Teresa Bhawan", warden: "Dr. A. Verma", phone: "9876543222", activeIssues: 0 },
-  ];
+  // Official SVNIT Hostels list from Brochure
+  const [hostels, setHostels] = useState([
+    { name: "Bhabha Bhawan", warden: "Dr. Vikram P. Rathod", role: "Chief Warden", phone: "9876543210", email: "cw1_bhabha@svnit.ac.in" },
+    { name: "Gajjar Bhawan", warden: "Dr. Jogender Singh", role: "Chief Warden", phone: "9876543211", email: "cw1_gajjar@svnit.ac.in" },
+    { name: "Mother Teresa Bhawan", warden: "Dr. Premlata Kumari", role: "Chief Warden", phone: "9876543212", email: "cw1_mtb@svnit.ac.in" },
+    { name: "Narmad Bhawan (Guest House)", warden: "Prof. Alka A. Mungray", role: "Chief Warden", phone: "1652", email: "cw1_narmad@svnit.ac.in" },
+    { name: "Nehru Bhawan", warden: "Dr. Deepak Joshi", role: "Chief Warden", phone: "1703", email: "cw1_nehru@svnit.ac.in" },
+    { name: "Raman Bhawan", warden: "Dr. Rohan Rahul Pande", role: "Chief Warden", phone: "1789", email: "cw1_raman@svnit.ac.in" },
+    { name: "Sarabhai Bhawan", warden: "Dr. Naresh Yarramsetty", role: "Chief Warden", phone: "1793", email: "cw1_sarabhai@svnit.ac.in" },
+    { name: "Swami Vivekananda Bhawan", warden: "Dr. G. C. Jadeja", role: "Chief Warden", phone: "1657", email: "cw1_svb@svnit.ac.in" },
+    { name: "Tagore Bhawan", warden: "Dr. Vivek Garg", role: "Chief Warden", phone: "1707", email: "cw1_tagore@svnit.ac.in" },
+    { name: "Atal Bihari Vajpayee Bhawan", warden: "Dr. Jitesh T. Chavda", role: "Chief Warden", phone: "1880", email: "jtc@amd.svnit.ac.in" },
+  ]);
+
+  const handleSaveWarden = async (e) => {
+    e.preventDefault();
+    const res = await fetch(`${apiUrl}/api/admin/update-warden?admin_id=${user.user_id}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(wForm)
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      setStatusMsg(`✅ ${data.message}`);
+      // Update local state table
+      setHostels(hostels.map(h => h.name === wForm.hostel_block ? { ...h, warden: wForm.full_name, phone: wForm.phone, email: wForm.email, role: wForm.authority_title } : h));
+      setEditWarden(null);
+    } else {
+      setStatusMsg(`❌ Error updating warden`);
+    }
+  };
 
   const filtered = selectedHostel === 'All' ? complaints : complaints.filter(c => c.hostel_block === selectedHostel);
   const getStatusColor = (status) => status === 'Completed' ? '#34d399' : status === 'Awaiting Confirmation' ? '#60a5fa' : '#fbbf24';
@@ -20,49 +46,74 @@ export default function WardenView({ user, complaints, apiUrl }) {
       
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <h2 style={{ margin: 0, color: '#f8fafc', fontSize: '20px' }}>🏛️ Campus Hostel Matrix & Warden Directory</h2>
-          <p style={{ margin: '4px 0 0 0', color: '#94a3b8', fontSize: '13px' }}>Click any hostel below to inspect localized complaints instantly.</p>
+          <h2 style={{ margin: 0, color: '#f8fafc', fontSize: '20px' }}>🏛️ SVNIT Council of Wardens Directory</h2>
+          <p style={{ margin: '4px 0 0 0', color: '#94a3b8', fontSize: '13px' }}>Manage 10 Campus Hostels & Inspect Complaints without Mess.</p>
         </div>
         <button onClick={() => window.open(`${apiUrl}/api/complaints/export-pdf?institute_id=${user.institute_id}&hostel_block=${selectedHostel}`, '_blank')} style={styles.pdfBtn}>
-          📥 Download PDF ({selectedHostel})
+          📥 Download PDF Report ({selectedHostel})
         </button>
       </div>
 
+      {statusMsg && <div style={{ background: '#1e293b', padding: '12px', borderRadius: '8px', color: '#34d399', marginBottom: '16px', fontWeight: '600' }}>{statusMsg}</div>}
+
+      {/* Edit Warden Modal / Form Popup */}
+      {editWarden && (
+        <div style={{ background: '#0f172a', border: '2px solid #3b82f6', borderRadius: '16px', padding: '20px', marginBottom: '24px' }}>
+          <h3 style={{ margin: '0 0 12px 0', color: '#60a5fa' }}>✏️ Update Warden for {wForm.hostel_block}</h3>
+          <form onSubmit={handleSaveWarden} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px' }}>
+            <input type="text" placeholder="Warden User ID (e.g. W_NEHRU)" value={wForm.user_id} onChange={e => setWForm({...wForm, user_id: e.target.value})} required style={styles.input} />
+            <input type="text" placeholder="New Warden Full Name" value={wForm.full_name} onChange={e => setWForm({...wForm, full_name: e.target.value})} required style={styles.input} />
+            <input type="text" placeholder="Phone / Ext" value={wForm.phone} onChange={e => setWForm({...wForm, phone: e.target.value})} required style={styles.input} />
+            <input type="email" placeholder="Email" value={wForm.email} onChange={e => setWForm({...wForm, email: e.target.value})} required style={styles.input} />
+            <div style={{ display: 'flex', gap: '10px', gridColumn: '1 / -1' }}>
+              <button type="submit" style={styles.saveBtn}>Save & Update Warden</button>
+              <button type="button" onClick={() => setEditWarden(null)} style={styles.cancelBtn}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* Hostel Directory Table */}
       <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', padding: '20px', marginBottom: '24px', overflowX: 'auto' }}>
-        <h3 style={{ margin: '0 0 14px 0', color: '#f8fafc', fontSize: '15px' }}>Hostel Blocks & Assigned Wardens</h3>
+        <h3 style={{ margin: '0 0 14px 0', color: '#f8fafc', fontSize: '15px' }}>Official Hostel Blocks & Wardens Directory</h3>
         <table style={styles.table}>
           <thead>
             <tr>
-              <th style={styles.th}>Hostel Block</th>
-              <th style={styles.th}>Warden In-Charge</th>
-              <th style={styles.th}>Contact</th>
+              <th style={styles.th}>Hostel Name</th>
+              <th style={styles.th}>Warden / Chief Warden</th>
+              <th style={styles.th}>Contact / Ext</th>
               <th style={styles.th}>Active Issues</th>
-              <th style={styles.th}>Action</th>
+              <th style={styles.th}>Actions</th>
             </tr>
           </thead>
           <tbody>
-            <tr style={{ background: selectedHostel === 'All' ? '#1e293b' : 'transparent', cursor: 'pointer' }} onClick={() => setSelectedHostel('All')}>
-              <td style={styles.td}><strong>🌟 All Campus Hostels</strong></td>
-              <td style={styles.td}>Dean Office / Chief Warden</td>
-              <td style={styles.td}>9876543222</td>
+            <tr style={{ background: selectedHostel === 'All' ? '#1e293b' : 'transparent' }}>
+              <td style={styles.td}><strong>🌟 All Hostels Combined</strong></td>
+              <td style={styles.td}>Dean Office / Council of Wardens</td>
+              <td style={styles.td}>0261-2201528</td>
               <td style={styles.td}><span style={{ color: '#38bdf8', fontWeight: 'bold' }}>{complaints.filter(c => c.status !== 'Completed').length}</span></td>
-              <td style={styles.td}><button style={styles.filterBtn}>View All</button></td>
+              <td style={styles.td}><button onClick={() => setSelectedHostel('All')} style={styles.filterBtn}>View All</button></td>
             </tr>
-            {hostels.map((h, i) => (
-              <tr key={i} style={{ background: selectedHostel === h.name ? '#1e293b' : 'transparent', cursor: 'pointer' }} onClick={() => setSelectedHostel(h.name)}>
-                <td style={styles.td}><strong>{h.name}</strong></td>
-                <td style={styles.td}>{h.warden}</td>
-                <td style={styles.td}>{h.phone}</td>
-                <td style={styles.td}><span style={{ color: h.activeIssues > 0 ? '#fbbf24' : '#34d399', fontWeight: 'bold' }}>{h.activeIssues}</span></td>
-                <td style={styles.td}><button style={styles.filterBtn}>Inspect Hostel</button></td>
-              </tr>
-            ))}
+            {hostels.map((h, i) => {
+              const activeCount = complaints.filter(c => c.hostel_block === h.name && c.status !== 'Completed').length;
+              return (
+                <tr key={i} style={{ background: selectedHostel === h.name ? '#1e293b' : 'transparent' }}>
+                  <td style={styles.td}><strong>{h.name}</strong></td>
+                  <td style={styles.td}>{h.warden} <span style={{fontSize:'11px', color:'#94a3b8'}}>({h.role})</span></td>
+                  <td style={styles.td}>{h.phone}</td>
+                  <td style={styles.td}><span style={{ color: activeCount > 0 ? '#fbbf24' : '#34d399', fontWeight: 'bold' }}>{activeCount}</span></td>
+                  <td style={styles.td}>
+                    <button onClick={() => setSelectedHostel(h.name)} style={{...styles.filterBtn, marginRight: '6px'}}>Inspect</button>
+                    <button onClick={() => { setWForm({...wForm, hostel_block: h.name, full_name: h.warden, phone: h.phone, email: h.email}); setEditWarden(true); }} style={styles.editBtn}>✏️ Change</button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
 
-      {/* Complaints for Selected Hostel */}
+      {/* Filtered Complaints */}
       <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', padding: '20px' }}>
         <h3 style={{ margin: '0 0 14px 0', color: '#f8fafc', fontSize: '15px' }}>
           Grievance Register — <span style={{ color: '#38bdf8' }}>{selectedHostel}</span> ({filtered.length})
@@ -70,7 +121,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {filtered.length === 0 ? (
-            <p style={{ color: '#64748b', textAlign: 'center', padding: '20px' }}>No grievances found for {selectedHostel}.</p>
+            <p style={{ color: '#64748b', textAlign: 'center', padding: '20px' }}>No active grievances for {selectedHostel}.</p>
           ) : (
             filtered.map((c) => (
               <div key={c.ticket_id} style={{ background: '#030712', border: '1px solid #1e293b', borderLeft: `4px solid ${getStatusColor(c.status)}`, borderRadius: '12px', padding: '14px' }}>
@@ -100,5 +151,9 @@ const styles = {
   table: { width: '100%', borderCollapse: 'collapse', textAlign: 'left' },
   th: { padding: '12px', borderBottom: '1px solid #1e293b', color: '#64748b', fontSize: '12px', textTransform: 'uppercase' },
   td: { padding: '12px', color: '#e2e8f0', fontSize: '13px', borderBottom: '1px solid #1e293b' },
-  filterBtn: { background: '#1e293b', color: '#38bdf8', border: '1px solid #334155', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' }
+  filterBtn: { background: '#1e293b', color: '#38bdf8', border: '1px solid #334155', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' },
+  editBtn: { background: 'rgba(59, 130, 246, 0.2)', color: '#60a5fa', border: '1px solid #3b82f6', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' },
+  input: { background: '#030712', border: '1px solid #334155', borderRadius: '8px', padding: '10px', color: '#fff', fontSize: '13px' },
+  saveBtn: { background: '#10b981', color: '#fff', border: 'none', padding: '10px 16px', borderRadius: '8px', fontWeight: '700', cursor: 'pointer' },
+  cancelBtn: { background: '#334155', color: '#fff', border: 'none', padding: '10px 16px', borderRadius: '8px', fontWeight: '700', cursor: 'pointer' }
 };

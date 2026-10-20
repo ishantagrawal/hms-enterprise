@@ -8,7 +8,7 @@ import datetime
 import requests
 import re
 
-app = FastAPI(title="HMS Enterprise - Multi-Tenant Campus Engine")
+app = FastAPI(title="HMS Enterprise - SVNIT Campus Engine")
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,7 +23,11 @@ TENANTS = {
         "name": "Sardar Vallabhbhai National Institute of Technology, Surat",
         "short_name": "SVNIT Surat",
         "logo_url": "https://upload.wikimedia.org/wikipedia/en/1/1b/NIT_Surat_Logo.svg",
-        "hostels": ["Gajjar Bhawan", "Bhabha Bhawan", "Swami Vivekananda Bhawan", "Mother Teresa Bhawan"],
+        "hostels": [
+            "Bhabha Bhawan", "Gajjar Bhawan", "Mother Teresa Bhawan",
+            "Narmad Bhawan (Guest House)", "Nehru Bhawan", "Raman Bhawan",
+            "Sarabhai Bhawan", "Swami Vivekananda Bhawan", "Tagore Bhawan", "Atal Bihari Vajpayee Bhawan"
+        ],
         "modules": {"complaints": True}
     }
 }
@@ -36,8 +40,8 @@ CATEGORY_ROUTING = {
     "Wi-Fi & Internet": "Central Computer Center (CCC)"
 }
 
+# Official SVNIT Council of Wardens Database
 USERS_DB = [
-    # GLOBAL SAAS FOUNDER (Platform Owner - Sees ALL Colleges & All Complaints)
     {
         "user_id": "FOUNDER", "password": "IshantFounder@2026!",
         "full_name": "Ishant Agrawal (HMS Founder)", "role": "PlatformOwner",
@@ -47,31 +51,52 @@ USERS_DB = [
     },
     {
         "user_id": "DEAN01", "password": "SvnitDean@2026!",
-        "full_name": "Dr. V. Singh (Dean SW)", "role": "Warden",
+        "full_name": "Prof. Sanjay R. Patel", "role": "Warden",
         "authority_title": "Dean of Student Welfare", "institute_id": "SVNIT",
         "hostel_block": "All", "floor": "-", "room": "Dean Office",
-        "phone": "9876543222", "email": "dosw@svnit.ac.in", "department": "All"
+        "phone": "0261-2201528", "email": "deansw@svnit.ac.in", "department": "All"
     },
     {
-        "user_id": "W01", "password": "123",
-        "full_name": "Dr. R. Patel (Warden)", "role": "Warden",
-        "authority_title": "Local Warden", "institute_id": "SVNIT",
+        "user_id": "CW_BHABHA", "password": "123",
+        "full_name": "Dr. Vikram P. Rathod", "role": "Warden",
+        "authority_title": "Chief Warden", "institute_id": "SVNIT",
+        "hostel_block": "Bhabha Bhawan", "floor": "Ground", "room": "Office",
+        "phone": "9876543210", "email": "cw1_bhabha@svnit.ac.in", "department": "All"
+    },
+    {
+        "user_id": "CW_GAJJAR", "password": "123",
+        "full_name": "Dr. Jogender Singh", "role": "Warden",
+        "authority_title": "Chief Warden", "institute_id": "SVNIT",
         "hostel_block": "Gajjar Bhawan", "floor": "Ground", "room": "Office",
-        "phone": "9876543210", "email": "warden@svnit.ac.in", "department": "All"
+        "phone": "9876543211", "email": "cw1_gajjar@svnit.ac.in", "department": "All"
+    },
+    {
+        "user_id": "CW_MTB", "password": "123",
+        "full_name": "Dr. Premlata Kumari", "role": "Warden",
+        "authority_title": "Chief Warden", "institute_id": "SVNIT",
+        "hostel_block": "Mother Teresa Bhawan", "floor": "Ground", "room": "Office",
+        "phone": "9876543212", "email": "cw1_mtb@svnit.ac.in", "department": "All"
     },
     {
         "user_id": "U26CE011", "password": "123",
         "full_name": "Ishant Agrawal", "role": "Student",
         "authority_title": "Student", "institute_id": "SVNIT",
         "hostel_block": "Gajjar Bhawan", "floor": "2nd Floor", "room": "B-204",
-        "phone": "9876543211", "email": "u26ce011@ced.svnit.ac.in", "department": "None"
+        "phone": "9876543213", "email": "u26ce011@ced.svnit.ac.in", "department": "None"
+    },
+    {
+        "user_id": "STAFF_ELEC", "password": "123",
+        "full_name": "Ramesh Kumar (JE Electrical)", "role": "DepartmentStaff",
+        "authority_title": "Department Staff", "institute_id": "SVNIT",
+        "hostel_block": "All", "floor": "-", "room": "-",
+        "phone": "9876543214", "email": "elec@svnit.ac.in", "department": "Electricity"
     }
 ]
 
 COMPLAINTS_DB = [
     {
         "id": 1, "ticket_id": "HMS-48291", "ccc_ticket_id": "CCC-839201", "institute_id": "SVNIT",
-        "student_id": "U26CE011", "student_name": "Ishant Agrawal", "phone": "9876543211",
+        "student_id": "U26CE011", "student_name": "Ishant Agrawal", "phone": "9876543213",
         "email": "u26ce011@ced.svnit.ac.in", "hostel_block": "Gajjar Bhawan", "floor": "2nd Floor",
         "room": "B-204", "category": "Wi-Fi & Internet", "routed_to": "Central Computer Center (CCC)",
         "summary": "LAN port not working in Room B-204",
@@ -83,7 +108,7 @@ COMPLAINTS_DB = [
 
 @app.get("/")
 def health_check():
-    return {"status": "HMS Enterprise Backend Live", "total_tenants": len(TENANTS), "total_users": len(USERS_DB)}
+    return {"status": "SVNIT HMS Backend Live", "total_users": len(USERS_DB)}
 
 class LoginReq(BaseModel):
     user_id: str
@@ -99,10 +124,8 @@ def login(req: LoginReq):
 
 @app.get("/api/complaints")
 def get_complaints(institute_id: str, role: str, user_id: str, department: Optional[str] = None, hostel_block: Optional[str] = None):
-    # If user is Platform Founder, return ALL complaints across ALL colleges!
     if role == "PlatformOwner" or user_id.upper() == "FOUNDER":
         return COMPLAINTS_DB
-
     scoped = [c for c in COMPLAINTS_DB if c["institute_id"] == institute_id]
     if role == "Student":
         return [c for c in scoped if c["student_id"].lower() == user_id.lower()]
@@ -149,74 +172,41 @@ def create_complaint(req: ComplaintCreate):
     COMPLAINTS_DB.insert(0, new_ticket)
     return {"success": True, "ticket": new_ticket}
 
-class BulkStudent(BaseModel):
+# ==========================================
+# WARDEN DYNAMIC UPDATE API FOR DEAN
+# ==========================================
+class WardenUpdateReq(BaseModel):
     user_id: str
     full_name: str
     hostel_block: str
-    floor: str
-    room: str
     phone: str
-    email: Optional[str] = None
+    email: str
+    authority_title: str # 'Chief Warden' or 'Local Warden'
 
-@app.post("/api/warden/bulk-upload")
-def bulk_upload(institute_id: str, students: List[BulkStudent]):
-    added = 0
-    for s in students:
-        uid = s.user_id.strip().upper()
-        if not any(u["user_id"].lower() == uid.lower() for u in USERS_DB):
-            USERS_DB.append({
-                "user_id": uid, "password": "123", "full_name": s.full_name.strip(),
-                "role": "Student", "authority_title": "Student", "institute_id": institute_id,
-                "hostel_block": s.hostel_block.strip(), "floor": s.floor.strip(), "room": s.room.strip(),
-                "phone": s.phone.strip(), "email": s.email or f"{uid.lower()}@svnit.ac.in", "department": "None"
-            })
-            added += 1
-    return {"success": True, "added": added}
+@app.post("/api/admin/update-warden")
+def update_warden(req: WardenUpdateReq, admin_id: str):
+    admin = next((u for u in USERS_DB if u["user_id"].lower() == admin_id.strip().lower()), None)
+    if not admin or admin["hostel_block"] != "All":
+        raise HTTPException(status_code=403, detail="Only Dean / Super Admin can update wardens")
+    
+    existing = next((u for u in USERS_DB if u["user_id"].lower() == req.user_id.strip().lower()), None)
+    if existing:
+        existing["full_name"] = req.full_name
+        existing["hostel_block"] = req.hostel_block
+        existing["phone"] = req.phone
+        existing["email"] = req.email
+        existing["authority_title"] = req.authority_title
+        return {"success": True, "message": f"Updated warden {req.user_id} successfully!"}
+    else:
+        USERS_DB.append({
+            "user_id": req.user_id.upper(), "password": "123",
+            "full_name": req.full_name, "role": "Warden",
+            "authority_title": req.authority_title, "institute_id": "SVNIT",
+            "hostel_block": req.hostel_block, "floor": "-", "room": "Office",
+            "phone": req.phone, "email": req.email, "department": "All"
+        })
+        return {"success": True, "message": f"Added new warden {req.user_id.upper()} successfully!"}
 
-class OnboardCollegeReq(BaseModel):
-    institute_id: str
-    institute_name: str
-    dean_user_id: str
-    dean_name: str
-    dean_password: str
-    dean_phone: str
-    dean_email: str
-
-@app.post("/api/founder/onboard-college")
-def onboard_college(req: OnboardCollegeReq, founder_id: str):
-    founder = next((u for u in USERS_DB if u["user_id"].lower() == founder_id.strip().lower()), None)
-    if not founder or founder.get("role") != "PlatformOwner":
-        raise HTTPException(status_code=403, detail="Unauthorized")
-    inst_code = req.institute_id.strip().upper()
-    dean_uid = req.dean_user_id.strip().upper()
-    TENANTS[inst_code] = {
-        "institute_id": inst_code, "name": req.institute_name.strip(), "short_name": inst_code,
-        "logo_url": "", "hostels": ["Hostel Block A", "Hostel Block B"], "modules": {"complaints": True}
-    }
-    USERS_DB.append({
-        "user_id": dean_uid, "password": req.dean_password.strip(),
-        "full_name": f"{req.dean_name.strip()} (Dean SW)", "role": "Warden",
-        "authority_title": "Dean of Student Welfare", "institute_id": inst_code,
-        "hostel_block": "All", "floor": "-", "room": "Dean Office",
-        "phone": req.dean_phone.strip(), "email": req.dean_email.strip(), "department": "All"
-    })
-    return {"success": True, "message": f"Onboarded {req.institute_name}! Dean login: {dean_uid}"}
-
-@app.get("/api/complaints/export-pdf")
-def export_pdf_html(institute_id: str, hostel_block: Optional[str] = "All"):
-    scoped = COMPLAINTS_DB if institute_id == "ALL" else [c for c in COMPLAINTS_DB if c["institute_id"] == institute_id]
-    html_content = f"""
-    <html><head><title>HMS Report</title><style>
-    body {{ font-family: system-ui, sans-serif; padding: 20px; }}
-    table {{ width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 12px; }}
-    th, td {{ border: 1px solid #cbd5e1; padding: 8px; text-align: left; }}
-    th {{ background: #f1f5f9; }}
-    </style></head><body>
-    <h2>🏛️ HMS Enterprise - Audit Report</h2>
-    <p><b>Scope:</b> {institute_id} | <b>Generated:</b> {datetime.datetime.now().strftime('%d %b %Y, %I:%M %p')}</p>
-    <table><tr><th>Ticket</th><th>Institute</th><th>Category</th><th>Student</th><th>Summary</th><th>Status</th></tr>
-    """
-    for c in scoped:
-        html_content += f"<tr><td><b>{c['ticket_id']}</b></td><td>{c['institute_id']}</td><td>{c['category']}</td><td>{c['student_name']}</td><td>{c['summary']}</td><td>{c['status']}</td></tr>"
-    html_content += "</table><script>window.onload = function() { window.print(); }</script></body></html>"
-    return Response(content=html_content, media_type="text/html")
+@app.get("/api/admin/wardens")
+def get_wardens(institute_id: str):
+    return [u for u in USERS_DB if u["institute_id"] == institute_id and u["role"] == "Warden" and u["user_id"] != "DEAN01"]
