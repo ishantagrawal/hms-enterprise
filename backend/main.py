@@ -629,3 +629,42 @@ def get_audit_summary():
         "key_cons": ["Water dispenser ran out early"],
         "recommendation": "Approve winter fest budget with bonus allocation."
     }
+class StudentChangePassReq(BaseModel):
+    student_id: str
+    old_password: str
+    new_password: str
+
+# 1. Student Self-Change Password Endpoint
+@app.post("/api/student/change-password")
+def student_change_password(req: StudentChangePassReq):
+    student = next((u for u in USERS_DB if u["user_id"].upper() == req.student_id.strip().upper()), None)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found.")
+    
+    if student["password"] != req.old_password.strip():
+        raise HTTPException(status_code=400, detail="Current password does not match.")
+    
+    if len(req.new_password.strip()) < 4:
+        raise HTTPException(status_code=400, detail="New password must be at least 4 characters.")
+        
+    student["password"] = req.new_password.strip()
+    return {"success": True, "message": "Password changed successfully! Keep it safe."}
+
+# 2. Warden Reset Student Password Endpoint (Warden can only reset students of their own hostel)
+@app.post("/api/warden/reset-student-password")
+def warden_reset_student(req: PasswordResetReq, warden_id: str = Query(...)):
+    warden = next((u for u in USERS_DB if u["user_id"].upper() == warden_id.strip().upper()), None)
+    if not warden or warden["role"] not in ["Warden", "Dean", "Founder"]:
+        raise HTTPException(status_code=403, detail="Unauthorized operator.")
+
+    target = next((u for u in USERS_DB if u["user_id"].upper() == req.target_user_id.strip().upper()), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Student Roll No not found.")
+        
+    # Security Check: Normal Warden can only reset residents of their own hostel
+    if warden["role"] == "Warden" and warden["hostel_block"] != "All":
+        if target.get("hostel_block") != warden["hostel_block"]:
+            raise HTTPException(status_code=403, detail="You can only reset passwords for students in your assigned hostel.")
+
+    target["password"] = req.new_password.strip()
+    return {"success": True, "message": f"Password reset for {target['full_name']} ({target['user_id']})"}

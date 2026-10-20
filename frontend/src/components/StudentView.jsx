@@ -690,3 +690,33 @@ const styles = {
   navLabel: { fontSize: '10px', fontWeight: '600' },
   badgeCount: { position: 'absolute', top: '-2px', right: '4px', background: '#8b5cf6', color: '#fff', fontSize: '9px', fontWeight: '800', padding: '1px 5px', borderRadius: '999px' }
 };
+// State variables inside StudentView component:
+const [oldPass, setOldPass] = useState('');
+const [newPass, setNewPass] = useState('');
+const [passMsg, setPassMsg] = useState(null);
+
+const handleSelfPasswordChange = async (e) => {
+  e.preventDefault();
+  setPassMsg(null);
+  try {
+    const res = await fetch(`${apiUrl}/api/student/change-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        student_id: user.user_id,
+        old_password: oldPass,
+        new_password: newPass
+      })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      setPassMsg({ type: 'success', text: '✅ Password updated successfully!' });
+      setOldPass('');
+      setNewPass('');
+    } else {
+      setPassMsg({ type: 'error', text: `❌ ${data.detail || 'Failed'}` });
+    }
+  } catch {
+    setPassMsg({ type: 'error', text: 'Server connection error.' });
+  }
+};

@@ -18,7 +18,12 @@ export default function WardenView({ user, complaints, apiUrl }) {
   const [calYear, setCalYear] = useState(2026);
   const [calMonth, setCalMonth] = useState(9);
 
+  // Password & Student Recovery States
   const [newPassword, setNewPassword] = useState('');
+  const [studentRollInput, setStudentRollInput] = useState('');
+  const [studentNewPassInput, setStudentNewPassInput] = useState('');
+
+  // PDF Report States
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [pdfScope, setPdfScope] = useState(isDean ? 'All' : user.hostel_block);
@@ -89,6 +94,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
     window.open(`${apiUrl}/api/complaints/export-pdf?${query.toString()}`, '_blank');
   };
 
+  // Dean resets Warden Password
   const handlePasswordReset = async (e) => {
     e.preventDefault();
     const res = await fetch(`${apiUrl}/api/dean/reset-password?admin_id=${user.user_id}`, {
@@ -106,6 +112,32 @@ export default function WardenView({ user, complaints, apiUrl }) {
     }
   };
 
+  // 3 WALA CODE: Warden recovers/resets resident student password
+  const handleWardenResetStudent = async (e) => {
+    e.preventDefault();
+    if (!studentRollInput.trim() || !studentNewPassInput.trim()) return;
+    try {
+      const res = await fetch(`${apiUrl}/api/warden/reset-student-password?warden_id=${user.user_id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target_user_id: studentRollInput.trim().toUpperCase(),
+          new_password: studentNewPassInput.trim()
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setStatusMsg(`✅ ${data.message}`);
+        setStudentRollInput('');
+        setStudentNewPassInput('');
+      } else {
+        setStatusMsg(`❌ ${data.detail || 'Could not reset student password'}`);
+      }
+    } catch {
+      setStatusMsg('❌ Server connection error.');
+    }
+  };
+
   const changeMonth = (offset) => {
     let newMonth = calMonth + offset;
     let newYear = calYear;
@@ -114,6 +146,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
       newYear -= 1;
     } else if (newMonth > 11) {
       newMonth = 0;
+      newYear += 1;
     }
     setCalMonth(newMonth);
     setCalYear(newYear);
@@ -154,6 +187,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
+      {/* TAB 1: HOSTELS (DEAN VIEW) */}
       {isDean && activeTab === 'hostels' && (
         <div style={styles.tabContent}>
           <div style={styles.listContainer}>
@@ -194,6 +228,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
+      {/* TAB 2: GRIEVANCES */}
       {activeTab === 'complaints' && (
         <div style={styles.tabContent}>
           {selectedHostel && (
@@ -230,6 +265,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
+      {/* TAB 3: CLUBS HUB */}
       {activeTab === 'clubshub' && (
         <div style={styles.tabContent}>
           <div style={styles.subTabBar}>
@@ -396,6 +432,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
+      {/* TAB 4: PDF REPORT */}
       {activeTab === 'reports' && (
         <div style={styles.tabContent}>
           <div style={styles.sheetCard}>
@@ -424,10 +461,44 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
+      {/* TAB 5: PASSWORDS & STUDENT RESET */}
       {activeTab === 'settings' && (
         <div style={styles.tabContent}>
+          {/* Card: Reset Student Password (For both Dean & Warden) */}
+          <div style={{ ...styles.sheetCard, marginBottom: '16px' }}>
+            <h3 style={{ margin: '0 0 6px 0', color: '#f8fafc', fontSize: '16px' }}>
+              🔑 Reset Resident Student Password
+            </h3>
+            <p style={{ margin: '0 0 14px 0', color: '#94a3b8', fontSize: '12px' }}>
+              {isDean 
+                ? 'Dean can reset any student resident password across all hostels.'
+                : `Warden of ${user.hostel_block} can recover or reset passwords for residents.`}
+            </p>
+            <form onSubmit={handleWardenResetStudent} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <input
+                type="text"
+                placeholder="Student Roll No (e.g. U26CE011)"
+                value={studentRollInput}
+                onChange={(e) => setStudentRollInput(e.target.value)}
+                required
+                style={styles.input}
+              />
+              <input
+                type="text"
+                placeholder="New Temporary Password (or Default DOB: DDMMYYYY)"
+                value={studentNewPassInput}
+                onChange={(e) => setStudentNewPassInput(e.target.value)}
+                required
+                style={styles.input}
+              />
+              <button type="submit" style={styles.primaryBtn}>Save & Reset Student Password</button>
+            </form>
+          </div>
+
+          {/* Dean Hostel Warden Passwords Grid */}
           {isDean ? (
             <div style={styles.listContainer}>
+              <div style={styles.sectionHeader}>🏢 Campus Hostels Warden Accounts</div>
               {svnitHostels.map((h) => (
                 <div key={h.code} style={styles.chatRow}>
                   <div style={styles.rowAvatar}>🔑</div>
@@ -446,13 +517,14 @@ export default function WardenView({ user, complaints, apiUrl }) {
               <h3 style={{ margin: '0 0 6px 0', color: '#f8fafc' }}>{user.full_name}</h3>
               <p style={{ margin: '0 0 14px 0', color: '#c084fc', fontSize: '13px' }}>ID: {user.user_id}</p>
               <div style={styles.detailBox}>
-                <div><strong>Hostel Assigned:</strong> {user.hostel_block}</div>
+                <div><strong>Assigned Hostel Block:</strong> {user.hostel_block}</div>
               </div>
             </div>
           )}
         </div>
       )}
 
+      {/* MODALS */}
       {selectedClub && (
         <div style={styles.modalOverlay} onClick={() => setSelectedClub(null)}>
           <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
@@ -634,6 +706,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
+      {/* BOTTOM NAVIGATION */}
       <nav style={styles.bottomNav}>
         {isDean && (
           <button onClick={() => setActiveTab('hostels')} style={styles.navItem}>
@@ -665,11 +738,9 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </button>
         <button onClick={() => setActiveTab('settings')} style={styles.navItem}>
           <div style={{ ...styles.iconPill, background: activeTab === 'settings' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>
-            <span style={{ fontSize: '18px' }}>{isDean ? '🔑' : '👤'}</span>
+            <span style={{ fontSize: '18px' }}>🔑</span>
           </div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'settings' ? '#c084fc' : '#94a3b8' }}>
-            {isDean ? 'Passwords' : 'Profile'}
-          </span>
+          <span style={{ ...styles.navLabel, color: activeTab === 'settings' ? '#c084fc' : '#94a3b8' }}>Passwords</span>
         </button>
       </nav>
     </div>
