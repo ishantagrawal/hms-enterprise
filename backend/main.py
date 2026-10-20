@@ -2,11 +2,11 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from typing import Optional, List, Dict
+from typing import Optional, List
 from datetime import datetime
 import random
 
-app = FastAPI(title="SVNIT HMS & Multi-NIT Campus API")
+app = FastAPI(title="HMS - National Institute of Technology")
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,7 +22,7 @@ app.add_middleware(
 NIT_TENANTS_DB = [
     {
         "institute_id": "SVNIT",
-        "name": "Sardar Vallabhbhai National Institute of Technology (Surat)",
+        "name": "Sardar Vallabhbhai National Institute of Technology",
         "city": "Surat, Gujarat",
         "modules": {
             "complaints": True,
@@ -44,7 +44,7 @@ NIT_TENANTS_DB = [
         "city": "Tiruchirappalli, Tamil Nadu",
         "modules": {
             "complaints": True,
-            "eventradar": False,
+            "eventradar": True,
             "attendance": True,
             "leave_pass": True,
             "clubs_hub": False,
@@ -54,13 +54,13 @@ NIT_TENANTS_DB = [
     },
     {
         "institute_id": "NITK",
-        "name": "National Institute of Technology Karnataka (Surathkal)",
+        "name": "National Institute of Technology Karnataka",
         "city": "Surathkal, Karnataka",
         "modules": {
             "complaints": True,
             "eventradar": True,
             "attendance": True,
-            "leave_pass": False,
+            "leave_pass": True,
             "clubs_hub": True,
             "ai_audit": True
         },
@@ -72,10 +72,10 @@ NIT_TENANTS_DB = [
         "city": "Warangal, Telangana",
         "modules": {
             "complaints": True,
-            "eventradar": True,
+            "eventradar": False,
             "attendance": True,
             "leave_pass": True,
-            "clubs_hub": True,
+            "clubs_hub": False,
             "ai_audit": False
         },
         "hostels": ["1.8k Ultra Mega Hostel", "BTech Block 1", "Priyadarshini Hall", "Sarojini Hall"]
@@ -86,83 +86,95 @@ NIT_TENANTS_DB = [
 # 2. MASTER USERS DATABASE
 # =========================================================
 USERS_DB = [
-    # FOUNDER / MULTI-NIT SUPER ADMIN (TOP OF HIERARCHY)
+    # FOUNDER (TOP OF HIERARCHY)
     {
         "user_id": "FOUNDER", "password": "123", "full_name": "Chief Architect & Founder",
         "role": "Founder", "authority_title": "Multi-NIT System Architect & Super Admin", "institute_id": "GLOBAL",
         "hostel_block": "All Campuses", "floor": "-", "room": "HQ Core",
-        "phone": "+91 9876543210", "email": "founder@nit-hms.in", "department": "Multi-Tenant Administration"
+        "phone": "+91 9876543210", "email": "founder@nit-hms.in", "department": "Global Administration",
+        "dob": "01012000"
     },
     # DEAN (SVNIT)
     {
         "user_id": "DEAN", "password": "123", "full_name": "Prof. S. R. Patel (Dean SW)",
         "role": "Dean", "authority_title": "Dean Student Welfare", "institute_id": "SVNIT",
         "hostel_block": "All", "floor": "-", "room": "Admin Block",
-        "phone": "0261-2201500", "email": "dean_sw@svnit.ac.in", "department": "Administration"
+        "phone": "0261-2201500", "email": "dean_sw@svnit.ac.in", "department": "Administration",
+        "dob": "01011975"
     },
-    # STUDENTS
+    # STUDENTS (Default password can be 123 or DOB DDMMYYYY)
     {
         "user_id": "U26CE011", "password": "123", "full_name": "Ishant Agrawal",
         "role": "Student", "authority_title": "Verified Resident", "institute_id": "SVNIT",
         "hostel_block": "Gajjar Bhawan", "floor": "2nd Floor", "room": "B-204",
-        "phone": "+91 9876543210", "email": "u26ce011@ced.svnit.ac.in", "department": "Civil Engineering"
+        "phone": "+91 9876543210", "email": "u26ce011@ced.svnit.ac.in", "department": "Civil Engineering",
+        "dob": "10072007"
     },
     {
         "user_id": "U26CS012", "password": "123", "full_name": "Aarav Sharma",
         "role": "Student", "authority_title": "Verified Resident", "institute_id": "SVNIT",
         "hostel_block": "Bhabha Bhawan", "floor": "3rd Floor", "room": "A-302",
-        "phone": "+91 9876543211", "email": "u26cs012@coed.svnit.ac.in", "department": "Computer Engineering"
+        "phone": "+91 9876543211", "email": "u26cs012@coed.svnit.ac.in", "department": "Computer Engineering",
+        "dob": "15082006"
     },
     # CLUB COORDINATORS
     {
         "user_id": "ACM", "password": "123", "full_name": "ACM SVNIT Chapter",
         "role": "ClubOrganizer", "authority_title": "Coordinator (ACM)", "institute_id": "SVNIT",
         "hostel_block": "All", "floor": "-", "room": "SAC Club Room 1",
-        "phone": "+91 9811122233", "email": "acm@svnit.ac.in", "department": "Technical Society"
+        "phone": "+91 9811122233", "email": "acm@svnit.ac.in", "department": "Technical Society",
+        "dob": "01012000"
     },
     {
         "user_id": "GDSC", "password": "123", "full_name": "Google Developer Student Club",
         "role": "ClubOrganizer", "authority_title": "Coordinator (GDSC)", "institute_id": "SVNIT",
         "hostel_block": "All", "floor": "-", "room": "SAC Club Room 2",
-        "phone": "+91 9811122244", "email": "gdsc@svnit.ac.in", "department": "Technical Society"
+        "phone": "+91 9811122244", "email": "gdsc@svnit.ac.in", "department": "Technical Society",
+        "dob": "01012000"
     },
     {
         "user_id": "CHRD", "password": "123", "full_name": "Centre for Human Resource Dev (CHRD)",
         "role": "ClubOrganizer", "authority_title": "Coordinator (CHRD)", "institute_id": "SVNIT",
         "hostel_block": "All", "floor": "-", "room": "SAC Cultural Wing",
-        "phone": "+91 9811122255", "email": "chrd@svnit.ac.in", "department": "Cultural Society"
+        "phone": "+91 9811122255", "email": "chrd@svnit.ac.in", "department": "Cultural Society",
+        "dob": "01012000"
     },
     # WARDENS
     {
         "user_id": "CW_GAJJAR", "password": "123", "full_name": "Dr. M. K. Verma",
         "role": "Warden", "authority_title": "Chief Warden (Gajjar Bhawan)", "institute_id": "SVNIT",
         "hostel_block": "Gajjar Bhawan", "floor": "Ground", "room": "CW Office",
-        "phone": "0261-2201659", "email": "cw_gajjar@svnit.ac.in", "department": "Hostel Office"
+        "phone": "0261-2201659", "email": "cw_gajjar@svnit.ac.in", "department": "Hostel Office",
+        "dob": "01011980"
     },
     {
         "user_id": "W_GAJJAR", "password": "123", "full_name": "Dr. P. K. Shah",
         "role": "Warden", "authority_title": "Warden (Gajjar Bhawan)", "institute_id": "SVNIT",
         "hostel_block": "Gajjar Bhawan", "floor": "Ground", "room": "Warden Office",
-        "phone": "0261-2201659", "email": "w_gajjar@svnit.ac.in", "department": "Hostel Office"
+        "phone": "0261-2201659", "email": "w_gajjar@svnit.ac.in", "department": "Hostel Office",
+        "dob": "01011982"
     },
     {
         "user_id": "CW_BHABHA", "password": "123", "full_name": "Dr. A. N. Joshi",
         "role": "Warden", "authority_title": "Chief Warden (Bhabha Bhawan)", "institute_id": "SVNIT",
         "hostel_block": "Bhabha Bhawan", "floor": "Ground", "room": "CW Office",
-        "phone": "0261-2201790", "email": "cw_bhabha@svnit.ac.in", "department": "Hostel Office"
+        "phone": "0261-2201790", "email": "cw_bhabha@svnit.ac.in", "department": "Hostel Office",
+        "dob": "01011979"
     },
     # MAINTENANCE STAFF
     {
         "user_id": "STAFF_ELEC", "password": "123", "full_name": "Rameshbhai Patel (Electrical)",
         "role": "Staff", "authority_title": "Senior Electrician", "institute_id": "SVNIT",
         "hostel_block": "All", "floor": "-", "room": "Estate Section",
-        "phone": "+91 9900112233", "email": "elec@svnit.ac.in", "department": "Electricity"
+        "phone": "+91 9900112233", "email": "elec@svnit.ac.in", "department": "Electricity",
+        "dob": "01011985"
     },
     {
         "user_id": "STAFF_PLUMB", "password": "123", "full_name": "Sureshbhai Solanki (Plumbing)",
         "role": "Staff", "authority_title": "Head Plumber", "institute_id": "SVNIT",
         "hostel_block": "All", "floor": "-", "room": "Estate Section",
-        "phone": "+91 9900112244", "email": "plumb@svnit.ac.in", "department": "Plumbing"
+        "phone": "+91 9900112244", "email": "plumb@svnit.ac.in", "department": "Plumbing",
+        "dob": "01011986"
     }
 ]
 
@@ -176,7 +188,7 @@ CLUBS_DB = [
         "mission": "Advancing computing as a science and profession through hackathons, CP contests, and research workshops.",
         "faculty_advisor": "Dr. R. K. Gupta (Comp. Engg.)",
         "head_coordinator": "Aarav Sharma",
-        "extra_dean_info": "Annual Budget Approved: ₹1,80,000 | Lab Equipment Inventory Verified.",
+        "extra_dean_info": "Annual Budget Approved: ₹1,80,000 | Lab Equipment Inventory Verified | 3 National Hackathon Wins.",
         "members": [
             {"name": "Aarav Sharma", "roll": "U23CS004", "position": "Chairperson", "phone": "+91 9811100001"},
             {"name": "Riya Mehta", "roll": "U23CS045", "position": "Vice-Chairperson", "phone": "+91 9811100002"},
@@ -187,10 +199,10 @@ CLUBS_DB = [
     {
         "club_id": "GDSC",
         "name": "Google Developer Student Club (GDSC)",
-        "mission": "Bridging the gap between theory and practice using Google Cloud, Android, and AI.",
+        "mission": "Bridging the gap between theory and practice using Google Cloud, Android, Flutter, and AI/ML technologies.",
         "faculty_advisor": "Dr. M. A. Zaveri (Comp. Engg.)",
         "head_coordinator": "Devansh Joshi",
-        "extra_dean_info": "Google Cloud Study Jams completed with 240+ students.",
+        "extra_dean_info": "Google Cloud Study Jams completed with 240+ certified students.",
         "members": [
             {"name": "Devansh Joshi", "roll": "U23CS011", "position": "GDSC Lead", "phone": "+91 9822200001"},
             {"name": "Ananya Iyer", "roll": "U23EC032", "position": "AI/ML Lead", "phone": "+91 9822200002"}
@@ -199,12 +211,13 @@ CLUBS_DB = [
     {
         "club_id": "CHRD",
         "name": "Centre for Human Resource Development (CHRD)",
-        "mission": "Nurturing music, dance, drama, fine arts, and literary culture.",
+        "mission": "Nurturing music, dance, drama, fine arts, and literary culture across the student community.",
         "faculty_advisor": "Dr. S. N. Sharma (Electrical)",
         "head_coordinator": "Kashish Verma",
-        "extra_dean_info": "Sparsh Cultural Night concluded with 1,200+ attendees.",
+        "extra_dean_info": "Cultural Night concluded with 1,200+ attendees. Sound system audit cleared.",
         "members": [
             {"name": "Kashish Verma", "roll": "U23EE018", "position": "Cultural Secretary", "phone": "+91 9833300001"},
+            {"name": "Yashika Jain", "roll": "U24CE029", "position": "Joint Secretary", "phone": "+91 9833300002"},
             {"name": "Ishant Agrawal", "roll": "U26CE011", "position": "Event Coordinator", "phone": "+91 9876543210"}
         ]
     }
@@ -225,7 +238,7 @@ EVENTS_DB = [
         "status": "Approved",
         "submitted_by": "Aarav Sharma",
         "type": "Upcoming",
-        "description": "SVNIT's biggest annual 8-hour competitive coding & AI hackathon! ₹50,000 in prizes.",
+        "description": "8-hour competitive coding & AI hackathon! Bring your laptops, build prototypes, and compete for ₹50,000 in prizes.",
         "image_url": "https://images.unsplash.com/photo-1504384308090-c894fdcc538d?w=800&q=80",
         "registration_link": "https://docs.google.com/forms",
         "rsvps": ["U26CE011", "U26CS012"],
@@ -242,7 +255,7 @@ EVENTS_DB = [
         "status": "Pending Dean Approval",
         "submitted_by": "Devansh Joshi",
         "type": "Upcoming",
-        "description": "Hands-on workshop on Gemini API, Vertex AI, and Kubernetes deployment.",
+        "description": "Hands-on workshop on Gemini API, Vertex AI, and cloud deployment.",
         "image_url": "https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=800&q=80",
         "registration_link": "https://docs.google.com/forms",
         "rsvps": ["U26CS012"],
@@ -252,14 +265,14 @@ EVENTS_DB = [
         "event_id": "EVT-100",
         "club_id": "CHRD",
         "title": "Garba & Acoustic Eve 2026",
-        "date": "2026-10-19",
+        "date": "2026-10-20",
         "start_time": "18:30",
         "end_time": "22:00",
         "venue": "SAC Amphitheatre",
         "status": "Completed",
         "submitted_by": "Kashish Verma",
         "type": "Completed",
-        "description": "Cultural evening celebrating unplugged music. 1-day feedback window active!",
+        "description": "Cultural evening celebrating unplugged music performances.",
         "image_url": "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80",
         "registration_link": "",
         "rsvps": ["U26CE011", "U26CS012"],
@@ -270,15 +283,15 @@ EVENTS_DB = [
             "total_attendees": 850,
             "average_rating": 4.9,
             "sentiment": "Extremely Positive",
-            "key_pros": ["Vibrant acoustics and lighting", "Zero discipline issues"],
+            "key_pros": ["Vibrant acoustic setlist and lighting", "Zero discipline issues"],
             "key_cons": ["Water dispenser ran out by 9:30 PM"],
-            "recommendation": "Approve winter fest budget with bonus allocation."
+            "recommendation": "Approve winter fest budget with 15% bonus allocation."
         }
     }
 ]
 
 # =========================================================
-# 5. MASTER COMPLAINTS DATABASE
+# 5. MASTER COMPLAINTS, LEAVE & ATTENDANCE DATABASES
 # =========================================================
 COMPLAINTS_DB = [
     {
@@ -311,6 +324,36 @@ COMPLAINTS_DB = [
     }
 ]
 
+LEAVES_DB = [
+    {
+        "leave_id": "LVE-301",
+        "student_id": "U26CE011",
+        "student_name": "Ishant Agrawal",
+        "hostel_block": "Gajjar Bhawan",
+        "room": "B-204",
+        "destination": "Home (Kota / Mathura)",
+        "from_date": "2026-10-24",
+        "to_date": "2026-10-27",
+        "reason": "Family function and weekend visit",
+        "parent_phone": "+91 9876500001",
+        "status": "Approved",
+        "created_at": "2026-10-20"
+    }
+]
+
+ATTENDANCE_DB = [
+    {
+        "id": "ATT-1",
+        "student_id": "U26CE011",
+        "student_name": "Ishant Agrawal",
+        "hostel_block": "Gajjar Bhawan",
+        "room": "B-204",
+        "date": "2026-10-20",
+        "time": "10:15 PM",
+        "status": "Present (In Hostel)"
+    }
+]
+
 # =========================================================
 # 6. PYDANTIC MODELS
 # =========================================================
@@ -335,6 +378,26 @@ class StaffResolveReq(BaseModel):
 class PasswordResetReq(BaseModel):
     target_user_id: str
     new_password: str
+
+class StudentChangePassReq(BaseModel):
+    student_id: str
+    old_password: str
+    new_password: str
+
+class LeaveCreateReq(BaseModel):
+    student_id: str
+    destination: str
+    from_date: str
+    to_date: str
+    reason: str
+    parent_phone: str
+
+class LeaveActionReq(BaseModel):
+    leave_id: str
+    status: str
+
+class AttendanceMarkReq(BaseModel):
+    student_id: str
 
 class EventRequisitionReq(BaseModel):
     club_id: str
@@ -373,8 +436,12 @@ class AddHostelReq(BaseModel):
     hostel_name: str
 
 # =========================================================
-# 7. FOUNDER & HIERARCHY-AWARE PASSWORD API
+# 7. FOUNDER & HIERARCHY PASSWORD ENDPOINTS
 # =========================================================
+@app.get("/")
+def root():
+    return {"status": "online", "service": "HMS Multi-NIT Backend"}
+
 @app.get("/api/founder/tenants")
 def get_tenants():
     return NIT_TENANTS_DB
@@ -385,7 +452,7 @@ def toggle_module(req: ModuleToggleReq):
         if nit["institute_id"].upper() == req.institute_id.upper():
             if req.module_key in nit["modules"]:
                 nit["modules"][req.module_key] = req.enabled
-                return {"success": True, "message": f"{req.module_key} updated for {nit['institute_id']}", "modules": nit["modules"]}
+                return {"success": True, "modules": nit["modules"]}
     raise HTTPException(status_code=404, detail="Institute not found")
 
 @app.post("/api/founder/add-hostel")
@@ -397,9 +464,16 @@ def add_hostel(req: AddHostelReq):
             return {"success": True, "hostels": nit["hostels"]}
     raise HTTPException(status_code=404, detail="Institute not found")
 
-# =========================================================================
-# STRICT HIERARCHY GUARD: Dean CANNOT change Founder. Founder CAN change all!
-# =========================================================================
+@app.post("/api/auth/login")
+def login(req: LoginReq):
+    uid = req.user_id.strip().upper()
+    pwd = req.password.strip()
+    for u in USERS_DB:
+        if u["user_id"].upper() == uid and (u["password"] == pwd or u.get("dob") == pwd):
+            user_copy = {k: v for k, v in u.items() if k != "password"}
+            return {"success": True, "user": user_copy}
+    raise HTTPException(status_code=401, detail="Invalid Position ID / Roll No or Password")
+
 @app.post("/api/dean/reset-password")
 def reset_password(req: PasswordResetReq, admin_id: str = Query(...)):
     requester = next((u for u in USERS_DB if u["user_id"].upper() == admin_id.strip().upper()), None)
@@ -408,41 +482,58 @@ def reset_password(req: PasswordResetReq, admin_id: str = Query(...)):
 
     target_id = req.target_user_id.strip().upper()
 
-    # Rule 1: NO ONE below Founder can touch FOUNDER account
     if target_id == "FOUNDER" and requester["role"] != "Founder":
         raise HTTPException(
             status_code=403,
-            detail="HIERARCHY VIOLATION: Dean cannot reset or modify the Founder / Super Admin password!"
+            detail="HIERARCHY VIOLATION: Dean cannot modify the Founder / Super Admin password!"
         )
-
-    # Rule 2: Dean cannot change other Deans or global settings if restricted
-    if requester["role"] == "Dean" and target_id == "DEAN" and requester["user_id"].upper() != "DEAN":
-        raise HTTPException(status_code=403, detail="Cannot alter another Dean's security credentials.")
 
     target_user = next((u for u in USERS_DB if u["user_id"].upper() == target_id), None)
     if not target_user:
-        raise HTTPException(status_code=404, detail="Target user ID not found.")
+        raise HTTPException(status_code=404, detail="Target ID not found.")
 
     target_user["password"] = req.new_password.strip()
-    return {"success": True, "message": f"Password securely updated for {target_user['user_id']}!"}
+    return {"success": True, "message": f"Password updated for {target_user['user_id']}"}
+
+@app.post("/api/warden/reset-student-password")
+def warden_reset_student(req: PasswordResetReq, warden_id: str = Query(...)):
+    warden = next((u for u in USERS_DB if u["user_id"].upper() == warden_id.strip().upper()), None)
+    if not warden or warden["role"] not in ["Warden", "Dean", "Founder"]:
+        raise HTTPException(status_code=403, detail="Unauthorized.")
+
+    target = next((u for u in USERS_DB if u["user_id"].upper() == req.target_user_id.strip().upper()), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Student Roll No not found.")
+
+    if target["role"] in ["Founder", "Dean"]:
+        raise HTTPException(status_code=403, detail="Hierarchy Violation: Cannot reset higher authority passwords.")
+
+    if warden["role"] == "Warden" and warden["hostel_block"] != "All":
+        if target.get("hostel_block") != warden["hostel_block"]:
+            raise HTTPException(status_code=403, detail=f"You can only reset passwords for {warden['hostel_block']} residents.")
+
+    target["password"] = req.new_password.strip()
+    return {"success": True, "message": f"Password reset for {target['full_name']} ({target['user_id']})"}
+
+@app.post("/api/student/change-password")
+def student_change_password(req: StudentChangePassReq):
+    student = next((u for u in USERS_DB if u["user_id"].upper() == req.student_id.strip().upper()), None)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found.")
+
+    old_p = req.old_password.strip()
+    if student["password"] != old_p and student.get("dob") != old_p:
+        raise HTTPException(status_code=400, detail="Current password (or DOB) is incorrect.")
+
+    if len(req.new_password.strip()) < 4:
+        raise HTTPException(status_code=400, detail="New password must be at least 4 characters.")
+
+    student["password"] = req.new_password.strip()
+    return {"success": True, "message": "Custom password saved successfully!"}
 
 # =========================================================
-# 8. STANDARD CORE API ENDPOINTS
+# 8. COMPLAINTS, LEAVE & ATTENDANCE ENDPOINTS
 # =========================================================
-@app.get("/")
-def root():
-    return {"status": "online", "service": "NIT Multi-Campus HMS Backend"}
-
-@app.post("/api/auth/login")
-def login(req: LoginReq):
-    uid = req.user_id.strip().upper()
-    pwd = req.password.strip()
-    for u in USERS_DB:
-        if u["user_id"].upper() == uid and u["password"] == pwd:
-            user_copy = {k: v for k, v in u.items() if k != "password"}
-            return {"success": True, "user": user_copy}
-    raise HTTPException(status_code=401, detail="Invalid Position ID or Password")
-
 @app.get("/api/complaints")
 def get_complaints(role: str = "Dean", user_id: str = "", hostel_block: str = "All", department: str = ""):
     if role == "Student":
@@ -492,22 +583,90 @@ def staff_resolve(req: StaffResolveReq):
             return {"success": True, "ticket": c}
     raise HTTPException(status_code=404, detail="Ticket not found")
 
+@app.get("/api/leaves")
+def get_leaves(role: str = "Dean", user_id: str = "", hostel_block: str = "All"):
+    if role == "Student":
+        return [l for l in LEAVES_DB if l["student_id"].upper() == user_id.upper()]
+    if role == "Warden" and hostel_block != "All":
+        return [l for l in LEAVES_DB if l["hostel_block"].lower() == hostel_block.lower()]
+    return LEAVES_DB
+
+@app.post("/api/leaves")
+def create_leave(req: LeaveCreateReq):
+    student = next((u for u in USERS_DB if u["user_id"].upper() == req.student_id.upper()), None)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    new_leave = {
+        "leave_id": f"LVE-{random.randint(302, 999)}",
+        "student_id": student["user_id"],
+        "student_name": student["full_name"],
+        "hostel_block": student["hostel_block"],
+        "room": student["room"],
+        "destination": req.destination,
+        "from_date": req.from_date,
+        "to_date": req.to_date,
+        "reason": req.reason,
+        "parent_phone": req.parent_phone,
+        "status": "Pending Warden Approval",
+        "created_at": datetime.now().strftime("%Y-%m-%d")
+    }
+    LEAVES_DB.insert(0, new_leave)
+    return {"success": True, "leave": new_leave}
+
+@app.post("/api/leaves/action")
+def leave_action(req: LeaveActionReq):
+    for l in LEAVES_DB:
+        if l["leave_id"] == req.leave_id:
+            l["status"] = req.status
+            return {"success": True, "leave": l}
+    raise HTTPException(status_code=404, detail="Leave request not found")
+
+@app.get("/api/attendance")
+def get_attendance(role: str = "Dean", user_id: str = "", hostel_block: str = "All"):
+    if role == "Student":
+        return [a for a in ATTENDANCE_DB if a["student_id"].upper() == user_id.upper()]
+    if role == "Warden" and hostel_block != "All":
+        return [a for a in ATTENDANCE_DB if a["hostel_block"].lower() == hostel_block.lower()]
+    return ATTENDANCE_DB
+
+@app.post("/api/attendance")
+def mark_attendance(req: AttendanceMarkReq):
+    student = next((u for u in USERS_DB if u["user_id"].upper() == req.student_id.upper()), None)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    existing = next((a for a in ATTENDANCE_DB if a["student_id"].upper() == student["user_id"].upper() and a["date"] == today_str), None)
+    if existing:
+        return {"success": True, "message": "Attendance already marked for tonight!", "record": existing}
+    rec = {
+        "id": f"ATT-{random.randint(100, 999)}",
+        "student_id": student["user_id"],
+        "student_name": student["full_name"],
+        "hostel_block": student["hostel_block"],
+        "room": student["room"],
+        "date": today_str,
+        "time": datetime.now().strftime("%I:%M %p"),
+        "status": "Present (Geo-Verified)"
+    }
+    ATTENDANCE_DB.insert(0, rec)
+    return {"success": True, "message": "Night Attendance Marked Successfully!", "record": rec}
+
 @app.get("/api/complaints/export-pdf", response_class=HTMLResponse)
 def export_pdf(institute_id: str = "SVNIT", hostel_block: str = "All", from_date: str = "", to_date: str = ""):
     rows = COMPLAINTS_DB
     if hostel_block != "All":
         rows = [c for c in rows if c["hostel_block"] == hostel_block]
     tr_html = "".join([
-        f"<tr><td>{c['ticket_id']}</td><td>{c['hostel_block']} ({c['room']})</td><td>{c['category']}</td><td>{c['summary']}</td><td>{c['status']}</td><td>{c['created_at']}</td></tr>"
+        f"<tr><td>{c['ticket_id']}</td><td>{c['student_name']} ({c['student_id']})</td><td>{c['hostel_block']} ({c['room']})</td><td>{c['category']}</td><td>{c['summary']}</td><td>{c['status']}</td><td>{c['created_at']}</td></tr>"
         for c in rows
     ])
     html = f"""
-    <html><head><title>Hostel Grievance Audit Report</title>
-    <style>body{{font-family:Arial,sans-serif;padding:30px;}} table{{width:100%;border-collapse:collapse;margin-top:20px;}} th,td{{border:1px solid #ccc;padding:10px;text-align:left;font-size:13px;}} th{{background:#f1f5f9;}}</style>
+    <html><head><title>HMS Official Grievance Report</title>
+    <style>body{{font-family:Arial,sans-serif;padding:30px;color:#0f172a;}} table{{width:100%;border-collapse:collapse;margin-top:20px;}} th,td{{border:1px solid #cbd5e1;padding:10px;text-align:left;font-size:13px;}} th{{background:#f1f5f9;}}</style>
     </head><body onload="window.print()">
-    <h2>National Institute of Technology — Official Grievance Audit Report</h2>
-    <p><strong>Scope:</strong> {hostel_block} | <strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
-    <table><thead><tr><th>Ticket ID</th><th>Hostel & Room</th><th>Category</th><th>Summary</th><th>Status</th><th>Timestamp</th></tr></thead>
+    <h2>National Institute of Technology — Official HMS Grievance Report</h2>
+    <p><strong>Hostel Scope:</strong> {hostel_block} | <strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+    <table><thead><tr><th>Ticket ID</th><th>Resident</th><th>Hostel & Room</th><th>Category</th><th>Summary</th><th>Status</th><th>Timestamp</th></tr></thead>
     <tbody>{tr_html}</tbody></table></body></html>
     """
     return HTMLResponse(content=html)
@@ -559,7 +718,7 @@ def propose_event(req: EventRequisitionReq):
         "feedbacks": []
     }
     EVENTS_DB.insert(0, new_evt)
-    return {"success": True, "message": "Proposal submitted to Dean Clash Matrix!", "event": new_evt}
+    return {"success": True, "event": new_evt}
 
 @app.post("/api/unicore/events/approve")
 def approve_event(event_id: str = Query(...), action: str = Query(...)):
@@ -577,7 +736,7 @@ def rsvp_event(req: EventRsvpReq):
                 ev["rsvps"] = []
             if req.student_id not in ev["rsvps"]:
                 ev["rsvps"].append(req.student_id)
-            return {"success": True, "message": "RSVP recorded! Seat reserved.", "rsvps": ev["rsvps"]}
+            return {"success": True, "rsvps": ev["rsvps"]}
     raise HTTPException(status_code=404, detail="Event not found")
 
 @app.post("/api/unicore/events/feedback")
@@ -607,18 +766,14 @@ def submit_event_feedback(req: EventFeedbackReq):
                     ev["ai_audit"]["key_pros"].append(req.review)
                 else:
                     ev["ai_audit"]["key_cons"].append(req.review)
-            return {"success": True, "message": "Feedback submitted to AI Audit engine!", "event": ev}
+            return {"success": True, "event": ev}
     raise HTTPException(status_code=404, detail="Event not found")
 
 @app.get("/api/unicore/audit-summary")
 def get_audit_summary():
     for ev in EVENTS_DB:
         if ev.get("ai_audit"):
-            return {
-                "event_id": ev["event_id"],
-                "event_title": ev["title"],
-                **ev["ai_audit"]
-            }
+            return {"event_id": ev["event_id"], "event_title": ev["title"], **ev["ai_audit"]}
     return {
         "event_id": "EVT-100",
         "event_title": "Garba & Acoustic Eve 2026",
@@ -629,42 +784,3 @@ def get_audit_summary():
         "key_cons": ["Water dispenser ran out early"],
         "recommendation": "Approve winter fest budget with bonus allocation."
     }
-class StudentChangePassReq(BaseModel):
-    student_id: str
-    old_password: str
-    new_password: str
-
-# 1. Student Self-Change Password Endpoint
-@app.post("/api/student/change-password")
-def student_change_password(req: StudentChangePassReq):
-    student = next((u for u in USERS_DB if u["user_id"].upper() == req.student_id.strip().upper()), None)
-    if not student:
-        raise HTTPException(status_code=404, detail="Student not found.")
-    
-    if student["password"] != req.old_password.strip():
-        raise HTTPException(status_code=400, detail="Current password does not match.")
-    
-    if len(req.new_password.strip()) < 4:
-        raise HTTPException(status_code=400, detail="New password must be at least 4 characters.")
-        
-    student["password"] = req.new_password.strip()
-    return {"success": True, "message": "Password changed successfully! Keep it safe."}
-
-# 2. Warden Reset Student Password Endpoint (Warden can only reset students of their own hostel)
-@app.post("/api/warden/reset-student-password")
-def warden_reset_student(req: PasswordResetReq, warden_id: str = Query(...)):
-    warden = next((u for u in USERS_DB if u["user_id"].upper() == warden_id.strip().upper()), None)
-    if not warden or warden["role"] not in ["Warden", "Dean", "Founder"]:
-        raise HTTPException(status_code=403, detail="Unauthorized operator.")
-
-    target = next((u for u in USERS_DB if u["user_id"].upper() == req.target_user_id.strip().upper()), None)
-    if not target:
-        raise HTTPException(status_code=404, detail="Student Roll No not found.")
-        
-    # Security Check: Normal Warden can only reset residents of their own hostel
-    if warden["role"] == "Warden" and warden["hostel_block"] != "All":
-        if target.get("hostel_block") != warden["hostel_block"]:
-            raise HTTPException(status_code=403, detail="You can only reset passwords for students in your assigned hostel.")
-
-    target["password"] = req.new_password.strip()
-    return {"success": True, "message": f"Password reset for {target['full_name']} ({target['user_id']})"}
