@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { COMPLAINT_CATEGORIES } from '../config/categories';
 
+// Safety fallback so activeTab is never undefined
+var activeTab = 'complaints';
+
 export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
   const [activeTab, setActiveTab] = useState('complaints');
   const [showNewModal, setShowNewModal] = useState(false);
@@ -11,7 +14,7 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
   const [events, setEvents] = useState([]);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [calYear, setCalYear] = useState(2026);
-  const [calMonth, setCalMonth] = useState(9); // 0-indexed: 9 = October 2026
+  const [calMonth, setCalMonth] = useState(9); // October 2026
   const [feedbackRating, setFeedbackRating] = useState(5);
   const [feedbackReview, setFeedbackReview] = useState('');
   const [msg, setMsg] = useState(null);
@@ -82,7 +85,6 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
     }
   };
 
-  // Active strictly on the event date and up to 1 day after the event
   const isFeedbackActive = (eventDateStr) => {
     if (!eventDateStr) return false;
     const eventDate = new Date(`${eventDateStr}T00:00:00`);
@@ -167,14 +169,12 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
 
   const actionPendingCount = complaints.filter((c) => c.status === 'Awaiting Confirmation').length;
 
-  // Students strictly see ONLY Approved & Completed events (NEVER Pending)
   const studentVisibleEvents = events.filter(
     (e) => e.status === 'Approved' || e.status === 'Completed'
   );
   const upcomingEvents = studentVisibleEvents.filter((e) => e.status === 'Approved');
   const pastEvents = studentVisibleEvents.filter((e) => e.status === 'Completed');
 
-  // Calendar Grid calculation
   const monthNames = [
     'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'
@@ -193,9 +193,7 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* TAB 1: COMPLAINTS FEED                                    */}
-      {/* ========================================================= */}
+      {/* TAB 1: COMPLAINTS */}
       {activeTab === 'complaints' && (
         <div style={styles.tabContent}>
           <div style={styles.searchWrap}>
@@ -249,9 +247,7 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* TAB 2: EVENTRADAR (GOOGLE CALENDAR GRID + TIMELINE)       */}
-      {/* ========================================================= */}
+      {/* TAB 2: EVENTRADAR (GOOGLE CALENDAR GRID + LIST) */}
       {activeTab === 'eventradar' && (
         <div style={styles.tabContent}>
           <div style={styles.radarBanner}>
@@ -266,7 +262,6 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
             </p>
           </div>
 
-          {/* Month & Year Navigator (Google Calendar Style) */}
           <div style={styles.calTopBar}>
             <button onClick={() => changeMonth(-1)} style={styles.calNavBtn}>◀ Prev</button>
             <div style={{ color: '#f8fafc', fontWeight: '800', fontSize: '15px' }}>
@@ -275,7 +270,6 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
             <button onClick={() => changeMonth(1)} style={styles.calNavBtn}>Next ▶</button>
           </div>
 
-          {/* 7-Column Month Grid */}
           <div style={styles.calGridContainer}>
             <div style={styles.calHeaderRow}>
               {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
@@ -317,7 +311,6 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
             </div>
           </div>
 
-          {/* Upcoming Approved Events List */}
           <div style={styles.sectionHeader}>📅 Upcoming Approved Events ({upcomingEvents.length})</div>
           <div style={styles.listContainer}>
             {upcomingEvents.length === 0 ? (
@@ -341,7 +334,6 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
             )}
           </div>
 
-          {/* Past Completed Events List */}
           <div style={{ ...styles.sectionHeader, color: '#94a3b8', marginTop: '18px' }}>
             ⏮️ Past Completed Events ({pastEvents.length})
           </div>
@@ -365,9 +357,7 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* TAB 3: HOSTEL NIGHT ATTENDANCE                            */}
-      {/* ========================================================= */}
+      {/* TAB 3: ATTENDANCE */}
       {activeTab === 'attendance' && (
         <div style={styles.comingSoonWrap}>
           <div style={styles.comingSoonBadge}>PHASE 2 ROLLOUT • ACTIVE SYNC</div>
@@ -377,9 +367,7 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* TAB 4: LEAVE FORM                                         */}
-      {/* ========================================================= */}
+      {/* TAB 4: LEAVE FORM */}
       {activeTab === 'leave' && (
         <div style={styles.comingSoonWrap}>
           <div style={styles.comingSoonBadge}>PHASE 2 ROLLOUT • COMING SOON</div>
@@ -389,9 +377,7 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* TAB 5: PROFILE                                            */}
-      {/* ========================================================= */}
+      {/* TAB 5: PROFILE */}
       {activeTab === 'profile' && (
         <div style={styles.tabContent}>
           <div style={styles.profileCard}>
@@ -411,9 +397,7 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* MODAL: EVENT DETAILS, RSVP & 1-DAY FEEDBACK WINDOW        */}
-      {/* ========================================================= */}
+      {/* MODAL: EVENT DETAILS */}
       {selectedEvent && (
         <div style={styles.modalOverlay} onClick={() => setSelectedEvent(null)}>
           <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
@@ -524,9 +508,7 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* MODAL: COMPLAINT DETAILS                                  */}
-      {/* ========================================================= */}
+      {/* MODAL: COMPLAINT DETAILS */}
       {selectedTicket && (
         <div style={styles.modalOverlay} onClick={() => setSelectedTicket(null)}>
           <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
@@ -560,9 +542,7 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* MODAL: NEW COMPLAINT                                      */}
-      {/* ========================================================= */}
+      {/* MODAL: NEW COMPLAINT */}
       {showNewModal && (
         <div style={styles.modalOverlay} onClick={() => setShowNewModal(false)}>
           <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
@@ -614,9 +594,7 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* STUDENT BOTTOM NAVIGATION (ALL 5 TABS PRESERVED)          */}
-      {/* ========================================================= */}
+      {/* BOTTOM NAVIGATION */}
       <nav style={styles.bottomNav}>
         <button onClick={() => setActiveTab('complaints')} style={styles.navItem}>
           <div style={{ ...styles.iconPill, background: activeTab === 'complaints' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>

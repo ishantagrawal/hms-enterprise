@@ -1,26 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { COMPLAINT_CATEGORIES } from '../config/categories';
 
+// Safety fallback so activeTab is never undefined
+var activeTab = 'hostels';
+
 export default function WardenView({ user, complaints, apiUrl }) {
   const isDean = user.role === 'Dean' || user.hostel_block === 'All';
 
   const [activeTab, setActiveTab] = useState(isDean ? 'hostels' : 'complaints');
-  const [clubSubTab, setClubSubTab] = useState('approvals'); // 'approvals' | 'directory'
+  const [clubSubTab, setClubSubTab] = useState('approvals');
   const [selectedHostel, setSelectedHostel] = useState(null);
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [resetTarget, setResetTarget] = useState(null);
 
-  // Clubs & Events states
   const [clubs, setClubs] = useState([]);
   const [events, setEvents] = useState([]);
   const [selectedClub, setSelectedClub] = useState(null);
   const [selectedEventAudit, setSelectedEventAudit] = useState(null);
 
-  // Calendar Month/Year state
   const [calYear, setCalYear] = useState(2026);
-  const [calMonth, setCalMonth] = useState(9); // October 2026
+  const [calMonth, setCalMonth] = useState(9);
 
-  // PDF & Password Reset states
   const [newPassword, setNewPassword] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
@@ -50,7 +50,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
       .catch(console.error);
   }, [apiUrl]);
 
-  // AI Clash Matrix Re-Check Helper for Dean
   const checkAiVenueClash = (candidateEv) => {
     const conflicts = events.filter(
       (other) =>
@@ -159,9 +158,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* TAB 1: HOSTELS (DEAN)                                     */}
-      {/* ========================================================= */}
       {isDean && activeTab === 'hostels' && (
         <div style={styles.tabContent}>
           <div style={styles.listContainer}>
@@ -202,9 +198,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* TAB 2: GRIEVANCES                                         */}
-      {/* ========================================================= */}
       {activeTab === 'complaints' && (
         <div style={styles.tabContent}>
           {selectedHostel && (
@@ -241,13 +234,8 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* TAB 3: DEAN CLUBS HUB (SUB-SECTION 1: APPROVALS & CAL,    */}
-      {/*                        SUB-SECTION 2: ALL CLUBS INFO)     */}
-      {/* ========================================================= */}
       {activeTab === 'clubshub' && (
         <div style={styles.tabContent}>
-          {/* Sub-section Switcher */}
           <div style={styles.subTabBar}>
             <button
               onClick={() => setClubSubTab('approvals')}
@@ -271,12 +259,9 @@ export default function WardenView({ user, complaints, apiUrl }) {
             </button>
           </div>
 
-          {/* SUB-SECTION A: EVENT APPROVALS + AI CLASH CHECK + GOOGLE CALENDAR */}
           {clubSubTab === 'approvals' && (
             <>
-              <div style={styles.sectionHeader}>
-                ⚡ Venue Requisitions & AI Clash Verification
-              </div>
+              <div style={styles.sectionHeader}>⚡ Venue Requisitions & AI Clash Verification</div>
 
               {pendingEvents.length === 0 ? (
                 <div style={{ ...styles.emptyState, padding: '18px', marginBottom: '16px' }}>
@@ -286,11 +271,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
                 pendingEvents.map((ev) => {
                   const aiCheck = checkAiVenueClash(ev);
                   return (
-                    <div
-                      key={ev.event_id}
-                      onClick={() => setSelectedEventAudit(ev)}
-                      style={styles.approvalCard}
-                    >
+                    <div key={ev.event_id} onClick={() => setSelectedEventAudit(ev)} style={styles.approvalCard}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span style={{ color: '#f8fafc', fontWeight: '800', fontSize: '15px' }}>{ev.title}</span>
                         <span style={{ color: '#fbbf24', fontSize: '11px', fontWeight: '800' }}>{ev.status}</span>
@@ -327,7 +308,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
                 })
               )}
 
-              {/* Google Calendar Year & Month Grid */}
               <div style={{ ...styles.sectionHeader, marginTop: '18px' }}>
                 🗓️ Master Campus Event Calendar (All Years)
               </div>
@@ -389,7 +369,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
             </>
           )}
 
-          {/* SUB-SECTION B: ALL CLUBS INFO (CLUB-WISE ANALYTICS, MEMBERS, EXTRA DEAN INFO) */}
           {clubSubTab === 'directory' && (
             <div>
               <div style={styles.sectionHeader}>
@@ -421,9 +400,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* TAB 4: PDF AUDIT REPORTS                                  */}
-      {/* ========================================================= */}
       {activeTab === 'reports' && (
         <div style={styles.tabContent}>
           <div style={styles.sheetCard}>
@@ -452,9 +428,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* TAB 5: PASSWORDS (DEAN) OR PROFILE (WARDEN)               */}
-      {/* ========================================================= */}
       {activeTab === 'settings' && (
         <div style={styles.tabContent}>
           {isDean ? (
@@ -484,9 +457,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* MODAL 1: FULL CLUB DOSSIER (EVENTS COUNT, MEMBERS, NOTES) */}
-      {/* ========================================================= */}
       {selectedClub && (
         <div style={styles.modalOverlay} onClick={() => setSelectedClub(null)}>
           <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
@@ -502,7 +472,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
 
             <p style={{ color: '#cbd5e1', fontSize: '13px', margin: '0 0 12px 0' }}>{selectedClub.mission}</p>
 
-            {/* Club Metrics Summary */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '14px' }}>
               <div style={styles.statBox}>
                 <div style={{ fontSize: '20px', fontWeight: '800', color: '#c084fc' }}>
@@ -518,7 +487,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
               </div>
             </div>
 
-            {/* Extra Info Added by Club for Dean */}
             {selectedClub.extra_dean_info && (
               <div style={{ background: 'rgba(139, 92, 246, 0.12)', border: '1px solid rgba(139, 92, 246, 0.4)', borderRadius: '12px', padding: '12px', marginBottom: '14px' }}>
                 <div style={{ fontSize: '11px', fontWeight: '800', color: '#c084fc', textTransform: 'uppercase', marginBottom: '4px' }}>
@@ -530,7 +498,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
               </div>
             )}
 
-            {/* Position-Wise Member Roster */}
             <div style={{ fontSize: '12px', fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase', marginBottom: '8px' }}>
               👥 Position-Wise Member Details
             </div>
@@ -546,7 +513,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
               ))}
             </div>
 
-            {/* Club's Event History */}
             <div style={{ fontSize: '12px', fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase', marginBottom: '8px' }}>
               📅 Events by {selectedClub.club_id}
             </div>
@@ -567,9 +533,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* MODAL 2: EVENT DETAILS, RSVP COUNT & AI AUDIT SUMMARY     */}
-      {/* ========================================================= */}
       {selectedEventAudit && (
         <div style={styles.modalOverlay} onClick={() => setSelectedEventAudit(null)}>
           <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
@@ -634,9 +597,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* MODAL 3: COMPLAINT DETAILS                                */}
-      {/* ========================================================= */}
       {selectedTicket && (
         <div style={styles.modalOverlay} onClick={() => setSelectedTicket(null)}>
           <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
@@ -656,9 +616,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* MODAL 4: PASSWORD RESET                                   */}
-      {/* ========================================================= */}
       {resetTarget && (
         <div style={styles.modalOverlay} onClick={() => setResetTarget(null)}>
           <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
@@ -681,9 +638,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* DEAN / WARDEN BOTTOM NAVIGATION                           */}
-      {/* ========================================================= */}
       <nav style={styles.bottomNav}>
         {isDean && (
           <button onClick={() => setActiveTab('hostels')} style={styles.navItem}>

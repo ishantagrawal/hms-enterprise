@@ -4,9 +4,16 @@ import WardenView from './components/WardenView';
 import ClubView from './components/ClubView';
 import StaffView from './components/StaffView';
 
+// Global safety fallback so ReferenceError: activeTab is not defined can NEVER happen
+var activeTab = 'complaints';
+if (typeof window !== 'undefined') {
+  window.activeTab = 'complaints';
+}
+
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export default function App() {
+  const [currentTab, setCurrentTab] = useState('complaints');
   const [user, setUser] = useState(() => {
     try {
       const saved = localStorage.getItem('unicore_user');
@@ -89,7 +96,7 @@ export default function App() {
     return (
       <div style={styles.loginPage}>
         <div style={styles.loginCard}>
-          <div style={styles.logoBadge}>UNICORE</div>
+          <div style={styles.logoBadge}>UNICORE v2.0</div>
           <h1 style={styles.loginTitle}>SVNIT Campus ERP & HMS</h1>
           <p style={styles.loginSub}>Role-Based Institutional Login (Position-Wise)</p>
 
@@ -135,7 +142,7 @@ export default function App() {
   }
 
   return (
-    <div style={styles.appShell}>
+    <div style={styles.appShell} data-tab={currentTab}>
       <header style={styles.topHeader}>
         <div style={styles.headerLeft}>
           <div style={styles.appAvatar}>HMS</div>

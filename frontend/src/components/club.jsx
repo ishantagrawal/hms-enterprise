@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
 
+// Safety fallback so activeTab is never undefined
+var activeTab = 'ledger';
+
 export default function ClubView({ user, apiUrl }) {
   const [activeTab, setActiveTab] = useState('ledger');
   const [clubs, setClubs] = useState([]);
@@ -119,7 +122,6 @@ export default function ClubView({ user, apiUrl }) {
         </div>
       )}
 
-      {/* TAB 1: CLUB LEDGER, ROSTER & DEAN DOSSIER EDITOR */}
       {activeTab === 'ledger' && (
         <div style={styles.tabContent}>
           <div style={styles.sheetCard}>
@@ -167,7 +169,6 @@ export default function ClubView({ user, apiUrl }) {
         </div>
       )}
 
-      {/* TAB 2: PROPOSALS & LIVE RSVP COUNTS */}
       {activeTab === 'clash' && (
         <div style={styles.tabContent}>
           <div style={styles.sheetCard}>
@@ -266,7 +267,6 @@ export default function ClubView({ user, apiUrl }) {
         </div>
       )}
 
-      {/* TAB 3: AI AUDIT */}
       {activeTab === 'audit' && aiAudit && (
         <div style={styles.tabContent}>
           <div style={styles.sheetCard}>
