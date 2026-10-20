@@ -2,65 +2,96 @@ import React from 'react';
 
 export default function Header({ user, tenant, onLogout }) {
   const isFounder = user.role === 'PlatformOwner';
-  const displayTitle = user.authority_title || user.role;
 
-  const getSubText = () => {
-    if (isFounder) return 'Global Multi-Tenant Cloud • Root SaaS Console';
-    if (user.role === 'Dean') return `${displayTitle} • All 10 Campus Hostels`;
-    if (user.role === 'Warden') return `${displayTitle} • Isolated Hostel Portal`;
-    if (user.role === 'DepartmentStaff') return `${displayTitle} • Campus Maintenance`;
-    return `${user.hostel_block} • ${user.floor} • Room ${user.room}`;
+  const getHeaderTitle = () => {
+    if (isFounder) return 'HMS Cloud HQ';
+    if (user.role === 'Dean') return 'SVNIT Dean SW Portal';
+    if (user.role === 'Warden') return user.hostel_block;
+    if (user.role === 'DepartmentStaff') return user.department;
+    return 'SVNIT Hostel ERP';
+  };
+
+  const getSubTitle = () => {
+    if (isFounder) return 'FOUNDER • Multi-Tenant Root';
+    if (user.role === 'Student') return `${user.hostel_block} • Rm ${user.room}`;
+    return `${user.user_id} • ${user.authority_title || user.role}`;
   };
 
   return (
     <header style={styles.header}>
-      <div style={styles.left}>
-        <div style={styles.logoBadge}>HMS</div>
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <h1 style={styles.instName}>
-            {isFounder ? 'HMS Enterprise SaaS Cloud HQ' : tenant?.name || 'SVNIT Surat'}
-          </h1>
-          <p style={styles.subText}>{getSubText()}</p>
-        </div>
-      </div>
-
-      <div style={styles.right}>
-        <div style={styles.userBox}>
-          <div style={styles.avatar}>{user.user_id.slice(0, 2).toUpperCase()}</div>
-          <div>
-            <div style={styles.userName}>{user.full_name}</div>
-            <div style={styles.userMeta}>
-              ID: <code style={{ color: '#38bdf8', fontWeight: '600' }}>{user.user_id}</code>
-            </div>
+      <div style={styles.inner}>
+        <div style={styles.left}>
+          <div style={styles.appBadge}>HMS</div>
+          <div style={styles.textWrap}>
+            <div style={styles.title}>{getHeaderTitle()}</div>
+            <div style={styles.subtitle}>{getSubTitle()}</div>
           </div>
         </div>
-        <button onClick={onLogout} style={styles.logoutBtn}>Sign Out</button>
+
+        <button onClick={onLogout} style={styles.logoutBtn}>
+          Sign Out
+        </button>
       </div>
     </header>
   );
 }
 
 const styles = {
-  header: { 
-    display: 'flex', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    padding: '16px 24px', 
-    background: '#090d16', 
-    borderBottom: '1px solid #1e293b', 
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-    WebkitFontSmoothing: 'antialiased',
-    MozOsxFontSmoothing: 'grayscale',
-    gap: '16px' 
+  header: {
+    position: 'sticky',
+    top: 0,
+    zIndex: 100,
+    background: '#0b141a',
+    borderBottom: '1px solid #1e293b',
+    padding: '12px 16px',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    WebkitFontSmoothing: 'antialiased'
   },
-  left: { display: 'flex', alignItems: 'center', gap: '14px', flex: 1, minWidth: 0 },
-  logoBadge: { background: '#2563eb', color: '#fff', fontWeight: '700', fontSize: '14px', padding: '8px 12px', borderRadius: '10px', flexShrink: 0 },
-  instName: { margin: 0, fontSize: '15px', fontWeight: '600', color: '#f8fafc', lineHeight: '1.4', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  subText: { margin: '2px 0 0 0', fontSize: '12px', color: '#94a3b8', fontWeight: '400', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  right: { display: 'flex', alignItems: 'center', gap: '14px', flexShrink: 0 },
-  userBox: { display: 'flex', alignItems: 'center', gap: '10px' },
-  avatar: { width: '36px', height: '36px', borderRadius: '50%', background: '#1e293b', color: '#60a5fa', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '600', fontSize: '12px', border: '1px solid #334155', flexShrink: 0 },
-  userName: { fontSize: '13px', fontWeight: '600', color: '#f8fafc', whiteSpace: 'nowrap' },
-  userMeta: { fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' },
-  logoutBtn: { background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', padding: '7px 14px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }
+  inner: {
+    maxWidth: '680px',
+    margin: '0 auto',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: '12px'
+  },
+  left: { display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0, flex: 1 },
+  appBadge: {
+    background: '#22c55e',
+    color: '#052e16',
+    fontWeight: '900',
+    fontSize: '13px',
+    padding: '8px 10px',
+    borderRadius: '10px',
+    letterSpacing: '0.5px',
+    flexShrink: 0
+  },
+  textWrap: { minWidth: 0, flex: 1 },
+  title: {
+    color: '#f8fafc',
+    fontSize: '16px',
+    fontWeight: '700',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis'
+  },
+  subtitle: {
+    color: '#94a3b8',
+    fontSize: '12px',
+    marginTop: '2px',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis'
+  },
+  logoutBtn: {
+    background: 'rgba(239, 68, 68, 0.12)',
+    border: '1px solid rgba(239, 68, 68, 0.35)',
+    color: '#f87171',
+    padding: '6px 12px',
+    borderRadius: '999px',
+    fontSize: '12px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    flexShrink: 0
+  }
 };
