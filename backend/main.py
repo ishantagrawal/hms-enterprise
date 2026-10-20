@@ -484,3 +484,31 @@ EVENTS_DB = [
         }
     }
 ]
+class EventRsvpReq(BaseModel):
+    event_id: str
+    student_id: str
+
+@app.post("/api/unicore/events/rsvp")
+def rsvp_event(req: EventRsvpReq):
+    for ev in EVENTS_DB:
+        if ev["event_id"] == req.event_id:
+            if "rsvps" not in ev: ev["rsvps"] = []
+            if req.student_id not in ev["rsvps"]:
+                ev["rsvps"].append(req.student_id)
+            return {"success": True, "message": "RSVP recorded successfully! Seat reserved."}
+    raise HTTPException(status_code=404, detail="Event not found")
+
+class EventFeedbackReq(BaseModel):
+    event_id: str
+    student_id: str
+    rating: int
+    review: str
+
+@app.post("/api/unicore/events/feedback")
+def submit_event_feedback(req: EventFeedbackReq):
+    for ev in EVENTS_DB:
+        if ev["event_id"] == req.event_id:
+            if "feedbacks" not in ev: ev["feedbacks"] = []
+            ev["feedbacks"].append({"student_id": req.student_id, "rating": req.rating, "review": req.review})
+            return {"success": True, "message": "Feedback submitted to AI audit engine successfully!"}
+    raise HTTPException(status_code=404, detail="Event not found")

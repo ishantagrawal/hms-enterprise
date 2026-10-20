@@ -9,61 +9,73 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
 
   // EventRadar state
   const [events, setEvents] = useState([]);
+  const [selectedEvent, setSelectedEvent] = useState(null);
+  const [feedbackRating, setFeedbackRating] = useState(5);
+  const [feedbackReview, setFeedbackReview] = useState('');
+  const [msg, setMsg] = useState(null);
 
-  // Form states
+  // Complaint Form states
   const [category, setCategory] = useState('Electricity');
   const [summary, setSummary] = useState('');
   const [description, setDescription] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [msg, setMsg] = useState(null);
 
   useEffect(() => {
     fetch(`${apiUrl}/api/unicore/events`)
       .then((res) => res.json())
-      .then((data) => setEvents(data.filter(e => e.status === 'Approved' || e.type === 'Completed')))
+      .then((data) => setEvents(data))
       .catch(console.error);
   }, [apiUrl]);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setSubmitting(true);
-    setMsg(null);
+  const handleRsvp = async (eventId) => {
     try {
-      const res = await fetch(`${apiUrl}/api/complaints`, {
+      const res = await fetch(`${apiUrl}/api/unicore/events/rsvp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: user.user_id, category, summary, description })
+        body: JSON.stringify({ event_id: eventId, student_id: user.user_id })
       });
       const data = await res.json();
-      if (res.ok && data.success) {
-        setMsg({ type: 'success', text: `✅ Ticket ${data.ticket.ticket_id} registered!` });
-        setSummary('');
-        setDescription('');
-        setShowNewModal(false);
-        onRefresh();
+      if (res.ok) {
+        setMsg({ type: 'success', text: '🎟️ RSVP Confirmed! Seat reserved.' });
+        setSelectedEvent(null);
       } else {
-        setMsg({ type: 'error', text: data.detail || 'Failed' });
+        setMsg({ type: 'error', text: data.detail || 'RSVP failed' });
       }
     } catch {
-      setMsg({ type: 'error', text: 'Server connection error.' });
+      setMsg({ type: 'error', text: 'Connection error.' });
     }
-    setSubmitting(false);
   };
 
-  const handleStudentVerify = async (ticketId, satisfied) => {
+  const handleFeedbackSubmit = async (e, eventId) => {
+    e.preventDefault();
     try {
-      const res = await fetch(`${apiUrl}/api/complaints/student-verify`, {
+      const res = await fetch(`${apiUrl}/api/unicore/events/feedback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticket_id: ticketId, satisfied })
+        body: JSON.stringify({ event_id: eventId, student_id: user.user_id, rating: feedbackRating, review: feedbackReview })
       });
+      const data = await res.json();
       if (res.ok) {
-        setSelectedTicket(null);
-        onRefresh();
+        setMsg({ type: 'success', text: '🤖 Feedback sent to AI Audit engine!' });
+        setFeedbackReview('');
+        setSelectedEvent(null);
+      } else {
+        setMsg({ type: 'error', text: data.detail || 'Feedback failed' });
       }
-    } catch (err) {
-      console.error(err);
+    } catch {
+      setMsg({ type: 'error', text: 'Connection error.' });
     }
+  };
+
+  // Check if feedback is active (Only 1 day after event date)
+  const isFeedbackActive = (eventDateStr) => {
+    if (!eventDateStr) return false;
+    const eventDate = new Date(eventDateStr);
+    const today = new Date();
+    const diffTime = today - eventDate;
+    const diffDays = diffTime / (1000 * 60 * 60 * 24);
+    // Active from event day up to 1 day after
+    return diffDays >= 0 && diffDays <= 1.0;
   };
 
   const getCategoryIcon = (catName) => {
@@ -72,7 +84,7 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
   };
 
   const getStatusColor = (status) => {
-    if (status === 'Completed' || status === 'Approved') return '#22c55e';
+    if (status === 'Completed' || status === 'Approved') return '#a78bfa';
     if (status === 'Awaiting Confirmation') return '#38bdf8';
     return '#fbbf24';
   };
@@ -113,7 +125,7 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
           </div>
 
           {msg && (
-            <div style={{ ...styles.toast, borderColor: msg.type === 'success' ? '#22c55e' : '#ef4444' }}>
+            <div style={{ ...styles.toast, borderColor: msg.type === 'success' ? '#8b5cf6' : '#ef4444' }} onClick={() => setMsg(null)}>
               {msg.text}
             </div>
           )}
@@ -123,8 +135,8 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
               <div style={styles.emptyState}>
                 <div style={{ fontSize: '38px', marginBottom: '8px' }}>📭</div>
                 <div style={{ color: '#e2e8f0', fontWeight: '700', fontSize: '15px' }}>No Grievances Found</div>
-                <p style={{ color: '#64748b', fontSize: '13px', margin: '4px 0 0 0' }}>
-                  Tap the green + button below to lodge a hostel complaint.
+                <p style={{ color: '#94a3b8', fontSize: '13px', margin: '4px 0 0 0' }}>
+                  Tap the purple + button below to lodge a hostel complaint.
                 </p>
               </div>
             ) : (
@@ -153,12 +165,12 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
       )}
 
       {/* ========================================================= */}
-      {/* TAB 2: EVENTRADAR (APPROVED CAMPUS EVENTS & FETS)         */}
+      {/* TAB 2: EVENTRADAR (PURPLE THEME + RSVP + FEEDBACK WINDOW) */}
       {/* ========================================================= */}
       {activeTab === 'eventradar' && (
         <div className="hms-anim" style={styles.tabContent}>
           <div style={styles.radarBanner}>
-            <div style={{ fontSize: '12px', fontWeight: '800', color: '#4ade80', letterSpacing: '0.5px' }}>SVNIT LIVE FEED</div>
+            <div style={{ fontSize: '11px', fontWeight: '800', color: '#c084fc', letterSpacing: '0.8px' }}>SVNIT LIVE FEED</div>
             <h2 style={{ margin: '4px 0 2px 0', color: '#f8fafc', fontSize: '18px' }}>📡 EventRadar</h2>
             <p style={{ margin: 0, color: '#94a3b8', fontSize: '12px' }}>Approved campus fests, hackathons, and club events in real-time.</p>
           </div>
@@ -168,15 +180,15 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
               <div style={styles.emptyState}>No active events on the radar right now.</div>
             ) : (
               events.map((ev) => (
-                <div key={ev.event_id} style={styles.chatRow}>
+                <div key={ev.event_id} onClick={() => setSelectedEvent(ev)} style={styles.chatRow}>
                   <div style={styles.rowAvatar}>📡</div>
                   <div style={styles.rowCenter}>
                     <div style={styles.rowTopLine}>
                       <span style={styles.rowTitle}>{ev.title}</span>
-                      <span style={{ color: '#22c55e', fontSize: '11px', fontWeight: '800' }}>{ev.status}</span>
+                      <span style={{ color: '#c084fc', fontSize: '11px', fontWeight: '800' }}>{ev.status}</span>
                     </div>
                     <div style={styles.rowSub}>📍 {ev.venue} • 📅 {ev.date} ({ev.start_time} - {ev.end_time})</div>
-                    <div style={{ fontSize: '11px', color: '#38bdf8', marginTop: '3px' }}>Organized by Club: <strong>{ev.club_id}</strong></div>
+                    <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '3px' }}>Tap for RSVP & Details</div>
                   </div>
                 </div>
               ))
@@ -231,12 +243,67 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
         </div>
       )}
 
+      {/* ========================================================= */}
+      {/* MODAL: EVENT DETAILS, RSVP & FEEDBACK WINDOW              */}
+      {/* ========================================================= */}
+      {selectedEvent && (
+        <div style={styles.modalOverlay} onClick={() => setSelectedEvent(null)}>
+          <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <span style={{ color: '#c084fc', fontWeight: '800', fontSize: '13px' }}>📡 EventRadar Details</span>
+              <button onClick={() => setSelectedEvent(null)} style={styles.closeBtn}>✕</button>
+            </div>
+
+            <h2 style={{ margin: '0 0 6px 0', color: '#f8fafc', fontSize: '18px' }}>{selectedEvent.title}</h2>
+            <p style={{ margin: '0 0 14px 0', color: '#94a3b8', fontSize: '13px' }}>Organized by Chapter: <strong>{selectedEvent.club_id}</strong></p>
+
+            <div style={styles.detailBox}>
+              <div>📍 <strong>Venue:</strong> {selectedEvent.venue}</div>
+              <div style={{ marginTop: '6px' }}>📅 <strong>Date:</strong> {selectedEvent.date}</div>
+              <div style={{ marginTop: '6px' }}>⏰ <strong>Time:</strong> {selectedEvent.start_time} - {selectedEvent.end_time}</div>
+              <div style={{ marginTop: '6px' }}>📌 <strong>Status:</strong> <span style={{ color: '#c084fc' }}>{selectedEvent.status}</span></div>
+            </div>
+
+            {/* RSVP Button for Upcoming/Approved Events */}
+            {selectedEvent.status !== 'Completed' && (
+              <div style={{ marginTop: '16px' }}>
+                <button onClick={() => handleRsvp(selectedEvent.event_id)} style={styles.primaryBtn}>
+                  🎟️ I'm Coming / RSVP Now
+                </button>
+              </div>
+            )}
+
+            {/* Feedback Form (Active ONLY 1 day after event date) */}
+            {selectedEvent.status === 'Completed' && isFeedbackActive(selectedEvent.date) && (
+              <form onSubmit={(e) => handleFeedbackSubmit(e, selectedEvent.event_id)} style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ fontSize: '13px', fontWeight: '700', color: '#4ade80' }}>⭐ Post-Event Feedback (Active Window)</div>
+                <select value={feedbackRating} onChange={(e) => setFeedbackRating(Number(e.target.value))} style={styles.input}>
+                  <option value={5}>⭐⭐⭐⭐⭐ 5 - Excellent</option>
+                  <option value={4}>⭐⭐⭐⭐ 4 - Very Good</option>
+                  <option value={3}>⭐⭐⭐ 3 - Good</option>
+                  <option value={2}>⭐⭐ 2 - Average</option>
+                  <option value={1}>⭐ 1 - Poor</option>
+                </select>
+                <textarea rows="2" placeholder="Write your review for AI Audit summary..." value={feedbackReview} onChange={(e) => setFeedbackReview(e.target.value)} required style={styles.input} />
+                <button type="submit" style={styles.primaryBtn}>Submit Feedback</button>
+              </form>
+            )}
+
+            {selectedEvent.status === 'Completed' && !isFeedbackActive(selectedEvent.date) && (
+              <div style={{ marginTop: '14px', textAlign: 'center', fontSize: '12px', color: '#64748b' }}>
+                🔒 Feedback window closed (Active only up to 1 day after event date).
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Ticket Details Modal */}
       {selectedTicket && (
         <div style={styles.modalOverlay} onClick={() => setSelectedTicket(null)}>
           <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <span style={{ color: '#38bdf8', fontWeight: '800', fontSize: '14px' }}>{selectedTicket.ticket_id} • {selectedTicket.category}</span>
+              <span style={{ color: '#c084fc', fontWeight: '800', fontSize: '14px' }}>{selectedTicket.ticket_id} • {selectedTicket.category}</span>
               <button onClick={() => setSelectedTicket(null)} style={styles.closeBtn}>✕</button>
             </div>
             <h3 style={{ margin: '0 0 8px 0', color: '#f8fafc', fontSize: '17px' }}>{selectedTicket.summary}</h3>
@@ -244,7 +311,7 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
             <div style={styles.detailBox}>
               <div><strong>Status:</strong> <span style={{ color: getStatusColor(selectedTicket.status), fontWeight: '700' }}>{selectedTicket.status}</span></div>
               <div style={{ marginTop: '6px' }}><strong>Assigned Wing:</strong> {selectedTicket.routed_to}</div>
-              {selectedTicket.staff_remark && <div style={{ marginTop: '6px', color: '#38bdf8' }}><strong>Staff Note:</strong> {selectedTicket.staff_remark}</div>}
+              {selectedTicket.staff_remark && <div style={{ marginTop: '6px', color: '#c084fc' }}><strong>Staff Note:</strong> {selectedTicket.staff_remark}</div>}
             </div>
             {selectedTicket.status === 'Awaiting Confirmation' && (
               <div style={styles.verifyBox}>
@@ -272,7 +339,7 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
                 <label style={styles.label}>Select Maintenance Wing</label>
                 <div style={styles.catGrid}>
                   {COMPLAINT_CATEGORIES.map((cat) => (
-                    <div key={cat.id} onClick={() => setCategory(cat.id)} style={{ ...styles.catChip, borderColor: category === cat.id ? '#22c55e' : '#1e293b', background: category === cat.id ? 'rgba(34, 197, 94, 0.12)' : '#090d16' }}>
+                    <div key={cat.id} onClick={() => setCategory(cat.id)} style={{ ...styles.catChip, borderColor: category === cat.id ? '#8b5cf6' : '#1e293b', background: category === cat.id ? 'rgba(139, 92, 246, 0.15)' : '#090d16' }}>
                       <span>{cat.icon}</span>
                       <span style={{ fontSize: '12px', fontWeight: '700', color: '#f8fafc' }}>{cat.title}</span>
                     </div>
@@ -287,42 +354,42 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
         </div>
       )}
 
-      {/* Student Bottom Navigation (Complaints, EventRadar, Attendance, Leave Form, Profile) */}
+      {/* Student Bottom Navigation (Purple Active Aesthetic) */}
       <nav style={styles.bottomNav}>
         <button onClick={() => setActiveTab('complaints')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'complaints' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}>
+          <div style={{ ...styles.iconPill, background: activeTab === 'complaints' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>
             <span style={{ fontSize: '18px' }}>💬</span>
             {actionPendingCount > 0 && <span style={styles.badgeCount}>{actionPendingCount}</span>}
           </div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'complaints' ? '#f8fafc' : '#94a3b8' }}>Complaints</span>
+          <span style={{ ...styles.navLabel, color: activeTab === 'complaints' ? '#c084fc' : '#94a3b8' }}>Complaints</span>
         </button>
 
         <button onClick={() => setActiveTab('eventradar')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'eventradar' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}>
+          <div style={{ ...styles.iconPill, background: activeTab === 'eventradar' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>
             <span style={{ fontSize: '18px' }}>📡</span>
           </div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'eventradar' ? '#f8fafc' : '#94a3b8' }}>EventRadar</span>
+          <span style={{ ...styles.navLabel, color: activeTab === 'eventradar' ? '#c084fc' : '#94a3b8' }}>EventRadar</span>
         </button>
 
         <button onClick={() => setActiveTab('attendance')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'attendance' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}>
+          <div style={{ ...styles.iconPill, background: activeTab === 'attendance' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>
             <span style={{ fontSize: '18px' }}>📅</span>
           </div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'attendance' ? '#f8fafc' : '#94a3b8' }}>Attendance</span>
+          <span style={{ ...styles.navLabel, color: activeTab === 'attendance' ? '#c084fc' : '#94a3b8' }}>Attendance</span>
         </button>
 
         <button onClick={() => setActiveTab('leave')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'leave' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}>
+          <div style={{ ...styles.iconPill, background: activeTab === 'leave' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>
             <span style={{ fontSize: '18px' }}>🪪</span>
           </div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'leave' ? '#f8fafc' : '#94a3b8' }}>Leave Form</span>
+          <span style={{ ...styles.navLabel, color: activeTab === 'leave' ? '#c084fc' : '#94a3b8' }}>Leave Form</span>
         </button>
 
         <button onClick={() => setActiveTab('profile')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'profile' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}>
+          <div style={{ ...styles.iconPill, background: activeTab === 'profile' ? 'rgba(139, 92, 246, 0.25)' : 'transparent' }}>
             <span style={{ fontSize: '18px' }}>👤</span>
           </div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'profile' ? '#f8fafc' : '#94a3b8' }}>Profile</span>
+          <span style={{ ...styles.navLabel, color: activeTab === 'profile' ? '#c084fc' : '#94a3b8' }}>Profile</span>
         </button>
       </nav>
     </div>
@@ -332,10 +399,10 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
 const styles = {
   appWrapper: { maxWidth: '680px', margin: '0 auto', paddingBottom: '95px', minHeight: 'calc(100vh - 70px)' },
   tabContent: { padding: '14px 16px' },
-  radarBanner: { background: 'linear-gradient(135deg, rgba(34, 197, 94, 0.15), rgba(37, 99, 235, 0.15))', border: '1px solid rgba(34, 197, 94, 0.3)', borderRadius: '16px', padding: '16px', marginBottom: '14px' },
+  radarBanner: { background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(99, 102, 241, 0.2))', border: '1px solid rgba(139, 92, 246, 0.4)', borderRadius: '16px', padding: '16px', marginBottom: '14px' },
   searchWrap: { display: 'flex', alignItems: 'center', gap: '10px', background: '#1e293b', borderRadius: '999px', padding: '10px 16px', marginBottom: '14px' },
   searchInput: { background: 'transparent', border: 'none', outline: 'none', color: '#f8fafc', fontSize: '14px', width: '100%' },
-  toast: { background: '#0f172a', borderLeft: '4px solid', padding: '12px 14px', borderRadius: '10px', fontSize: '13px', fontWeight: '600', marginBottom: '12px', color: '#f8fafc' },
+  toast: { background: '#0f172a', borderLeft: '4px solid', padding: '12px 14px', borderRadius: '10px', fontSize: '13px', fontWeight: '600', marginBottom: '12px', color: '#f8fafc', cursor: 'pointer' },
   listContainer: { display: 'flex', flexDirection: 'column' },
   chatRow: { display: 'flex', alignItems: 'center', gap: '14px', padding: '14px 8px', borderBottom: '1px solid rgba(30, 41, 59, 0.7)', cursor: 'pointer' },
   rowAvatar: { width: '48px', height: '48px', borderRadius: '50%', background: '#1e293b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px', flexShrink: 0 },
@@ -347,34 +414,34 @@ const styles = {
   rowSub: { color: '#94a3b8', fontSize: '13px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   statusBadge: { fontSize: '10px', fontWeight: '700', border: '1px solid', padding: '2px 8px', borderRadius: '999px', flexShrink: 0 },
   emptyState: { textAlign: 'center', padding: '50px 20px', background: '#0f172a', borderRadius: '18px', border: '1px solid #1e293b', marginTop: '12px' },
-  fabBtn: { position: 'fixed', right: '22px', bottom: '88px', width: '56px', height: '56px', borderRadius: '16px', background: '#22c55e', color: '#052e16', border: 'none', fontSize: '30px', fontWeight: '800', cursor: 'pointer', boxShadow: '0 10px 25px rgba(34, 197, 94, 0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 90 },
+  fabBtn: { position: 'fixed', right: '22px', bottom: '88px', width: '56px', height: '56px', borderRadius: '16px', background: '#8b5cf6', color: '#fff', border: 'none', fontSize: '30px', fontWeight: '800', cursor: 'pointer', boxShadow: '0 10px 25px rgba(139, 92, 246, 0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 90 },
   comingSoonWrap: { padding: '40px 20px', textAlign: 'center', margin: '16px', background: '#0f172a', borderRadius: '22px', border: '1px solid #1e293b' },
-  comingSoonBadge: { display: 'inline-block', background: 'rgba(34, 197, 94, 0.15)', color: '#4ade80', border: '1px solid rgba(34, 197, 94, 0.3)', padding: '5px 12px', borderRadius: '999px', fontSize: '11px', fontWeight: '800', letterSpacing: '0.8px', marginBottom: '16px' },
+  comingSoonBadge: { display: 'inline-block', background: 'rgba(139, 92, 246, 0.18)', color: '#c084fc', border: '1px solid rgba(139, 92, 246, 0.35)', padding: '5px 12px', borderRadius: '999px', fontSize: '11px', fontWeight: '800', letterSpacing: '0.8px', marginBottom: '16px' },
   bigIconBox: { width: '72px', height: '72px', borderRadius: '22px', background: '#1e293b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '36px', margin: '0 auto 14px auto' },
   csTitle: { color: '#f8fafc', fontSize: '21px', fontWeight: '800', margin: '0 0 8px 0' },
   csSub: { color: '#94a3b8', fontSize: '14px', lineHeight: '1.5', maxWidth: '420px', margin: '0 auto 22px auto' },
   profileCard: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: '22px', padding: '26px 20px', textAlign: 'center' },
-  profileAvatar: { width: '72px', height: '72px', borderRadius: '50%', background: '#2563eb', color: '#fff', fontSize: '24px', fontWeight: '800', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto' },
-  idPill: { display: 'inline-block', background: 'rgba(56, 189, 248, 0.12)', color: '#38bdf8', padding: '4px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: '700', marginTop: '4px' },
+  profileAvatar: { width: '72px', height: '72px', borderRadius: '50%', background: '#8b5cf6', color: '#fff', fontSize: '24px', fontWeight: '800', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto' },
+  idPill: { display: 'inline-block', background: 'rgba(139, 92, 246, 0.15)', color: '#c084fc', padding: '4px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: '700', marginTop: '4px' },
   infoList: { marginTop: '22px', display: 'flex', flexDirection: 'column', gap: '10px', textAlign: 'left' },
   infoRow: { display: 'flex', justifyContent: 'space-between', background: '#090d16', padding: '12px 14px', borderRadius: '12px', border: '1px solid #1e293b', fontSize: '13px' },
   infoLabel: { color: '#94a3b8' },
   infoVal: { color: '#f8fafc', fontWeight: '700' },
-  modalOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '16px' },
+  modalOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.78)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '16px' },
   modalSheet: { background: '#0f172a', border: '1px solid #334155', borderRadius: '20px', padding: '22px', width: '100%', maxWidth: '480px', maxHeight: '85vh', overflowY: 'auto' },
   closeBtn: { background: '#1e293b', color: '#cbd5e1', border: 'none', width: '30px', height: '30px', borderRadius: '50%', cursor: 'pointer', fontWeight: '700' },
-  detailBox: { background: '#090d16', border: '1px solid #1e293b', borderRadius: '12px', padding: '12px', fontSize: '13px', color: '#cbd5e1' },
-  verifyBox: { marginTop: '14px', background: 'rgba(56, 189, 248, 0.1)', border: '1px solid #38bdf8', borderRadius: '12px', padding: '14px', textAlign: 'center' },
-  yesBtn: { flex: 1, background: '#22c55e', color: '#052e16', border: 'none', padding: '10px', borderRadius: '8px', fontWeight: '800', cursor: 'pointer', fontSize: '12px' },
+  detailBox: { background: '#090d16', border: '1px solid #1e293b', borderRadius: '12px', padding: '14px', fontSize: '13px', color: '#cbd5e1' },
+  verifyBox: { marginTop: '14px', background: 'rgba(139, 92, 246, 0.1)', border: '1px solid #8b5cf6', borderRadius: '12px', padding: '14px', textAlign: 'center' },
+  yesBtn: { flex: 1, background: '#8b5cf6', color: '#fff', border: 'none', padding: '10px', borderRadius: '8px', fontWeight: '800', cursor: 'pointer', fontSize: '12px' },
   noBtn: { flex: 1, background: '#ef4444', color: '#fff', border: 'none', padding: '10px', borderRadius: '8px', fontWeight: '700', cursor: 'pointer', fontSize: '12px' },
   label: { display: 'block', fontSize: '11px', fontWeight: '700', color: '#94a3b8', marginBottom: '8px', textTransform: 'uppercase' },
   catGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '6px' },
   catChip: { display: 'flex', alignItems: 'center', gap: '8px', padding: '10px', borderRadius: '10px', border: '1.5px solid', cursor: 'pointer' },
   input: { width: '100%', background: '#090d16', border: '1px solid #334155', borderRadius: '10px', padding: '12px', color: '#fff', fontSize: '14px', boxSizing: 'border-box' },
-  submitBtn: { width: '100%', background: '#22c55e', color: '#052e16', border: 'none', borderRadius: '10px', padding: '13px', fontWeight: '800', fontSize: '14px', cursor: 'pointer' },
+  primaryBtn: { width: '100%', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: '10px', padding: '13px', fontWeight: '800', fontSize: '14px', cursor: 'pointer' },
   bottomNav: { position: 'fixed', bottom: 0, left: 0, right: 0, height: '72px', background: '#0b141a', borderTop: '1px solid #1e293b', display: 'flex', justifyContent: 'space-around', alignItems: 'center', zIndex: 100 },
   navItem: { background: 'transparent', border: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', cursor: 'pointer', flex: 1 },
   iconPill: { position: 'relative', width: '52px', height: '30px', borderRadius: '999px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-  navLabel: { fontSize: '10px' },
-  badgeCount: { position: 'absolute', top: '-2px', right: '4px', background: '#22c55e', color: '#052e16', fontSize: '9px', fontWeight: '800', padding: '1px 5px', borderRadius: '999px' }
+  navLabel: { fontSize: '10px', fontWeight: '600' },
+  badgeCount: { position: 'absolute', top: '-2px', right: '4px', background: '#8b5cf6', color: '#fff', fontSize: '9px', fontWeight: '800', padding: '1px 5px', borderRadius: '999px' }
 };
