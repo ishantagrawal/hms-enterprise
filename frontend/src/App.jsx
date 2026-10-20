@@ -6,6 +6,7 @@ import WardenView from "./components/WardenView";
 import FounderView from "./components/FounderView";
 
 const API_URL = "https://hms-enterprise-mqvx.onrender.com";
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [tenant, setTenant] = useState(null);
@@ -29,17 +30,20 @@ export default function App() {
       if (res.ok && data.success) {
         setUser(data.user);
         setTenant(data.tenant);
-        fetchComplaints(data.user);
+        if (data.user.role !== "PlatformOwner") {
+          fetchComplaints(data.user);
+        }
       } else {
-        setError(data.detail || "Invalid Credentials");
+        setError(data.detail || "Invalid Position ID or Password");
       }
     } catch {
-      setError("Cannot connect to server.");
+      setError("Server waking up or unreachable. Wait 20 seconds and try again.");
     }
     setLoading(false);
   };
 
   const fetchComplaints = async (currUser) => {
+    if (!currUser || currUser.role === "PlatformOwner") return;
     try {
       const query = new URLSearchParams({
         institute_id: currUser.institute_id,
@@ -57,26 +61,32 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (user) {
-      const interval = setInterval(() => fetchComplaints(user), 10000);
+    if (user && user.role !== "PlatformOwner") {
+      const interval = setInterval(() => fetchComplaints(user), 8000);
       return () => clearInterval(interval);
     }
   }, [user]);
+
+  const fillQuickLogin = (id, pass) => {
+    setUserId(id);
+    setPassword(pass);
+    setError(null);
+  };
 
   if (!user) {
     return (
       <div style={styles.loginContainer}>
         <div style={styles.loginCard}>
-          <div style={styles.brandBadge}>HMS ENTERPRISE</div>
-          <h2 style={{ color: "#fff", margin: "10px 0 5px 0", fontSize: "22px" }}>Campus Portal</h2>
-          <p style={{ color: "#94a3b8", fontSize: "13px", marginBottom: "20px" }}>Multi-Tenant Grievance Management</p>
+          <div style={styles.brandBadge}>HMS ENTERPRISE • POSITION PORTAL</div>
+          <h2 style={styles.title}>Campus Grievance & Hostel ERP</h2>
+          <p style={styles.subtitle}>Role-Based Institutional Login (Position-Wise)</p>
 
           {error && <div style={styles.errorBox}>{error}</div>}
 
-          <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+          <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
             <input
               type="text"
-              placeholder="User ID (e.g. U26CE011 or DEAN01)"
+              placeholder="Position ID (e.g. DEAN_SW, CW_GAJJAR, U26CE011)"
               value={userId}
               onChange={(e) => setUserId(e.target.value)}
               required
@@ -84,24 +94,31 @@ export default function App() {
             />
             <input
               type="password"
-              placeholder="Password (default: 123)"
+              placeholder="Password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
               style={styles.input}
             />
             <button type="submit" disabled={loading} style={styles.loginBtn}>
-              {loading ? "Authenticating..." : "Sign In to Dashboard"}
+              {loading ? "Signing In..." : "Sign In to Position Portal →"}
             </button>
           </form>
 
           <div style={styles.demoBox}>
-            <strong style={{ color: "#38bdf8" }}>Quick Test Logins (Pass: 123):</strong><br />
-            • Student: <code>U26CE011</code><br />
-            • Warden: <code>W01</code><br />
-            • Electrician: <code>STAFF_ELEC</code><br />
-            • Dean: <code>DEAN01</code> (Pass: <code>SvnitDean@2026!</code>)<br />
-            • Founder: <code>FOUNDER</code> (Pass: <code>IshantFounder@2026!</code>)
+            <div style={{ color: "#38bdf8", fontWeight: "700", marginBottom: "8px" }}>
+              ⚡ 1-Click Position Test Logins:
+            </div>
+            <div style={styles.chipGrid}>
+              <button type="button" onClick={() => fillQuickLogin("FOUNDER", "IshantFounder@2026!")} style={styles.chip}>🌍 SaaS Founder</button>
+              <button type="button" onClick={() => fillQuickLogin("DEAN_SW", "SvnitDean@2026!")} style={styles.chip}>🏛️ Dean SW Portal</button>
+              <button type="button" onClick={() => fillQuickLogin("CW_GAJJAR", "123")} style={styles.chip}>🏢 Gajjar CW</button>
+              <button type="button" onClick={() => fillQuickLogin("W_GAJJAR", "123")} style={styles.chip}>🏢 Gajjar Warden</button>
+              <button type="button" onClick={() => fillQuickLogin("CW_BHABHA", "123")} style={styles.chip}>🏢 Bhabha CW</button>
+              <button type="button" onClick={() => fillQuickLogin("STAFF_ELEC", "123")} style={styles.chip}>⚡ Electrical Staff</button>
+              <button type="button" onClick={() => fillQuickLogin("STAFF_CCC", "123")} style={styles.chip}>🌐 CCC Wi-Fi Staff</button>
+              <button type="button" onClick={() => fillQuickLogin("U26CE011", "123")} style={styles.chip}>🎓 Student (U26CE011)</button>
+            </div>
           </div>
         </div>
       </div>
@@ -109,22 +126,28 @@ export default function App() {
   }
 
   return (
-    <div style={{ background: "#090d16", minHeight: "100vh", color: "#f8fafc", fontFamily: "system-ui, sans-serif" }}>
+    <div style={{ background: "#090d16", minHeight: "100vh", color: "#f8fafc", fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <Header user={user} tenant={tenant} onLogout={() => setUser(null)} />
       {user.role === "PlatformOwner" && <FounderView user={user} apiUrl={API_URL} />}
       {user.role === "Student" && <StudentView user={user} complaints={complaints} apiUrl={API_URL} onRefresh={() => fetchComplaints(user)} />}
       {user.role === "DepartmentStaff" && <StaffView user={user} complaints={complaints} apiUrl={API_URL} onRefresh={() => fetchComplaints(user)} />}
-      {user.role === "Warden" && <WardenView user={user} complaints={complaints} apiUrl={API_URL} onRefresh={() => fetchComplaints(user)} />}
+      {(user.role === "Dean" || user.role === "Warden") && (
+        <WardenView user={user} tenant={tenant} complaints={complaints} apiUrl={API_URL} onRefresh={() => fetchComplaints(user)} />
+      )}
     </div>
   );
 }
 
 const styles = {
-  loginContainer: { display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#030712", padding: "16px" },
-  loginCard: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: "20px", padding: "32px", width: "100%", maxWidth: "400px", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.5)" },
-  brandBadge: { background: "#2563eb", color: "#fff", display: "inline-block", padding: "4px 10px", borderRadius: "6px", fontSize: "11px", fontWeight: "800", letterSpacing: "1px" },
-  errorBox: { background: "rgba(239, 68, 68, 0.1)", border: "1px solid #ef4444", color: "#f87171", padding: "10px", borderRadius: "8px", fontSize: "13px", marginBottom: "14px" },
-  input: { width: "100%", background: "#030712", border: "1px solid #334155", borderRadius: "10px", padding: "12px", color: "#fff", fontSize: "14px", boxSizing: "border-box" },
-  loginBtn: { width: "100%", background: "#2563eb", color: "#fff", border: "none", borderRadius: "10px", padding: "12px", fontWeight: "700", cursor: 'pointer', fontSize: '15px' },
-  demoBox: { marginTop: "20px", background: "#030712", border: "1px solid #1e293b", borderRadius: "10px", padding: "12px", fontSize: "12px", color: "#94a3b8", lineHeight: "1.6" }
+  loginContainer: { display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#030712", padding: "16px", fontFamily: "system-ui, -apple-system, sans-serif" },
+  loginCard: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: "20px", padding: "28px", width: "100%", maxWidth: "430px", boxShadow: "0 20px 30px rgba(0,0,0,0.6)" },
+  brandBadge: { background: "rgba(37, 99, 235, 0.2)", border: "1px solid #3b82f6", color: "#60a5fa", display: "inline-block", padding: "4px 10px", borderRadius: "6px", fontSize: "11px", fontWeight: "800", letterSpacing: "0.8px" },
+  title: { color: "#f8fafc", margin: "12px 0 4px 0", fontSize: "22px", fontWeight: "800" },
+  subtitle: { color: "#94a3b8", fontSize: "13px", marginBottom: "18px" },
+  errorBox: { background: "rgba(239, 68, 68, 0.12)", border: "1px solid #ef4444", color: "#f87171", padding: "10px 12px", borderRadius: "8px", fontSize: "13px", marginBottom: "14px", fontWeight: "600" },
+  input: { width: "100%", background: "#030712", border: "1px solid #334155", borderRadius: "10px", padding: "12px 14px", color: "#fff", fontSize: "14px", boxSizing: "border-box" },
+  loginBtn: { width: "100%", background: "#2563eb", color: "#fff", border: "none", borderRadius: "10px", padding: "13px", fontWeight: "700", cursor: "pointer", fontSize: "15px" },
+  demoBox: { marginTop: "20px", background: "#030712", border: "1px solid #1e293b", borderRadius: "12px", padding: "14px", fontSize: "12px" },
+  chipGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" },
+  chip: { background: "#0f172a", border: "1px solid #334155", color: "#e2e8f0", padding: "7px 10px", borderRadius: "8px", fontSize: "11px", fontWeight: "600", cursor: "pointer", textAlign: "left" }
 };

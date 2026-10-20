@@ -1,166 +1,417 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
+import { COMPLAINT_CATEGORIES } from '../config/categories';
 
 export default function WardenView({ user, complaints, apiUrl }) {
-  const [selectedHostel, setSelectedHostel] = useState('All');
+  const isDean = user.role === 'Dean' || user.hostel_block === 'All';
+
+  // For Dean: which hostel is currently opened in the inspection modal/drawer
+  const [inspectedHostel, setInspectedHostel] = useState(null);
+  // For Hostel Warden: filter by category
+  const [filterCat, setFilterCat] = useState('All');
+
+  // Date filter for PDF Export
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+
+  // Password Reset state for Dean
+  const [resetTarget, setResetTarget] = useState(null);
+  const [newPassword, setNewPassword] = useState('');
   const [statusMsg, setStatusMsg] = useState(null);
-  const [editWarden, setEditWarden] = useState(null);
-  
-  // Form with User ID and Password fields
-  const [wForm, setWForm] = useState({ user_id: 'W_ROHIT', full_name: '', hostel_block: 'Gajjar Bhawan', phone: '', email: '', authority_title: 'Warden', password: '123' });
 
-  const complaintsRef = useRef(null);
+  // Student onboarding state for Hostel Warden
+  const [studentCount, setStudentCount] = useState(1);
+  const [singleStudent, setSingleStudent] = useState({ user_id: '', full_name: '', floor: '1st Floor', room: '', phone: '' });
 
-  const handleInspect = (hostelName) => {
-    setSelectedHostel(hostelName);
-    if (complaintsRef.current) {
-      complaintsRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const svnitHostels = [
+    { code: 'GAJJAR', name: 'Gajjar Bhawan', cwId: 'CW_GAJJAR', wId: 'W_GAJJAR', ext: '0261-2201659' },
+    { code: 'BHABHA', name: 'Bhabha Bhawan', cwId: 'CW_BHABHA', wId: 'W_BHABHA', ext: '0261-2201790' },
+    { code: 'MTB', name: 'Mother Teresa Bhawan', cwId: 'CW_MTB', wId: 'W_MTB', ext: '0261-2201967' },
+    { code: 'SVB', name: 'Swami Vivekananda Bhawan', cwId: 'CW_SVB', wId: 'W_SVB', ext: '0261-2201657' },
+    { code: 'NEHRU', name: 'Nehru Bhawan', cwId: 'CW_NEHRU', wId: 'W_NEHRU', ext: '0261-2201703' },
+    { code: 'TAGORE', name: 'Tagore Bhawan', cwId: 'CW_TAGORE', wId: 'W_TAGORE', ext: '0261-2201707' },
+    { code: 'SARABHAI', name: 'Sarabhai Bhawan', cwId: 'CW_SARABHAI', wId: 'W_SARABHAI', ext: '0261-2201793' },
+    { code: 'RAMAN', name: 'Raman Bhawan', cwId: 'CW_RAMAN', wId: 'W_RAMAN', ext: '0261-2201789' },
+    { code: 'ABVB', name: 'Atal Bihari Vajpayee Bhawan', cwId: 'CW_ABVB', wId: 'W_ABVB', ext: '0261-2201880' },
+    { code: 'NARMAD', name: 'Narmad Bhawan (Guest House)', cwId: 'CW_NARMAD', wId: 'W_NARMAD', ext: '0261-2201652' }
+  ];
+
+  const loadStudentCount = async () => {
+    try {
+      const res = await fetch(`${apiUrl}/api/warden/students?institute_id=${user.institute_id}&hostel_block=${user.hostel_block}`);
+      if (res.ok) {
+        const data = await res.json();
+        setStudentCount(data.count);
+      }
+    } catch (e) {
+      console.error(e);
     }
   };
 
-  const [hostels, setHostels] = useState([
-    { name: "Bhabha Bhawan", userId: "W_BHABHA", chiefWarden: "Dr. Vikram P. Rathod", wardens: "Dr. Rajesh Choudhary", phone: "9876543210" },
-    { name: "Gajjar Bhawan", userId: "W_ROHIT", chiefWarden: "Dr. Jogender Singh", wardens: "Dr. Rohit Kumar, Dr. S.K. Sundar", phone: "9876543211" },
-    { name: "Mother Teresa Bhawan", userId: "W_MTB", chiefWarden: "Dr. Premlata Kumari", wardens: "Dr. Kirti Inamdar", phone: "9876543212" },
-    { name: "Narmad Bhawan (Guest House)", userId: "W_NARMAD", chiefWarden: "Prof. Alka A. Mungray", wardens: "Guest House Wing", phone: "1652" },
-    { name: "Nehru Bhawan", userId: "W_NEHRU", chiefWarden: "Dr. Deepak Joshi", wardens: "Dr. Raju Prasad Mahto", phone: "1703" },
-    { name: "Raman Bhawan", userId: "W_RAMAN", chiefWarden: "Dr. Rohan Rahul Pande", wardens: "Assoc. Faculty", phone: "1789" },
-    { name: "Sarabhai Bhawan", userId: "W_SARABHAI", chiefWarden: "Dr. Naresh Yarramsetty", wardens: "Dr. Sanjay Tolani", phone: "1793" },
-    { name: "Swami Vivekananda Bhawan", userId: "W_SVB", chiefWarden: "Dr. G. C. Jadeja", wardens: "Dr. Amit Kumar", phone: "1657" },
-    { name: "Tagore Bhawan", userId: "W_TAGORE", chiefWarden: "Dr. Vivek Garg", wardens: "Dr. Neeraj Srivastava", phone: "1707" },
-    { name: "Atal Bihari Vajpayee Bhawan", userId: "W_ATAL", chiefWarden: "Dr. Jitesh T. Chavda", wardens: "Dr. Nitesh Funde", phone: "1880" },
-  ]);
+  useEffect(() => {
+    loadStudentCount();
+  }, [user.hostel_block]);
 
-  const handleSaveWarden = async (e) => {
+  const handleDownloadPDF = (scopeHostel) => {
+    const query = new URLSearchParams({
+      institute_id: user.institute_id,
+      hostel_block: scopeHostel,
+      from_date: fromDate,
+      to_date: toDate
+    });
+    window.open(`${apiUrl}/api/complaints/export-pdf?${query.toString()}`, '_blank');
+  };
+
+  const handlePasswordReset = async (e) => {
     e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/admin/update-warden?admin_id=${user.user_id}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(wForm)
+    const res = await fetch(`${apiUrl}/api/dean/reset-password?admin_id=${user.user_id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_user_id: resetTarget, new_password: newPassword })
     });
     const data = await res.json();
     if (res.ok && data.success) {
       setStatusMsg(`✅ ${data.message}`);
-      setHostels(hostels.map(h => h.name === wForm.hostel_block ? { ...h, userId: wForm.user_id, chiefWarden: wForm.full_name, phone: wForm.phone } : h));
-      setEditWarden(null);
+      setResetTarget(null);
+      setNewPassword('');
     } else {
-      setStatusMsg(`❌ Error updating warden`);
+      setStatusMsg(`❌ ${data.detail || 'Error resetting password'}`);
     }
   };
 
-  const filtered = selectedHostel === 'All' ? complaints : complaints.filter(c => c.hostel_block === selectedHostel);
+  const handleAddSingleStudent = async (e) => {
+    e.preventDefault();
+    const payload = [{
+      user_id: singleStudent.user_id,
+      full_name: singleStudent.full_name,
+      hostel_block: user.hostel_block,
+      floor: singleStudent.floor,
+      room: singleStudent.room,
+      phone: singleStudent.phone
+    }];
+    const res = await fetch(`${apiUrl}/api/warden/bulk-upload?institute_id=${user.institute_id}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      setStatusMsg(`✅ Onboarded student ${singleStudent.user_id.toUpperCase()} to ${user.hostel_block} (Default Pass: 123)`);
+      setSingleStudent({ user_id: '', full_name: '', floor: '1st Floor', room: '', phone: '' });
+      loadStudentCount();
+    }
+  };
+
+  const handleCSVUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      const lines = evt.target.result.split('\n').filter(l => l.trim().length > 0);
+      const parsed = [];
+      for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split(',').map(s => s.trim());
+        if (cols.length >= 4) {
+          parsed.push({
+            user_id: cols[0],
+            full_name: cols[1],
+            hostel_block: user.hostel_block,
+            floor: cols[2] || 'Ground',
+            room: cols[3] || 'A-101',
+            phone: cols[4] || '9876543210'
+          });
+        }
+      }
+      const res = await fetch(`${apiUrl}/api/warden/bulk-upload?institute_id=${user.institute_id}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(parsed)
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setStatusMsg(`✅ Bulk Onboarded ${data.added} students into ${user.hostel_block}!`);
+        loadStudentCount();
+      }
+    };
+    reader.readAsText(file);
+  };
+
   const getStatusColor = (status) => status === 'Completed' ? '#34d399' : status === 'Awaiting Confirmation' ? '#60a5fa' : '#fbbf24';
 
-  return (
-    <div style={{ maxWidth: '1280px', margin: '0 auto', padding: '20px' }}>
-      
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-        <div>
-          <h2 style={{ margin: 0, color: '#f8fafc', fontSize: '20px' }}>🏛️ SVNIT Council of Wardens & Hostels Directory</h2>
-          <p style={{ margin: '4px 0 0 0', color: '#94a3b8', fontSize: '13px' }}>Manage hostel faculties and login credentials securely.</p>
+  // =========================================================================
+  // VIEW 1: DEAN CAMPUS-WIDE PORTAL (ONLY FOR DEAN_SW / ADEAN_SW)
+  // =========================================================================
+  if (isDean) {
+    const modalComplaints = inspectedHostel === 'All'
+      ? complaints
+      : complaints.filter(c => c.hostel_block === inspectedHostel);
+
+    return (
+      <div style={styles.container}>
+        <div style={styles.topBar}>
+          <div>
+            <h2 style={{ margin: 0, color: '#f8fafc', fontSize: '20px' }}>🏛️ Dean (Student Welfare) — Campus Command Portal</h2>
+            <p style={{ margin: '4px 0 0 0', color: '#94a3b8', fontSize: '13px' }}>
+              Position-Based Hostel Directory • Click "Open Hostel Door" to view any hostel's complaints instantly in a popup.
+            </p>
+          </div>
+
+          <div style={styles.pdfFilterBox}>
+            <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} style={styles.dateInput} title="From Date" />
+            <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} style={styles.dateInput} title="To Date" />
+            <button onClick={() => handleDownloadPDF('All')} style={styles.pdfBtn}>📥 Campus PDF Report</button>
+          </div>
         </div>
-        <button onClick={() => window.open(`${apiUrl}/api/complaints/export-pdf?institute_id=${user.institute_id}&hostel_block=${selectedHostel}`, '_blank')} style={styles.pdfBtn}>
-          📥 Download PDF Report ({selectedHostel})
-        </button>
-      </div>
 
-      {statusMsg && <div style={{ background: '#1e293b', padding: '12px', borderRadius: '8px', color: '#34d399', marginBottom: '16px', fontWeight: '600' }}>{statusMsg}</div>}
+        {statusMsg && <div style={styles.alert}>{statusMsg}</div>}
 
-      {/* Edit Warden Modal with User ID & Password */}
-      {editWarden && (
-        <div style={{ background: '#0f172a', border: '2px solid #3b82f6', borderRadius: '16px', padding: '20px', marginBottom: '24px' }}>
-          <h3 style={{ margin: '0 0 12px 0', color: '#60a5fa' }}>✏️ Update Warden Credentials for {wForm.hostel_block}</h3>
-          <form onSubmit={handleSaveWarden} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px' }}>
-            <input type="text" placeholder="Login User ID (e.g. W_ROHIT)" value={wForm.user_id} onChange={e => setWForm({...wForm, user_id: e.target.value})} required style={styles.input} />
-            <input type="text" placeholder="Warden Full Name" value={wForm.full_name} onChange={e => setWForm({...wForm, full_name: e.target.value})} required style={styles.input} />
-            <input type="text" placeholder="Login Password" value={wForm.password} onChange={e => setWForm({...wForm, password: e.target.value})} required style={styles.input} />
-            <input type="text" placeholder="Phone / Ext" value={wForm.phone} onChange={e => setWForm({...wForm, phone: e.target.value})} required style={styles.input} />
-            <input type="email" placeholder="Email" value={wForm.email} onChange={e => setWForm({...wForm, email: e.target.value})} required style={styles.input} />
-            <div style={{ display: 'flex', gap: '10px', gridColumn: '1 / -1' }}>
-              <button type="submit" style={styles.saveBtn}>Save Login & Warden Info</button>
-              <button type="button" onClick={() => setEditWarden(null)} style={styles.cancelBtn}>Cancel</button>
+        {/* Password Reset Modal for Positions */}
+        {resetTarget && (
+          <div style={styles.modalOverlay} onClick={() => setResetTarget(null)}>
+            <div style={styles.modalCard} onClick={e => e.stopPropagation()}>
+              <h3 style={{ margin: '0 0 8px 0', color: '#38bdf8' }}>🔐 Reset Password for Position: {resetTarget}</h3>
+              <p style={{ margin: '0 0 14px 0', color: '#94a3b8', fontSize: '13px' }}>
+                When a new faculty member takes charge of this position, reset the position password here.
+              </p>
+              <form onSubmit={handlePasswordReset} style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <input
+                  type="text"
+                  placeholder="Enter New Password (e.g. 123 or Gajjar@2026)"
+                  value={newPassword}
+                  onChange={e => setNewPassword(e.target.value)}
+                  required
+                  style={{ ...styles.input, flex: 1 }}
+                />
+                <button type="submit" style={styles.saveBtn}>Update Password</button>
+                <button type="button" onClick={() => setResetTarget(null)} style={styles.cancelBtn}>Cancel</button>
+              </form>
             </div>
-          </form>
-        </div>
-      )}
+          </div>
+        )}
 
-      {/* Hostel Directory Table */}
-      <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', padding: '20px', marginBottom: '24px', overflowX: 'auto' }}>
-        <h3 style={{ margin: '0 0 14px 0', color: '#f8fafc', fontSize: '15px' }}>Official Hostel Faculty Directory</h3>
-        <table style={styles.table}>
-          <thead>
-            <tr>
-              <th style={styles.th}>Hostel Name</th>
-              <th style={styles.th}>Login ID & Chief Warden</th>
-              <th style={styles.th}>Associated Wardens</th>
-              <th style={styles.th}>Active Issues</th>
-              <th style={styles.th}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr style={{ background: selectedHostel === 'All' ? '#1e293b' : 'transparent' }}>
-              <td style={styles.td}><strong>🌟 All Hostels Combined</strong></td>
-              <td style={styles.td} colSpan="2">Dean Office / Council of Wardens</td>
-              <td style={styles.td}><span style={{ color: '#38bdf8', fontWeight: 'bold' }}>{complaints.filter(c => c.status !== 'Completed').length}</span></td>
-              <td style={styles.td}><button onClick={() => handleInspect('All')} style={styles.filterBtn}>View All</button></td>
-            </tr>
-            {hostels.map((h, i) => {
-              const activeCount = complaints.filter(c => c.hostel_block === h.name && c.status !== 'Completed').length;
-              return (
-                <tr key={i} style={{ background: selectedHostel === h.name ? '#1e293b' : 'transparent' }}>
-                  <td style={styles.td}><strong>{h.name}</strong></td>
-                  <td style={styles.td}><code style={{ color: '#38bdf8', background: '#030712', padding: '2px 6px', borderRadius: '4px' }}>{h.userId}</code> <br/><span style={{ color: '#60a5fa', fontWeight: '600' }}>{h.chiefWarden}</span></td>
-                  <td style={styles.td}><span style={{ color: '#cbd5e1', fontSize: '12px' }}>{h.wardens}</span></td>
-                  <td style={styles.td}><span style={{ color: activeCount > 0 ? '#fbbf24' : '#34d399', fontWeight: 'bold' }}>{activeCount}</span></td>
-                  <td style={styles.td}>
-                    <button onClick={() => handleInspect(h.name)} style={{...styles.filterBtn, marginRight: '6px'}}>Inspect</button>
-                    <button onClick={() => { setWForm({ hostel_block: h.name, user_id: h.userId, full_name: h.chiefWarden, phone: h.phone, email: '', authority_title: 'Warden', password: '123' }); setEditWarden(true); }} style={styles.editBtn}>✏️ Credentials</button>
-                  </td>
+        {/* Instant Door Modal: Opens immediately when Dean clicks Inspect on any hostel! */}
+        {inspectedHostel && (
+          <div style={styles.modalOverlay} onClick={() => setInspectedHostel(null)}>
+            <div style={{ ...styles.modalCard, maxWidth: '800px', maxHeight: '85vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #1e293b', paddingBottom: '12px' }}>
+                <div>
+                  <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '18px' }}>🚪 {inspectedHostel} — Grievance Register ({modalComplaints.length})</h3>
+                  <p style={{ margin: '2px 0 0 0', color: '#94a3b8', fontSize: '12px' }}>Direct Hostel Inspection View</p>
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={() => handleDownloadPDF(inspectedHostel)} style={styles.pdfBtn}>📥 Export PDF</button>
+                  <button onClick={() => setInspectedHostel(null)} style={styles.cancelBtn}>✕ Close</button>
+                </div>
+              </div>
+
+              {modalComplaints.length === 0 ? (
+                <div style={{ padding: '30px', textAlign: 'center', color: '#64748b' }}>No grievances registered for {inspectedHostel}.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {modalComplaints.map(c => (
+                    <div key={c.ticket_id} style={{ ...styles.complaintCard, borderLeft: `4px solid ${getStatusColor(c.status)}` }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <strong style={{ color: '#38bdf8', fontSize: '13px' }}>{c.ticket_id} • {c.category}</strong>
+                        <span style={{ color: getStatusColor(c.status), fontSize: '12px', fontWeight: '700' }}>{c.status}</span>
+                      </div>
+                      <div style={{ fontWeight: '700', color: '#f8fafc', marginTop: '6px', fontSize: '14px' }}>{c.summary}</div>
+                      <div style={{ color: '#94a3b8', fontSize: '13px', marginTop: '4px' }}>{c.description}</div>
+                      <div style={{ fontSize: '12px', color: '#64748b', marginTop: '8px' }}>
+                        👤 {c.student_name} ({c.hostel_block} • Rm {c.room}) | 🕒 {c.created_at}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* 10 Hostels Position Directory Table */}
+        <div style={styles.card}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+            <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '16px' }}>🏢 SVNIT 10 Hostels — Position Portals & Live Grievance Count</h3>
+            <button onClick={() => setInspectedHostel('All')} style={styles.filterBtn}>🌟 Open All Campus Grievances ({complaints.length})</button>
+          </div>
+
+          <div style={{ overflowX: 'auto' }}>
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  <th style={styles.th}>Hostel Bhawan</th>
+                  <th style={styles.th}>Chief Warden Position ID</th>
+                  <th style={styles.th}>Warden Position ID</th>
+                  <th style={styles.th}>Office Ext</th>
+                  <th style={styles.th}>Active Issues</th>
+                  <th style={styles.th}>Actions</th>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              </thead>
+              <tbody>
+                {svnitHostels.map((h) => {
+                  const activeCount = complaints.filter(c => c.hostel_block === h.name && c.status !== 'Completed').length;
+                  return (
+                    <tr key={h.code}>
+                      <td style={styles.td}><strong>{h.name}</strong></td>
+                      <td style={styles.td}>
+                        <code style={styles.codeBadge}>{h.cwId}</code>
+                        <button onClick={() => setResetTarget(h.cwId)} style={styles.keyBtn} title="Reset Chief Warden Password">🔑</button>
+                      </td>
+                      <td style={styles.td}>
+                        <code style={styles.codeBadge}>{h.wId}</code>
+                        <button onClick={() => setResetTarget(h.wId)} style={styles.keyBtn} title="Reset Warden Password">🔑</button>
+                      </td>
+                      <td style={styles.td}>{h.ext}</td>
+                      <td style={styles.td}>
+                        <span style={{ color: activeCount > 0 ? '#fbbf24' : '#34d399', fontWeight: '800' }}>{activeCount} Open</span>
+                      </td>
+                      <td style={styles.td}>
+                        <button onClick={() => setInspectedHostel(h.name)} style={styles.inspectDoorBtn}>🚪 Open Hostel Door</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // VIEW 2: ISOLATED HOSTEL PORTAL (FOR CW_GAJJAR, W_GAJJAR, CW_BHABHA, ETC.)
+  // =========================================================================
+  const filteredComplaints = filterCat === 'All'
+    ? complaints
+    : complaints.filter(c => c.category === filterCat);
+
+  return (
+    <div style={styles.container}>
+      {/* Hostel Specific Banner */}
+      <div style={styles.topBar}>
+        <div>
+          <h2 style={{ margin: 0, color: '#f8fafc', fontSize: '20px' }}>🏢 {user.hostel_block} — Official Administration Portal</h2>
+          <p style={{ margin: '4px 0 0 0', color: '#94a3b8', fontSize: '13px' }}>
+            Position: <strong style={{ color: '#38bdf8' }}>{user.authority_title}</strong> • Onboarded Residents: <strong style={{ color: '#34d399' }}>{studentCount} / 50,000+ Capacity</strong>
+          </p>
+        </div>
+
+        <div style={styles.pdfFilterBox}>
+          <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} style={styles.dateInput} />
+          <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} style={styles.dateInput} />
+          <button onClick={() => handleDownloadPDF(user.hostel_block)} style={styles.pdfBtn}>
+            📥 {user.hostel_block} PDF Report
+          </button>
+        </div>
       </div>
 
-      {/* Complaints Section */}
-      <div ref={complaintsRef} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', padding: '20px', scrollMarginTop: '20px' }}>
-        <h3 style={{ margin: '0 0 14px 0', color: '#f8fafc', fontSize: '15px' }}>
-          Grievance Register — <span style={{ color: '#38bdf8' }}>{selectedHostel}</span> ({filtered.length})
-        </h3>
+      {statusMsg && <div style={styles.alert}>{statusMsg}</div>}
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {filtered.length === 0 ? (
-            <p style={{ color: '#64748b', textAlign: 'center', padding: '20px' }}>No active grievances for {selectedHostel}.</p>
-          ) : (
-            filtered.map((c) => (
-              <div key={c.ticket_id} style={{ background: '#030712', border: '1px solid #1e293b', borderLeft: `4px solid ${getStatusColor(c.status)}`, borderRadius: '12px', padding: '14px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      {/* Student Onboarding Panel for this Hostel */}
+      <div style={{ ...styles.card, marginBottom: '20px', borderLeft: '4px solid #3b82f6' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '12px' }}>
+          <div>
+            <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '15px' }}>🎓 Onboard Students to {user.hostel_block}</h3>
+            <p style={{ margin: '2px 0 0 0', color: '#94a3b8', fontSize: '12px' }}>Add a student below or upload a CSV (RollNo, Name, Floor, Room, Phone)</p>
+          </div>
+          <label style={styles.uploadBtn}>
+            📄 1-Click Bulk CSV Upload
+            <input type="file" accept=".csv" onChange={handleCSVUpload} style={{ display: 'none' }} />
+          </label>
+        </div>
+
+        <form onSubmit={handleAddSingleStudent} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px' }}>
+          <input type="text" placeholder="Roll No (e.g. U26CE055)" value={singleStudent.user_id} onChange={e => setSingleStudent({...singleStudent, user_id: e.target.value})} required style={styles.input} />
+          <input type="text" placeholder="Student Full Name" value={singleStudent.full_name} onChange={e => setSingleStudent({...singleStudent, full_name: e.target.value})} required style={styles.input} />
+          <input type="text" placeholder="Floor (e.g. 2nd Floor)" value={singleStudent.floor} onChange={e => setSingleStudent({...singleStudent, floor: e.target.value})} required style={styles.input} />
+          <input type="text" placeholder="Room (e.g. B-208)" value={singleStudent.room} onChange={e => setSingleStudent({...singleStudent, room: e.target.value})} required style={styles.input} />
+          <input type="text" placeholder="Phone Number" value={singleStudent.phone} onChange={e => setSingleStudent({...singleStudent, phone: e.target.value})} required style={styles.input} />
+          <button type="submit" style={styles.saveBtn}>+ Add Student</button>
+        </form>
+      </div>
+
+      {/* Category Filter Cards for this Hostel */}
+      <div style={styles.statsGrid}>
+        {COMPLAINT_CATEGORIES.map(cat => {
+          const count = complaints.filter(c => c.category === cat.id && c.status !== 'Completed').length;
+          return (
+            <div
+              key={cat.id}
+              onClick={() => setFilterCat(filterCat === cat.id ? 'All' : cat.id)}
+              style={{ ...styles.statCard, borderColor: filterCat === cat.id ? '#38bdf8' : '#1e293b' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '20px' }}>{cat.icon}</span>
+                <span style={{ fontSize: '20px', fontWeight: '800', color: cat.badgeColor }}>{count}</span>
+              </div>
+              <div style={{ fontSize: '12px', fontWeight: '700', color: '#f8fafc', marginTop: '6px' }}>{cat.title}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Strictly Scoped Hostel Complaints Register */}
+      <div style={styles.card}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+          <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '16px' }}>
+            📋 {user.hostel_block} Grievance Register ({filteredComplaints.length})
+          </h3>
+          {filterCat !== 'All' && (
+            <button onClick={() => setFilterCat('All')} style={styles.cancelBtn}>Show All Categories</button>
+          )}
+        </div>
+
+        {filteredComplaints.length === 0 ? (
+          <div style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>
+            No grievances found for {user.hostel_block}.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {filteredComplaints.map(c => (
+              <div key={c.ticket_id} style={{ ...styles.complaintCard, borderLeft: `4px solid ${getStatusColor(c.status)}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
                   <div>
-                    <span style={{ fontSize: '13px', fontWeight: '800', color: '#38bdf8' }}>{c.ticket_id}</span>
+                    <strong style={{ color: '#38bdf8', fontSize: '13px' }}>{c.ticket_id}</strong>
                     <span style={{ margin: '0 8px', color: '#64748b' }}>•</span>
-                    <span style={{ fontSize: '13px', fontWeight: '700', color: '#f8fafc' }}>{c.category}</span>
+                    <strong style={{ color: '#f8fafc', fontSize: '13px' }}>{c.category}</strong>
                   </div>
                   <span style={{ color: getStatusColor(c.status), fontWeight: '700', fontSize: '12px' }}>{c.status}</span>
                 </div>
-                <div style={{ fontSize: '14px', color: '#e2e8f0', marginTop: '6px', fontWeight: '600' }}>{c.summary}</div>
-                <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px' }}>👤 {c.student_name} ({c.hostel_block} • Rm {c.room})</div>
-                <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' -> Routed to: {c.routed_to} | Logged: {c.created_at}</div>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
 
+                <div style={{ fontSize: '15px', fontWeight: '700', color: '#f8fafc', marginTop: '6px' }}>{c.summary}</div>
+                <div style={{ fontSize: '13px', color: '#94a3b8', marginTop: '4px' }}>{c.description}</div>
+
+                <div style={{ fontSize: '12px', color: '#cbd5e1', marginTop: '8px', background: '#090d16', padding: '8px 12px', borderRadius: '8px' }}>
+                  👤 <strong>{c.student_name}</strong> ({c.student_id}) • Room <strong>{c.room}</strong> ({c.floor}) • 📞 {c.phone}
+                  <div style={{ color: '#64748b', marginTop: '4px' }}>Routed To: {c.routed_to} | Logged: {c.created_at}</div>
+                  {c.staff_remark && <div style={{ color: '#38bdf8', marginTop: '4px' }}>💬 Staff Remark: {c.staff_remark}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
 const styles = {
-  pdfBtn: { background: '#2563eb', color: '#fff', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '13px' },
+  container: { maxWidth: '1240px', margin: '0 auto', padding: '18px' },
+  topBar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', padding: '18px', marginBottom: '18px', flexWrap: 'wrap', gap: '12px' },
+  pdfFilterBox: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
+  dateInput: { background: '#030712', border: '1px solid #334155', color: '#cbd5e1', padding: '8px 10px', borderRadius: '8px', fontSize: '12px' },
+  pdfBtn: { background: '#2563eb', color: '#fff', border: 'none', padding: '9px 14px', borderRadius: '8px', fontWeight: '700', cursor: 'pointer', fontSize: '12px' },
+  alert: { background: '#1e293b', padding: '12px', borderRadius: '8px', color: '#34d399', marginBottom: '16px', fontWeight: '600', fontSize: '13px' },
+  card: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', padding: '18px' },
   table: { width: '100%', borderCollapse: 'collapse', textAlign: 'left' },
-  th: { padding: '12px', borderBottom: '1px solid #1e293b', color: '#64748b', fontSize: '12px', textTransform: 'uppercase' },
-  td: { padding: '12px', color: '#e2e8f0', fontSize: '13px', borderBottom: '1px solid #1e293b' },
-  filterBtn: { background: '#1e293b', color: '#38bdf8', border: '1px solid #334155', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' },
-  editBtn: { background: 'rgba(59, 130, 246, 0.2)', color: '#60a5fa', border: '1px solid #3b82f6', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' },
+  th: { padding: '12px', borderBottom: '1px solid #1e293b', color: '#64748b', fontSize: '11px', textTransform: 'uppercase' },
+  td: { padding: '12px', borderBottom: '1px solid #1e293b', color: '#e2e8f0', fontSize: '13px' },
+  codeBadge: { background: '#030712', color: '#38bdf8', padding: '4px 8px', borderRadius: '6px', fontSize: '12px', fontWeight: '700' },
+  keyBtn: { background: 'transparent', border: 'none', cursor: 'pointer', marginLeft: '6px', fontSize: '13px' },
+  inspectDoorBtn: { background: '#2563eb', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: '700' },
+  filterBtn: { background: '#1e293b', color: '#38bdf8', border: '1px solid #334155', padding: '7px 12px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: '700' },
+  uploadBtn: { background: '#10b981', color: '#fff', padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: '700', cursor: 'pointer' },
   input: { background: '#030712', border: '1px solid #334155', borderRadius: '8px', padding: '10px', color: '#fff', fontSize: '13px', width: '100%', boxSizing: 'border-box' },
-  saveBtn: { background: '#10b981', color: '#fff', border: 'none', padding: '10px 16px', borderRadius: '8px', fontWeight: '700', cursor: 'pointer' },
-  cancelBtn: { background: '#334155', color: '#fff', border: 'none', padding: '10px 16px', borderRadius: '8px', fontWeight: '700', cursor: 'pointer' }
+  saveBtn: { background: '#2563eb', color: '#fff', border: 'none', padding: '10px 14px', borderRadius: '8px', fontWeight: '700', cursor: 'pointer', fontSize: '13px' },
+  cancelBtn: { background: '#334155', color: '#fff', border: 'none', padding: '8px 12px', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', fontSize: '12px' },
+  statsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px', marginBottom: '18px' },
+  statCard: { background: '#0f172a', border: '2px solid', borderRadius: '14px', padding: '14px', cursor: 'pointer' },
+  complaintCard: { background: '#030712', border: '1px solid #1e293b', borderRadius: '12px', padding: '14px' },
+  modalOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' },
+  modalCard: { background: '#0f172a', border: '1px solid #3b82f6', borderRadius: '16px', padding: '22px', width: '100%', maxWidth: '520px', boxShadow: '0 25px 50px rgba(0,0,0,0.8)' }
 };
