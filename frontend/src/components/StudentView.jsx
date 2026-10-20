@@ -139,27 +139,6 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
 
   const actionPendingCount = complaints.filter((c) => c.status === 'Awaiting Confirmation').length;
 
-  // STRICTLY NO PENDING EVENTS FOR STUDENTS
-  const upcomingEvents = events.filter(e => e.status === 'Approved');
-  const pastEvents = events.filter(e => e.status === 'Completed');
-
-  const renderCalCard = (ev) => (
-    <div key={ev.event_id} onClick={() => setSelectedEvent(ev)} style={styles.chatRow}>
-      <div style={styles.calDateBox}>
-        <div style={styles.calMonth}>{new Date(ev.date).toLocaleString('default', { month: 'short' }).toUpperCase()}</div>
-        <div style={styles.calDay}>{new Date(ev.date).getDate()}</div>
-      </div>
-      <div style={styles.rowCenter}>
-        <div style={styles.rowTopLine}>
-          <span style={styles.rowTitle}>{ev.title}</span>
-          <span style={{ color: '#c084fc', fontSize: '11px', fontWeight: '800' }}>{ev.status}</span>
-        </div>
-        <div style={styles.rowSub}>📍 {ev.venue} • ⏰ {ev.start_time}</div>
-        <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '3px' }}>Club: <strong>{ev.club_id}</strong> • Tap for RSVP</div>
-      </div>
-    </div>
-  );
-
   return (
     <div style={styles.appWrapper}>
       <style>{`
@@ -227,32 +206,49 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
       )}
 
       {/* ========================================================= */}
-      {/* TAB 2: EVENTRADAR (CALENDAR TIMELINE UI)                  */}
+      {/* TAB 2: EVENTRADAR (GOOGLE CALENDAR MONTH GRID VIEW)       */}
       {/* ========================================================= */}
       {activeTab === 'eventradar' && (
         <div className="hms-anim" style={styles.tabContent}>
           <div style={styles.radarBanner}>
-            <div style={{ fontSize: '11px', fontWeight: '800', color: '#c084fc', letterSpacing: '0.8px' }}>SVNIT LIVE FEED</div>
-            <h2 style={{ margin: '4px 0 2px 0', color: '#f8fafc', fontSize: '18px' }}>📡 EventRadar</h2>
-            <p style={{ margin: 0, color: '#94a3b8', fontSize: '12px' }}>Approved campus fests, hackathons, and club events in real-time.</p>
+            <div style={{ fontSize: '11px', fontWeight: '800', color: '#c084fc', letterSpacing: '0.8px' }}>SVNIT CAMPUS CALENDAR</div>
+            <h2 style={{ margin: '4px 0 2px 0', color: '#f8fafc', fontSize: '18px' }}>📅 EventRadar Month Grid</h2>
+            <p style={{ margin: 0, color: '#94a3b8', fontSize: '12px' }}>Tap any event badge on the calendar grid to view details, RSVP, or give feedback.</p>
           </div>
 
-          <div style={styles.sectionHeader}>📅 Upcoming Events</div>
-          <div style={styles.listContainer}>
-            {upcomingEvents.length === 0 ? (
-              <div style={styles.emptyState}>No upcoming events on the radar right now.</div>
-            ) : (
-              upcomingEvents.map(ev => renderCalCard(ev))
-            )}
-          </div>
+          <div style={styles.calGridContainer}>
+            <div style={styles.calHeaderRow}>
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+                <div key={d} style={styles.calHeaderCell}>{d}</div>
+              ))}
+            </div>
 
-          <div style={{...styles.sectionHeader, marginTop: '20px', color: '#94a3b8'}}>⏮️ Past Events & Memories</div>
-          <div style={styles.listContainer}>
-            {pastEvents.length === 0 ? (
-              <div style={{...styles.emptyState, padding: '15px'}}>No past events available.</div>
-            ) : (
-              pastEvents.map(ev => renderCalCard(ev))
-            )}
+            <div style={styles.calDaysGrid}>
+              {Array.from({ length: 31 }).map((_, index) => {
+                const dayNum = index + 1;
+                const dayStr = `2026-10-${dayNum < 10 ? '0' + dayNum : dayNum}`;
+                const matchedEvents = events.filter(e => e.date === dayStr && (e.status === 'Approved' || e.status === 'Completed'));
+
+                return (
+                  <div key={index} style={styles.calCell}>
+                    <span style={styles.calCellNum}>{dayNum}</span>
+                    {matchedEvents.map(ev => (
+                      <div 
+                        key={ev.event_id} 
+                        onClick={() => setSelectedEvent(ev)} 
+                        style={{
+                          ...styles.calEventPill,
+                          background: ev.status === 'Completed' ? '#334155' : '#8b5cf6'
+                        }}
+                        title={ev.title}
+                      >
+                        {ev.title}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}
@@ -439,14 +435,14 @@ export default function StudentView({ user, complaints, apiUrl, onRefresh }) {
               </div>
               <input type="text" placeholder="Short Summary (e.g. Fan regulator sparking)" value={summary} onChange={(e) => setSummary(e.target.value)} required style={styles.input} />
               <textarea rows="3" placeholder="Describe exact issue details..." value={description} onChange={(e) => setDescription(e.target.value)} required style={styles.input} />
-              <button type="submit" disabled={submitting} style={styles.primaryBtn}>{submitting ? 'Submitting...' : '🚀 Submit Grievance'}</button>
+              <button type="submit" disabled={submitting} style={styles.submitBtn}>{submitting ? 'Submitting...' : '🚀 Submit Grievance'}</button>
             </form>
           </div>
         </div>
       )}
 
       {/* ========================================================= */}
-      {/* STUDENT BOTTOM NAVIGATION (PURPLE AESTHETIC)              */}
+      {/* STUDENT BOTTOM NAVIGATION                                 */}
       {/* ========================================================= */}
       <nav style={styles.bottomNav}>
         <button onClick={() => setActiveTab('complaints')} style={styles.navItem}>
@@ -499,12 +495,15 @@ const styles = {
   listContainer: { display: 'flex', flexDirection: 'column' },
   chatRow: { display: 'flex', alignItems: 'flex-start', gap: '14px', padding: '14px 8px', borderBottom: '1px solid rgba(30, 41, 59, 0.7)', cursor: 'pointer' },
   
-  // Calender View Date Box styling
-  calDateBox: { width: '50px', height: '56px', background: '#1e293b', borderRadius: '10px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', border: '1px solid #334155', flexShrink: 0 },
-  calMonth: { background: '#8b5cf6', color: '#fff', width: '100%', textAlign: 'center', fontSize: '10px', fontWeight: '800', padding: '2px 0' },
-  calDay: { color: '#f8fafc', fontSize: '18px', fontWeight: '800', marginTop: '2px' },
-  sectionHeader: { color: '#c084fc', fontSize: '13px', fontWeight: '800', margin: '10px 0 8px 0', textTransform: 'uppercase', letterSpacing: '0.5px' },
-  
+  // Google Calendar Month Grid CSS
+  calGridContainer: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', overflow: 'hidden', marginTop: '12px' },
+  calHeaderRow: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', background: '#1e293b', padding: '10px 0', textAlign: 'center', fontSize: '11px', fontWeight: '800', color: '#94a3b8' },
+  calHeaderCell: { textTransform: 'uppercase' },
+  calDaysGrid: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '1px', background: '#1e293b' },
+  calCell: { background: '#090d16', minHeight: '85px', padding: '6px', display: 'flex', flexDirection: 'column', gap: '4px', overflow: 'hidden' },
+  calCellNum: { fontSize: '11px', fontWeight: '700', color: '#64748b' },
+  calEventPill: { color: '#fff', fontSize: '10px', fontWeight: '700', padding: '3px 6px', borderRadius: '6px', cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+
   rowAvatar: { width: '48px', height: '48px', borderRadius: '50%', background: '#1e293b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px', flexShrink: 0 },
   rowCenter: { flex: 1, minWidth: 0 },
   rowTopLine: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '4px' },
@@ -545,59 +544,3 @@ const styles = {
   navLabel: { fontSize: '10px', fontWeight: '600' },
   badgeCount: { position: 'absolute', top: '-2px', right: '4px', background: '#8b5cf6', color: '#fff', fontSize: '9px', fontWeight: '800', padding: '1px 5px', borderRadius: '999px' }
 };
-{/* ========================================================= */}
-      {/* TAB 2: EVENTRADAR (GOOGLE CALENDAR MONTH GRID VIEW)       */}
-      {/* ========================================================= */}
-      {activeTab === 'eventradar' && (
-        <div className="hms-anim" style={styles.tabContent}>
-          <div style={styles.radarBanner}>
-            <div style={{ fontSize: '11px', fontWeight: '800', color: '#c084fc', letterSpacing: '0.8px' }}>SVNIT CAMPUS CALENDAR</div>
-            <h2 style={{ margin: '4px 0 2px 0', color: '#f8fafc', fontSize: '18px' }}>📅 EventRadar Month Grid</h2>
-            <p style={{ margin: 0, color: '#94a3b8', fontSize: '12px' }}>Tap any event badge on the calendar grid to view details, RSVP, or give feedback.</p>
-          </div>
-
-          {/* Month Calendar Grid UI */}
-          <div style={styles.calGridContainer}>
-            <div style={styles.calHeaderRow}>
-              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
-                <div key={d} style={styles.calHeaderCell}>{d}</div>
-              ))}
-            </div>
-
-            <div style={styles.calDaysGrid}>
-              {Array.from({ length: 31 }).map((_, index) => {
-                const dayNum = index + 1;
-                // Format current day to match YYYY-MM-DD (assuming October 2026 for demo or dynamic)
-                const dayStr = `2026-10-${dayNum < 10 ? '0' + dayNum : dayNum}`;
-                const matchedEvents = events.filter(e => e.date === dayStr && (e.status === 'Approved' || e.status === 'Completed'));
-
-                return (
-                  <div key={index} style={styles.calCell}>
-                    <span style={styles.calCellNum}>{dayNum}</span>
-                    {matchedEvents.map(ev => (
-                      <div 
-                        key={ev.event_id} 
-                        onClick={() => setSelectedEvent(ev)} 
-                        style={{
-                          ...styles.calEventPill,
-                          background: ev.status === 'Completed' ? '#334155' : '#8b5cf6'
-                        }}
-                        title={ev.title}
-                      >
-                        {ev.title}
-                      </div>
-                    ))}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-      calGridContainer: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', overflow: 'hidden', marginTop: '12px' },
-  calHeaderRow: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', background: '#1e293b', padding: '10px 0', textAlign: 'center', fontSize: '12px', fontWeight: '800', color: '#94a3b8' },
-  calHeaderCell: { textTransform: 'uppercase' },
-  calDaysGrid: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '1px', background: '#1e293b' },
-  calCell: { background: '#090d16', minHeight: '85px', padding: '6px', display: 'flex', flexDirection: 'column', gap: '4px', overflow: 'hidden' },
-  calCellNum: { fontSize: '11px', fontWeight: '700', color: '#64748b' },
-  calEventPill: { color: '#fff', fontSize: '10px', fontWeight: '700', padding: '3px 6px', borderRadius: '6px', cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
