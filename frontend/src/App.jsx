@@ -5,16 +5,15 @@ import WardenView from './components/WardenView';
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // =========================================================
-// FOUNDER / MULTI-NIT SUPER ADMIN PORTAL (WITH PASSWORD MASTER)
+// FOUNDER / MULTI-NIT SUPER ADMIN PORTAL
 // =========================================================
 function FounderView({ user, apiUrl }) {
-  const [activeTab, setActiveTab] = useState('tenants'); // 'tenants' | 'security'
+  const [activeTab, setActiveTab] = useState('tenants');
   const [tenants, setTenants] = useState([]);
   const [selectedTenant, setSelectedTenant] = useState(null);
   const [newHostelName, setNewHostelName] = useState('');
   const [msg, setMsg] = useState(null);
 
-  // Password Control State (Only Founder has this Master Control)
   const [founderNewPass, setFounderNewPass] = useState('');
   const [targetUserId, setTargetUserId] = useState('DEAN');
   const [targetNewPass, setTargetNewPass] = useState('');
@@ -78,7 +77,6 @@ function FounderView({ user, apiUrl }) {
     }
   };
 
-  // Founder Direct Self-Password Change
   const handleChangeFounderPassword = async (e) => {
     e.preventDefault();
     if (!founderNewPass.trim()) return;
@@ -93,7 +91,7 @@ function FounderView({ user, apiUrl }) {
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setMsg('🔒 Founder Master Password has been hardened & saved!');
+        setMsg('🔒 Founder Master Password updated successfully!');
         setFounderNewPass('');
       } else {
         setMsg(`❌ ${data.detail || 'Password update failed'}`);
@@ -103,7 +101,6 @@ function FounderView({ user, apiUrl }) {
     }
   };
 
-  // Founder Override for Dean / Warden / Student Passwords
   const handleOverrideUserPassword = async (e) => {
     e.preventDefault();
     if (!targetUserId.trim() || !targetNewPass.trim()) return;
@@ -138,7 +135,6 @@ function FounderView({ user, apiUrl }) {
         </div>
       )}
 
-      {/* Founder Master Dashboard Banner */}
       <div style={founderStyles.banner}>
         <div style={founderStyles.badge}>👑 MULTI-NIT FOUNDER HQ • GLOBAL TENANCY</div>
         <h2 style={{ margin: '6px 0 4px 0', color: '#f8fafc', fontSize: '20px' }}>
@@ -149,7 +145,6 @@ function FounderView({ user, apiUrl }) {
         </p>
       </div>
 
-      {/* Navigation Sub-Tabs: Tenants vs Security & Passwords */}
       <div style={founderStyles.navBar}>
         <button
           onClick={() => setActiveTab('tenants')}
@@ -173,7 +168,6 @@ function FounderView({ user, apiUrl }) {
         </button>
       </div>
 
-      {/* TAB 1: CAMPUSES & MODULE FLAGS */}
       {activeTab === 'tenants' && (
         <>
           <div style={founderStyles.campusStrip}>
@@ -252,19 +246,17 @@ function FounderView({ user, apiUrl }) {
         </>
       )}
 
-      {/* TAB 2: MASTER SECURITY & HIERARCHY PASSWORD CONTROL */}
       {activeTab === 'security' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {/* Card 1: Change Founder Password */}
           <div style={founderStyles.card}>
             <div style={founderStyles.sectionHead}>👑 1. Strengthen Founder Master Password</div>
             <p style={{ margin: '0 0 14px 0', color: '#94a3b8', fontSize: '13px' }}>
-              Only you have access to this portal. Set a high-entropy hard password here.
+              Only you have access to this portal. Set your hard custom password here.
             </p>
             <form onSubmit={handleChangeFounderPassword} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <input
                 type="text"
-                placeholder="Enter new hard password for FOUNDER (e.g., MyHardPass#2026!)"
+                placeholder="Enter new hard password for FOUNDER"
                 value={founderNewPass}
                 onChange={(e) => setFounderNewPass(e.target.value)}
                 required
@@ -274,7 +266,6 @@ function FounderView({ user, apiUrl }) {
             </form>
           </div>
 
-          {/* Card 2: Override Dean / Wardens / Students */}
           <div style={founderStyles.card}>
             <div style={founderStyles.sectionHead}>🎯 2. Override Any Institutional Role Password</div>
             <p style={{ margin: '0 0 14px 0', color: '#94a3b8', fontSize: '13px' }}>
@@ -713,14 +704,8 @@ function StaffView({ user, complaints, apiUrl, onRefresh }) {
 // MAIN APP ENTRY & CLEAN HMS LOGIN PORTAL
 // =========================================================
 export default function App() {
-  const [user, setUser] = useState(() => {
-    try {
-      const saved = localStorage.getItem('hms_user');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [user, setUser] = useState(null);
+  const [authInitialized, setAuthInitialized] = useState(false);
 
   const [userIdInput, setUserIdInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
@@ -729,6 +714,19 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [serverProgress, setServerProgress] = useState(0);
   const [complaints, setComplaints] = useState([]);
+
+  // Safe user restoration without breaking initial React hook mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('hms_user');
+      if (saved) {
+        setUser(JSON.parse(saved));
+      }
+    } catch (e) {
+      console.warn('Could not restore user from local storage:', e);
+    }
+    setAuthInitialized(true);
+  }, []);
 
   const fetchComplaints = useCallback(async () => {
     if (!user) return;
@@ -750,8 +748,10 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
-    fetchComplaints();
-  }, [fetchComplaints]);
+    if (user) {
+      fetchComplaints();
+    }
+  }, [user, fetchComplaints]);
 
   useEffect(() => {
     let timer;
@@ -787,7 +787,9 @@ export default function App() {
         setServerProgress(100);
         setTimeout(() => {
           setUser(data.user);
-          localStorage.setItem('hms_user', JSON.stringify(data.user));
+          try {
+            localStorage.setItem('hms_user', JSON.stringify(data.user));
+          } catch {}
           setLoading(false);
         }, 300);
       } else {
@@ -801,12 +803,18 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('hms_user');
+    try {
+      localStorage.removeItem('hms_user');
+    } catch {}
     setUser(null);
     setUserIdInput('');
     setPasswordInput('');
     setLoginError(null);
   };
+
+  if (!authInitialized) {
+    return <div style={{ minHeight: '100vh', background: '#060911' }} />;
+  }
 
   if (!user) {
     return (
