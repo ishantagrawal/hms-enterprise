@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_URL = 'https://hms-enterprise-mqvx.onrender.com';
 
 const COMPLAINT_CATEGORIES = [
   { id: 'Electricity', title: 'Electricity', icon: '⚡' },
