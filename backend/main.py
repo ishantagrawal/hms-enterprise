@@ -590,3 +590,62 @@ def list_all_users(admin_id: str):
         }
         for u in USERS_DB
     ]
+# ==========================================
+# 8. FOUNDER API: ONBOARD NEW COLLEGE & CREATE DEAN
+# ==========================================
+class OnboardCollegeReq(BaseModel):
+    institute_id: str      # e.g., "VNIT" or "IITB"
+    institute_name: str    # e.g., "VNIT Nagpur"
+    dean_user_id: str      # e.g., "DEAN_VNIT"
+    dean_name: str         # e.g., "Dr. A. K. Verma"
+    dean_password: str     # Strong password
+    dean_phone: str
+    dean_email: str
+
+@app.post("/api/founder/onboard-college")
+def onboard_college(req: OnboardCollegeReq, founder_id: str):
+    founder = next((u for u in USERS_DB if u["user_id"].lower() == founder_id.strip().lower()), None)
+    if not founder or founder.get("authority_title") != "HMS Platform Founder":
+        raise HTTPException(status_code=403, detail="Only the HMS Platform Founder can onboard new colleges and Deans")
+
+    inst_code = req.institute_id.strip().upper()
+    dean_uid = req.dean_user_id.strip().upper()
+
+    if any(u["user_id"].lower() == dean_uid.lower() for u in USERS_DB):
+        raise HTTPException(status_code=400, detail=f"User ID {dean_uid} already exists!")
+
+    if len(req.dean_password) < 8 or not re.search(r"[!@#$%^&*]", req.dean_password):
+        raise HTTPException(status_code=400, detail="Dean password must be 8+ chars with a special character (!@#$%^&*)")
+
+    # 1. Register the new College Tenant
+    TENANTS[inst_code] = {
+        "institute_id": inst_code,
+        "name": req.institute_name.strip(),
+        "short_name": inst_code,
+        "logo_url": "",
+        "ccc_osticket_url": "",
+        "ccc_api_key": "",
+        "hostels": ["Hostel Block A", "Hostel Block B"],
+        "modules": {"complaints": True, "attendance": False, "outpass": False, "mess": False}
+    }
+
+    # 2. Provision the Dean Account for that College
+    USERS_DB.append({
+        "user_id": dean_uid,
+        "password": req.dean_password.strip(),
+        "full_name": f"{req.dean_name.strip()} (Dean SW)",
+        "role": "Warden",
+        "authority_title": "Dean of Student Welfare",
+        "institute_id": inst_code,
+        "hostel_block": "All",
+        "floor": "-",
+        "room": "Dean Office",
+        "phone": req.dean_phone.strip(),
+        "email": req.dean_email.strip(),
+        "department": "All"
+    })
+
+    return {
+        "success": True,
+        "message": f"🚀 Onboarded {req.institute_name} ({inst_code})! Created Dean login: {dean_uid}"
+    }

@@ -4,12 +4,32 @@ import { COMPLAINT_CATEGORIES } from '../config/categories';
 export default function WardenView({ user, complaints, apiUrl }) {
   const [filterCat, setFilterCat] = useState('All');
   const [statusMsg, setStatusMsg] = useState(null);
-  
+
+  const isFounder = user.authority_title === 'HMS Platform Founder';
   const isSuperAdmin = user.hostel_block === 'All';
-  
+
   // Forms
-  const [wForm, setWForm] = useState({ user_id: '', full_name: '', authority_type: 'Local Warden', hostel_block: '', phone: '', email: '' });
+  const [collegeForm, setCollegeForm] = useState({
+    institute_id: '', institute_name: '', dean_user_id: '', dean_name: '', dean_password: '', dean_phone: '', dean_email: ''
+  });
+  const [wForm, setWForm] = useState({
+    user_id: '', full_name: '', authority_type: 'Local Warden', hostel_block: '', phone: '', email: '', password: ''
+  });
   const [passForm, setPassForm] = useState({ target_user_id: '', new_password: '' });
+
+  const handleOnboardCollege = async (e) => {
+    e.preventDefault();
+    const res = await fetch(`${apiUrl}/api/founder/onboard-college?founder_id=${user.user_id}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(collegeForm)
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      setStatusMsg(`✅ ${data.message}`);
+      setCollegeForm({ institute_id: '', institute_name: '', dean_user_id: '', dean_name: '', dean_password: '', dean_phone: '', dean_email: '' });
+    } else {
+      setStatusMsg(`❌ ${data.detail || 'Failed to onboard college'}`);
+    }
+  };
 
   const handleCSVUpload = (e) => {
     const file = e.target.files[0];
@@ -39,11 +59,11 @@ export default function WardenView({ user, complaints, apiUrl }) {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(wForm)
     });
     const data = await res.json();
-    if (data.success) {
+    if (res.ok && data.success) {
       setStatusMsg(`✅ ${data.message}`);
-      setWForm({ user_id: '', full_name: '', authority_type: 'Local Warden', hostel_block: '', phone: '', email: '' });
+      setWForm({ user_id: '', full_name: '', authority_type: 'Local Warden', hostel_block: '', phone: '', email: '', password: '' });
     } else {
-      setStatusMsg(`❌ ${data.detail}`);
+      setStatusMsg(`❌ ${data.detail || 'Error creating account'}`);
     }
   };
 
@@ -53,7 +73,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(passForm)
     });
     const data = await res.json();
-    if (data.success) {
+    if (res.ok && data.success) {
       setStatusMsg(`🔐 ${data.message}`);
       setPassForm({ target_user_id: '', new_password: '' });
     } else {
@@ -69,16 +89,32 @@ export default function WardenView({ user, complaints, apiUrl }) {
       
       <div style={{ marginBottom: '24px' }}>
         <h2 style={{ margin: 0, color: '#f8fafc' }}>
-          {isSuperAdmin ? '🏛️ Campus Command Center (Super Admin)' : `🏢 ${user.hostel_block} Administration`}
+          {isFounder ? '🌍 HMS Enterprise — Founder Multi-College Provisioning' : isSuperAdmin ? `🏛️ ${user.authority_title || 'Campus'} Command Center` : `🏢 ${user.hostel_block} Administration`}
         </h2>
         <p style={{ margin: '4px 0 0 0', color: '#94a3b8', fontSize: '14px' }}>
-          {isSuperAdmin ? 'Security & Role Management Dashboard.' : 'Manage your students and localized grievances.'}
+          {isFounder ? 'Onboard new NITs/IITs and generate Master Dean accounts.' : isSuperAdmin ? 'Create Chief Wardens, Associate Deans, Hostel Wardens & manage security.' : 'Manage your hostel students and localized grievances.'}
         </p>
       </div>
 
+      {/* FOUNDEREXCLUSIVE: ONBOARD NEW COLLEGE & DEAN */}
+      {isFounder && (
+        <div style={{ ...styles.controlBox, borderLeft: '4px solid #10b981', marginBottom: '24px' }}>
+          <h3 style={{ margin: '0 0 12px 0', color: '#34d399', fontSize: '16px' }}>🚀 Onboard New College / University & Provision Dean (SaaS Root)</h3>
+          <form onSubmit={handleOnboardCollege} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px' }}>
+            <input type="text" placeholder="College Code (e.g. MNIT, IITB)" value={collegeForm.institute_id} onChange={e => setCollegeForm({...collegeForm, institute_id: e.target.value})} required style={styles.input} />
+            <input type="text" placeholder="Full College Name (e.g. MNIT Jaipur)" value={collegeForm.institute_name} onChange={e => setCollegeForm({...collegeForm, institute_name: e.target.value})} required style={styles.input} />
+            <input type="text" placeholder="New Dean User ID (e.g. DEAN_MNIT)" value={collegeForm.dean_user_id} onChange={e => setCollegeForm({...collegeForm, dean_user_id: e.target.value})} required style={styles.input} />
+            <input type="text" placeholder="Dean Full Name" value={collegeForm.dean_name} onChange={e => setCollegeForm({...collegeForm, dean_name: e.target.value})} required style={styles.input} />
+            <input type="text" placeholder="Strong Password (e.g. MnitDean@2026!)" value={collegeForm.dean_password} onChange={e => setCollegeForm({...collegeForm, dean_password: e.target.value})} required style={styles.input} />
+            <input type="text" placeholder="Dean Phone" value={collegeForm.dean_phone} onChange={e => setCollegeForm({...collegeForm, dean_phone: e.target.value})} required style={styles.input} />
+            <input type="email" placeholder="Dean Official Email" value={collegeForm.dean_email} onChange={e => setCollegeForm({...collegeForm, dean_email: e.target.value})} required style={styles.input} />
+            <button type="submit" style={{ ...styles.adminBtn, background: '#10b981' }}>+ Launch College & Create Dean</button>
+          </form>
+        </div>
+      )}
+
       {isSuperAdmin ? (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
-          {/* Create Admins */}
           <div style={styles.controlBox}>
             <h3 style={{ margin: '0 0 12px 0', color: '#f8fafc', fontSize: '16px' }}>🛡️ Provision Campus Authority</h3>
             <form onSubmit={handleCreateAdmin} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -88,32 +124,32 @@ export default function WardenView({ user, complaints, apiUrl }) {
                   <option value="Chief Warden">Chief Warden (Campus Wide)</option>
                   <option value="Associate Dean">Associate Dean (Campus Wide)</option>
                 </select>
-                <input type="text" placeholder="User ID (e.g. W02)" value={wForm.user_id} onChange={e => setWForm({...wForm, user_id: e.target.value})} required style={styles.input} />
+                <input type="text" placeholder="User ID (e.g. W02 or CW02)" value={wForm.user_id} onChange={e => setWForm({...wForm, user_id: e.target.value})} required style={styles.input} />
               </div>
               <div style={{ display: 'flex', gap: '10px' }}>
                 <input type="text" placeholder="Full Name" value={wForm.full_name} onChange={e => setWForm({...wForm, full_name: e.target.value})} required style={styles.input} />
-                <input type="text" placeholder="Hostel (Leave blank for Campus Admin)" value={wForm.hostel_block} onChange={e => setWForm({...wForm, hostel_block: e.target.value})} disabled={wForm.authority_type !== 'Local Warden'} style={{...styles.input, opacity: wForm.authority_type !== 'Local Warden' ? 0.5 : 1}} />
+                <input type="text" placeholder="Hostel (e.g. Bhabha Bhawan)" value={wForm.hostel_block} onChange={e => setWForm({...wForm, hostel_block: e.target.value})} disabled={wForm.authority_type !== 'Local Warden'} style={{...styles.input, opacity: wForm.authority_type !== 'Local Warden' ? 0.4 : 1}} />
               </div>
               <div style={{ display: 'flex', gap: '10px' }}>
-                <input type="text" placeholder="Phone" value={wForm.phone} onChange={e => setWForm({...wForm, phone: e.target.value})} required style={styles.input} />
-                <button type="submit" style={styles.adminBtn}>Create Authority Account</button>
+                <input type="text" placeholder="Phone Number" value={wForm.phone} onChange={e => setWForm({...wForm, phone: e.target.value})} required style={styles.input} />
+                <input type="text" placeholder="Initial Password (Optional)" value={wForm.password} onChange={e => setWForm({...wForm, password: e.target.value})} style={styles.input} />
               </div>
+              <button type="submit" style={styles.adminBtn}>Create Authority Account</button>
             </form>
           </div>
 
-          {/* Change Passwords */}
           <div style={{...styles.controlBox, borderLeft: '4px solid #ef4444'}}>
             <h3 style={{ margin: '0 0 12px 0', color: '#f8fafc', fontSize: '16px' }}>🔐 Override User Password</h3>
-            <p style={{ margin: '0 0 12px 0', color: '#94a3b8', fontSize: '12px' }}>Reset password for any Student, Warden, or Staff ID.</p>
+            <p style={{ margin: '0 0 12px 0', color: '#94a3b8', fontSize: '12px' }}>Reset password for any Dean, Chief Warden, Assoc. Dean, Warden, or Student.</p>
             <form onSubmit={handleChangePassword} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <input type="text" placeholder="Target User ID (e.g. U26CE011 or W01)" value={passForm.target_user_id} onChange={e => setPassForm({...passForm, target_user_id: e.target.value})} required style={styles.input} />
-              <input type="text" placeholder="Enter New Password" value={passForm.new_password} onChange={e => setPassForm({...passForm, new_password: e.target.value})} required style={styles.input} />
+              <input type="text" placeholder="Target User ID (e.g. CW01, W01, U26CE011)" value={passForm.target_user_id} onChange={e => setPassForm({...passForm, target_user_id: e.target.value})} required style={styles.input} />
+              <input type="text" placeholder="New Password (8+ chars & !@#\$ for Super Admins)" value={passForm.new_password} onChange={e => setPassForm({...passForm, new_password: e.target.value})} required style={styles.input} />
               <button type="submit" style={{...styles.adminBtn, background: '#ef4444'}}>Force Password Reset</button>
             </form>
           </div>
         </div>
       ) : (
-        <div style={styles.controlBox}>
+        <div style={{ ...styles.controlBox, marginBottom: '24px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
             <div>
               <h3 style={{ margin: '0 0 4px 0', color: '#f8fafc', fontSize: '16px' }}>⚡ 1-Click Hostel Student Generator</h3>
@@ -124,18 +160,16 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {statusMsg && <div style={{ background: '#1e293b', padding: '12px', borderRadius: '8px', color: statusMsg.includes('❌') ? '#f87171' : '#34d399', fontSize: '14px', fontWeight: '600', marginBottom: '24px' }}>{statusMsg}</div>}
+      {statusMsg && <div style={{ background: '#1e293b', padding: '12px 16px', borderRadius: '8px', color: statusMsg.includes('❌') ? '#f87171' : '#34d399', fontSize: '14px', fontWeight: '600', marginBottom: '24px' }}>{statusMsg}</div>}
 
       <div style={styles.card}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <h3 style={{ margin: 0, color: '#f8fafc' }}>Master Grievance Register</h3>
-        </div>
+        <h3 style={{ margin: '0 0 16px 0', color: '#f8fafc' }}>Master Grievance Register ({filtered.length})</h3>
         <table style={styles.table}>
           <thead>
             <tr>
               <th style={styles.th}>Ticket</th>
               <th style={styles.th}>Category</th>
-              <th style={styles.th}>Student</th>
+              <th style={styles.th}>Student & Hostel</th>
               <th style={styles.th}>Issue</th>
               <th style={styles.th}>Status</th>
             </tr>
@@ -145,7 +179,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
               <tr key={c.ticket_id} style={{ borderBottom: '1px solid #1e293b' }}>
                 <td style={styles.td}><strong>{c.ticket_id}</strong></td>
                 <td style={styles.td}><strong>{c.category}</strong></td>
-                <td style={styles.td}>{c.student_name} <br/><span style={{fontSize:'12px', color:'#38bdf8'}}>{c.hostel_block}</span></td>
+                <td style={styles.td}>{c.student_name} <br/><span style={{fontSize:'12px', color:'#38bdf8'}}>{c.hostel_block} • Rm {c.room}</span></td>
                 <td style={styles.td}>{c.summary}</td>
                 <td style={styles.td}><span style={{ color: getStatusColor(c.status), fontWeight: '700' }}>{c.status}</span></td>
               </tr>
