@@ -16,7 +16,7 @@ export default function Header({ user, tenant, onLogout }) {
     <header style={styles.header}>
       <div style={styles.left}>
         <div style={styles.logoBadge}>HMS</div>
-        <div>
+        <div style={{ minWidth: 0, flex: 1 }}>
           <h1 style={styles.instName}>
             {isFounder ? 'HMS Enterprise SaaS Cloud HQ' : tenant?.name || 'SVNIT Surat'}
           </h1>
@@ -27,10 +27,10 @@ export default function Header({ user, tenant, onLogout }) {
       <div style={styles.right}>
         <div style={styles.userBox}>
           <div style={styles.avatar}>{user.user_id.slice(0, 2).toUpperCase()}</div>
-          <div>
+          <div style={{ minWidth: 0, display: 'none', '@media (min-width: 640px)': { display: 'block' } }}>
             <div style={styles.userName}>{user.full_name}</div>
             <div style={styles.userMeta}>
-              Position ID: <code style={{ color: '#38bdf8', fontWeight: '700' }}>{user.user_id}</code>
+              ID: <code style={{ color: '#38bdf8', fontWeight: '700' }}>{user.user_id}</code>
             </div>
           </div>
         </div>
@@ -41,15 +41,25 @@ export default function Header({ user, tenant, onLogout }) {
 }
 
 const styles = {
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', background: '#090d16', borderBottom: '1px solid #1e293b', flexWrap: 'wrap', gap: '12px' },
-  left: { display: 'flex', alignItems: 'center', gap: '12px' },
-  logoBadge: { background: '#2563eb', color: '#fff', fontWeight: '800', fontSize: '15px', padding: '8px 12px', borderRadius: '10px' },
-  instName: { margin: 0, fontSize: '15px', fontWeight: '700', color: '#f8fafc' },
-  subText: { margin: '2px 0 0 0', fontSize: '12px', color: '#94a3b8' },
-  right: { display: 'flex', alignItems: 'center', gap: '12px' },
+  header: { 
+    display: 'flex', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    padding: '16px 24px', 
+    background: '#090d16', 
+    borderBottom: '1px solid #1e293b', 
+    fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    WebkitFontSmoothing: 'antialiased',
+    gap: '16px' 
+  },
+  left: { display: 'flex', alignItems: 'center', gap: '14px', flex: 1, minWidth: 0 },
+  logoBadge: { background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', color: '#fff', fontWeight: '800', fontSize: '15px', padding: '9px 14px', borderRadius: '12px', letterSpacing: '0.5px', boxShadow: '0 4px 12px rgba(37, 99, 235, 0.3)', flexShrink: 0 },
+  instName: { margin: 0, fontSize: '15px', fontWeight: '700', color: '#f8fafc', lineHeight: '1.3', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  subText: { margin: '3px 0 0 0', fontSize: '12px', color: '#94a3b8', fontWeight: '500', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  right: { display: 'flex', alignItems: 'center', gap: '14px', flexShrink: 0 },
   userBox: { display: 'flex', alignItems: 'center', gap: '10px' },
-  avatar: { width: '34px', height: '34px', borderRadius: '50%', background: '#1e293b', color: '#60a5fa', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '700', fontSize: '12px', border: '1px solid #334155' },
-  userName: { fontSize: '13px', fontWeight: '600', color: '#f8fafc' },
-  userMeta: { fontSize: '11px', color: '#94a3b8' },
-  logoutBtn: { background: 'rgba(239, 68, 68, 0.1)', border: '1px solid #7f1d1d', color: '#f87171', padding: '6px 12px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }
+  avatar: { width: '36px', height: '36px', borderRadius: '50%', background: '#1e293b', color: '#60a5fa', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '700', fontSize: '12px', border: '1px solid #334155', flexShrink: 0 },
+  userName: { fontSize: '13px', fontWeight: '600', color: '#f8fafc', whiteSpace: 'nowrap' },
+  userMeta: { fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' },
+  logoutBtn: { background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', padding: '7px 14px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: '600', transition: 'all 0.2s' }
 };
