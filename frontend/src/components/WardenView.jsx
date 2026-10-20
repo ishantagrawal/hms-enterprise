@@ -13,7 +13,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
   const [resetTarget, setResetTarget] = useState(null);
   const [showAddStudentModal, setShowAddStudentModal] = useState(false);
 
-  # UniCore ERP State
+  // UniCore ERP State (Fixed comment syntax)
   const [clubs, setClubs] = useState([]);
   const [events, setEvents] = useState([]);
   const [aiAudit, setAiAudit] = useState(null);
@@ -88,9 +88,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* TAB 1: HOSTELS (DEAN) OR COMPLAINTS (WARDEN)              */}
-      {/* ========================================================= */}
       {isDean && activeTab === 'hostels' && (
         <div style={styles.tabContent}>
           <div style={styles.searchWrap}>
@@ -170,9 +167,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* TAB 2: UNICORE ERP — CLASH MATRIX & EVENT APPROVALS        */}
-      {/* ========================================================= */}
       {activeTab === 'clash' && (
         <div style={styles.tabContent}>
           <div style={{ color: '#38bdf8', fontSize: '13px', fontWeight: '700', marginBottom: '10px' }}>
@@ -210,9 +204,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* TAB 3: UNICORE ERP — MASTER CLUB LEDGER (MOD-01)          */}
-      {/* ========================================================= */}
       {activeTab === 'clubs' && (
         <div style={styles.tabContent}>
           <div style={{ color: '#4ade80', fontSize: '13px', fontWeight: '700', marginBottom: '10px' }}>
@@ -239,9 +230,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* TAB 4: UNICORE ERP — AI EVENT AUDIT & FEEDBACK (MOD-04)   */}
-      {/* ========================================================= */}
       {activeTab === 'audit' && aiAudit && (
         <div style={styles.tabContent}>
           <div style={styles.sheetCard}>
@@ -269,9 +257,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* FIXED WHATSAPP BOTTOM NAVIGATION BAR                      */}
-      {/* ========================================================= */}
       <nav style={styles.bottomNav}>
         {isDean && (
           <button onClick={() => setActiveTab('hostels')} style={styles.navItem}>
@@ -323,7 +308,7 @@ const styles = {
   searchWrap: { display: 'flex', alignItems: 'center', gap: '10px', background: '#1e293b', borderRadius: '999px', padding: '10px 16px', marginBottom: '12px' },
   searchInput: { background: 'transparent', border: 'none', outline: 'none', color: '#f8fafc', fontSize: '14px', width: '100%' },
   listContainer: { display: 'flex', flexDirection: 'column' },
-  chatRow: { display: 'flex', alignItems: 'center', gap: '14px', padding: '14px 6px', borderBottom: '1px solid rgba(30, 41, 59, 0.65)' },
+  chatRow: { display: 'flex', alignItems: 'center', gap: '14px', padding: '14px 6px', borderBottom: '1px solid rgba(30, 41, 59, 0.65)', cursor: 'pointer' },
   rowAvatar: { width: '48px', height: '48px', borderRadius: '50%', background: '#1e293b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '21px', flexShrink: 0 },
   rowCenter: { flex: 1, minWidth: 0 },
   rowTopLine: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '4px' },
