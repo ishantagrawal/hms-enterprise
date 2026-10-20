@@ -6,7 +6,7 @@ from typing import Optional, List
 from datetime import datetime
 import random
 
-app = FastAPI(title="SVNIT Surat - HMS ")
+app = FastAPI(title="SVNIT Surat - Bespoke HMS & Campus ERP")
 
 app.add_middleware(
     CORSMiddleware,
