@@ -6,18 +6,18 @@ export default function WardenView({ user, complaints, apiUrl }) {
 
   const [activeTab, setActiveTab] = useState(isDean ? 'hostels' : 'complaints');
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterCat, setFilterCat] = useState('All');
 
   const [selectedHostel, setSelectedHostel] = useState(null);
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [resetTarget, setResetTarget] = useState(null);
 
-  // Dean Clubs & Events Hub State
+  // === DEAN CLUBS HUB & EVENT STATE (ERROR WAS HERE) ===
   const [clubs, setClubs] = useState([]);
   const [events, setEvents] = useState([]);
   const [selectedClub, setSelectedClub] = useState(null);
   const [selectedEventAudit, setSelectedEventAudit] = useState(null);
 
+  // === PDF & SETTINGS STATE ===
   const [newPassword, setNewPassword] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
@@ -33,8 +33,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
     { code: 'TAGORE', name: 'Tagore Bhawan', cwId: 'CW_TAGORE', wId: 'W_TAGORE', ext: '0261-2201707', icon: '🏢' },
     { code: 'SARABHAI', name: 'Sarabhai Bhawan', cwId: 'CW_SARABHAI', wId: 'W_SARABHAI', ext: '0261-2201793', icon: '🏢' },
     { code: 'RAMAN', name: 'Raman Bhawan', cwId: 'CW_RAMAN', wId: 'W_RAMAN', ext: '0261-2201789', icon: '🏢' },
-    { code: 'ABVB', name: 'Atal Bihari Vajpayee Bhawan', cwId: 'CW_ABVB', wId: 'W_ABVB', ext: '0261-2201880', icon: '🏢' },
-    { code: 'NARMAD', name: 'Narmad Bhawan (Guest House)', cwId: 'CW_NARMAD', wId: 'W_NARMAD', ext: '0261-2201652', icon: '🏨' }
+    { code: 'ABVB', name: 'Atal Bihari Vajpayee Bhawan', cwId: 'CW_ABVB', wId: 'W_ABVB', ext: '0261-2201880', icon: '🏢' }
   ];
 
   useEffect(() => {
@@ -52,20 +51,14 @@ export default function WardenView({ user, complaints, apiUrl }) {
 
   const handleDownloadPDF = (scopeOverride) => {
     const targetScope = scopeOverride || pdfScope;
-    const query = new URLSearchParams({
-      institute_id: user.institute_id,
-      hostel_block: targetScope,
-      from_date: fromDate,
-      to_date: toDate
-    });
+    const query = new URLSearchParams({ institute_id: user.institute_id, hostel_block: targetScope, from_date: fromDate, to_date: toDate });
     window.open(`${apiUrl}/api/complaints/export-pdf?${query.toString()}`, '_blank');
   };
 
   const handlePasswordReset = async (e) => {
     e.preventDefault();
     const res = await fetch(`${apiUrl}/api/dean/reset-password?admin_id=${user.user_id}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target_user_id: resetTarget, new_password: newPassword })
     });
     const data = await res.json();
@@ -106,22 +99,9 @@ export default function WardenView({ user, complaints, apiUrl }) {
       {/* ========================================================= */}
       {isDean && activeTab === 'hostels' && (
         <div style={styles.tabContent}>
-          <div style={styles.searchWrap}>
-            <span>🔍</span>
-            <input
-              type="text"
-              placeholder="Search SVNIT Hostel Bhawan..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={styles.searchInput}
-            />
-          </div>
-
           <div style={styles.listContainer}>
             {svnitHostels.map((h) => {
-              const hostelIssues = complaints.filter(
-                (c) => c.hostel_block === h.name && c.status !== 'Completed'
-              ).length;
+              const hostelIssues = complaints.filter((c) => c.hostel_block === h.name && c.status !== 'Completed').length;
               return (
                 <div key={h.code} onClick={() => setSelectedHostel(h.name)} style={styles.chatRow}>
                   <div style={styles.rowAvatar}>{h.icon}</div>
@@ -146,17 +126,6 @@ export default function WardenView({ user, complaints, apiUrl }) {
 
       {activeTab === 'complaints' && (
         <div style={styles.tabContent}>
-          <div style={styles.searchWrap}>
-            <span>🔍</span>
-            <input
-              type="text"
-              placeholder="Search ticket ID or student..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={styles.searchInput}
-            />
-          </div>
-
           <div style={styles.listContainer}>
             {complaints.length === 0 ? (
               <div style={styles.emptyState}>No grievances found.</div>
@@ -171,9 +140,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
                     </div>
                     <div style={styles.rowBottomLine}>
                       <span style={styles.rowSub}>{c.student_name} • {c.hostel_block} (Rm {c.room})</span>
-                      <span style={{ ...styles.statusBadge, color: getStatusColor(c.status), borderColor: getStatusColor(c.status) }}>
-                        {c.status}
-                      </span>
+                      <span style={{ ...styles.statusBadge, color: getStatusColor(c.status), borderColor: getStatusColor(c.status) }}>{c.status}</span>
                     </div>
                   </div>
                 </div>
@@ -184,7 +151,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
       )}
 
       {/* ========================================================= */}
-      {/* TAB 2: DEAN CLUBS & EVENTS HUB (CALENDAR + AI AUDIT)      */}
+      {/* TAB 2: DEAN CLUBS & EVENTS HUB                            */}
       {/* ========================================================= */}
       {activeTab === 'clubshub' && (
         <div style={styles.tabContent}>
@@ -193,24 +160,16 @@ export default function WardenView({ user, complaints, apiUrl }) {
           </div>
           <div style={styles.listContainer}>
             {events.map((ev) => (
-              <div
-                key={ev.event_id}
-                onClick={() => {
-                  if (ev.ai_audit) setSelectedEventAudit(ev);
-                }}
-                style={styles.chatRow}
-              >
+              <div key={ev.event_id} onClick={() => setSelectedEventAudit(ev)} style={styles.chatRow}>
                 <div style={styles.rowAvatar}>{ev.status === 'Completed' ? '🤖' : '🎟️'}</div>
                 <div style={styles.rowCenter}>
                   <div style={styles.rowTopLine}>
                     <span style={styles.rowTitle}>{ev.title}</span>
                     <span style={{ color: getStatusColor(ev.status), fontSize: '11px', fontWeight: '700' }}>
-                      {ev.status} {ev.ai_audit ? '• Tap for AI Audit' : ''}
+                      {ev.status}
                     </span>
                   </div>
-                  <div style={styles.rowSub}>
-                    📍 {ev.venue} • 📅 {ev.date} ({ev.start_time} - {ev.end_time})
-                  </div>
+                  <div style={styles.rowSub}>📍 {ev.venue} • 📅 {ev.date}</div>
                   {isDean && ev.status === 'Pending Dean Approval' && (
                     <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }} onClick={e => e.stopPropagation()}>
                       <button onClick={() => handleApproveEvent(ev.event_id, 'Approved')} style={styles.approveBtn}>✓ Approve Venue</button>
@@ -223,7 +182,7 @@ export default function WardenView({ user, complaints, apiUrl }) {
           </div>
 
           <div style={{ color: '#4ade80', fontSize: '13px', fontWeight: '800', margin: '20px 0 8px 0' }}>
-            ⭐ Master Club Ledgers & Member Rosters (MOD-01)
+            ⭐ Master Club Ledgers & Rosters
           </div>
           <div style={styles.listContainer}>
             {clubs.map((club) => (
@@ -249,31 +208,24 @@ export default function WardenView({ user, complaints, apiUrl }) {
         <div style={styles.tabContent}>
           <div style={styles.sheetCard}>
             <h3 style={{ margin: '0 0 6px 0', color: '#f8fafc', fontSize: '17px' }}>📥 Official PDF Grievance Report</h3>
-            <p style={{ margin: '0 0 14px 0', color: '#94a3b8', fontSize: '13px' }}>Filter by date range and scope to download audit reports.</p>
-
             {isDean && (
               <div style={{ marginBottom: '12px' }}>
                 <label style={styles.label}>Hostel Scope</label>
                 <select value={pdfScope} onChange={(e) => setPdfScope(e.target.value)} style={styles.input}>
-                  <option value="All">All 10 SVNIT Hostels Combined</option>
-                  {svnitHostels.map((h) => (
-                    <option key={h.code} value={h.name}>{h.name}</option>
-                  ))}
+                  <option value="All">All SVNIT Hostels Combined</option>
+                  {svnitHostels.map((h) => <option key={h.code} value={h.name}>{h.name}</option>)}
                 </select>
               </div>
             )}
-
             <div style={{ marginBottom: '12px' }}>
               <label style={styles.label}>From Date</label>
               <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} style={styles.input} />
             </div>
-
             <div style={{ marginBottom: '16px' }}>
               <label style={styles.label}>To Date</label>
               <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} style={styles.input} />
             </div>
-
-            <button onClick={() => handleDownloadPDF()} style={styles.primaryBtn}>🖨️ Download & Save PDF Report</button>
+            <button onClick={() => handleDownloadPDF()} style={styles.primaryBtn}>🖨️ Download & Save PDF</button>
           </div>
         </div>
       )}
@@ -284,33 +236,26 @@ export default function WardenView({ user, complaints, apiUrl }) {
       {activeTab === 'settings' && (
         <div style={styles.tabContent}>
           {isDean ? (
-            <div>
-              <div style={{ color: '#94a3b8', fontSize: '13px', marginBottom: '12px' }}>
-                Tap any Position ID below to reset its password when faculty rotates:
-              </div>
-              <div style={styles.listContainer}>
-                {svnitHostels.map((h) => (
-                  <div key={h.code} style={styles.chatRow}>
-                    <div style={styles.rowAvatar}>🔑</div>
-                    <div style={styles.rowCenter}>
-                      <div style={styles.rowTitle}>{h.name}</div>
-                      <div style={{ display: 'flex', gap: '8px', marginTop: '6px', flexWrap: 'wrap' }}>
-                        <button onClick={() => setResetTarget(h.cwId)} style={styles.keyChip}>Reset {h.cwId}</button>
-                        <button onClick={() => setResetTarget(h.wId)} style={styles.keyChip}>Reset {h.wId}</button>
-                      </div>
+            <div style={styles.listContainer}>
+              {svnitHostels.map((h) => (
+                <div key={h.code} style={styles.chatRow}>
+                  <div style={styles.rowAvatar}>🔑</div>
+                  <div style={styles.rowCenter}>
+                    <div style={styles.rowTitle}>{h.name}</div>
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                      <button onClick={() => setResetTarget(h.cwId)} style={styles.keyChip}>Reset {h.cwId}</button>
+                      <button onClick={() => setResetTarget(h.wId)} style={styles.keyChip}>Reset {h.wId}</button>
                     </div>
                   </div>
-                ))}
-              </div>
+                </div>
+              ))}
             </div>
           ) : (
             <div style={styles.sheetCard}>
               <h3 style={{ margin: '0 0 6px 0', color: '#f8fafc' }}>{user.full_name}</h3>
-              <p style={{ margin: '0 0 14px 0', color: '#38bdf8', fontSize: '13px', fontWeight: '700' }}>Position ID: {user.user_id}</p>
+              <p style={{ margin: '0 0 14px 0', color: '#38bdf8', fontSize: '13px' }}>ID: {user.user_id}</p>
               <div style={styles.detailBox}>
-                <div><strong>Assigned Hostel:</strong> {user.hostel_block}</div>
-                <div style={{ marginTop: '6px' }}><strong>Email:</strong> {user.email}</div>
-                <div style={{ marginTop: '6px' }}><strong>Phone:</strong> {user.phone}</div>
+                <div><strong>Hostel:</strong> {user.hostel_block}</div>
               </div>
             </div>
           )}
@@ -331,12 +276,11 @@ export default function WardenView({ user, complaints, apiUrl }) {
               <button onClick={() => setSelectedClub(null)} style={styles.closeBtn}>✕</button>
             </div>
             <p style={{ color: '#cbd5e1', fontSize: '13px', margin: '0 0 12px 0' }}>{selectedClub.mission}</p>
-            <div style={{ color: '#38bdf8', fontSize: '12px', fontWeight: '700', marginBottom: '6px' }}>Member Roster & Positions:</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {selectedClub.members?.map((m, i) => (
                 <div key={i} style={styles.memberCard}>
                   <div><strong>{m.name}</strong> ({m.roll})</div>
-                  <span style={styles.posBadge}>{m.position} • {m.branch}</span>
+                  <span style={styles.posBadge}>{m.position}</span>
                 </div>
               ))}
             </div>
@@ -345,78 +289,91 @@ export default function WardenView({ user, complaints, apiUrl }) {
       )}
 
       {/* ========================================================= */}
-      {/* MODAL 2: AI EVENT AUDIT SUMMARY SHEET                     */}
+      {/* MODAL 2: EVENT DETAILS & AI AUDIT SUMMARY SHEET           */}
       {/* ========================================================= */}
       {selectedEventAudit && (
         <div style={styles.modalOverlay} onClick={() => setSelectedEventAudit(null)}>
           <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
             <div style={styles.modalHeader}>
-              <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '17px' }}>🤖 AI Event Feedback Audit</h3>
+              <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '17px' }}>
+                {selectedEventAudit.ai_audit ? '🤖 Event Audit & Details' : '🎟️ Event Details'}
+              </h3>
               <button onClick={() => setSelectedEventAudit(null)} style={styles.closeBtn}>✕</button>
             </div>
-            <h4 style={{ margin: '0 0 8px 0', color: '#38bdf8' }}>{selectedEventAudit.title}</h4>
-            <div style={{ display: 'flex', gap: '14px', marginBottom: '12px', fontSize: '13px', color: '#cbd5e1' }}>
-              <div>👥 Attendees: <strong>{selectedEventAudit.ai_audit.total_attendees}</strong></div>
-              <div>⭐ Rating: <strong>{selectedEventAudit.ai_audit.average_rating} / 5.0</strong></div>
-            </div>
-            <div style={styles.detailBox}>
-              <div style={{ color: '#4ade80', fontWeight: '700' }}>👍 Key Pros:</div>
-              <ul style={{ margin: '4px 0 10px 20px', padding: 0 }}>
-                {selectedEventAudit.ai_audit.key_pros.map((p, i) => <li key={i}>{p}</li>)}
-              </ul>
-              <div style={{ color: '#f87171', fontWeight: '700' }}>⚠️ Areas of Improvement:</div>
-              <ul style={{ margin: '4px 0 10px 20px', padding: 0 }}>
-                {selectedEventAudit.ai_audit.key_cons.map((c, i) => <li key={i}>{c}</li>)}
-              </ul>
-              <div><strong>Dean Recommendation:</strong> {selectedEventAudit.ai_audit.recommendation}</div>
-            </div>
+            
+            {/* Display Rich Media (Image) */}
+            {selectedEventAudit.image_url && (
+              <img src={selectedEventAudit.image_url} alt="Event" style={{ width: '100%', height: '160px', objectFit: 'cover', borderRadius: '12px', marginBottom: '12px' }} />
+            )}
+
+            <h4 style={{ margin: '0 0 8px 0', color: '#38bdf8', fontSize: '18px' }}>{selectedEventAudit.title}</h4>
+            <div style={{ color: '#cbd5e1', fontSize: '13px', marginBottom: '12px' }}>📍 {selectedEventAudit.venue} • 📅 {selectedEventAudit.date}</div>
+
+            {/* Display Rich Event Description */}
+            {selectedEventAudit.description && (
+              <p style={{ background: '#090d16', padding: '12px', borderRadius: '10px', color: '#cbd5e1', fontSize: '13px', border: '1px solid #1e293b' }}>
+                {selectedEventAudit.description}
+              </p>
+            )}
+
+            {/* Display AI Audit Details if Event is Completed */}
+            {selectedEventAudit.ai_audit && (
+              <div style={styles.detailBox}>
+                <div style={{ display: 'flex', gap: '14px', marginBottom: '12px' }}>
+                  <div>👥 Attendees: <strong>{selectedEventAudit.ai_audit.total_attendees}</strong></div>
+                  <div>⭐ Rating: <strong>{selectedEventAudit.ai_audit.average_rating} / 5.0</strong></div>
+                </div>
+                <div style={{ color: '#4ade80', fontWeight: '700' }}>👍 Key Pros:</div>
+                <ul style={{ margin: '4px 0 10px 20px', padding: 0 }}>{selectedEventAudit.ai_audit.key_pros.map((p, i) => <li key={i}>{p}</li>)}</ul>
+                <div style={{ color: '#f87171', fontWeight: '700' }}>⚠️ Areas of Improvement:</div>
+                <ul style={{ margin: '4px 0 10px 20px', padding: 0 }}>{selectedEventAudit.ai_audit.key_cons.map((c, i) => <li key={i}>{c}</li>)}</ul>
+                <div><strong>Recommendation:</strong> {selectedEventAudit.ai_audit.recommendation}</div>
+              </div>
+            )}
           </div>
         </div>
       )}
 
       {/* ========================================================= */}
-      {/* FIXED WHATSAPP BOTTOM NAVIGATION BAR                      */}
+      {/* MODAL 3: PASSWORD RESET                                   */}
       {/* ========================================================= */}
+      {resetTarget && (
+        <div style={styles.modalOverlay} onClick={() => setResetTarget(null)}>
+          <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '16px' }}>🔐 Reset: {resetTarget}</h3>
+              <button onClick={() => setResetTarget(null)} style={styles.closeBtn}>✕</button>
+            </div>
+            <form onSubmit={handlePasswordReset} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <input type="text" placeholder="Enter New Password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required style={styles.input} />
+              <button type="submit" style={styles.primaryBtn}>Save Password</button>
+            </form>
+          </div>
+        </div>
+      )}
+
       <nav style={styles.bottomNav}>
         {isDean && (
           <button onClick={() => setActiveTab('hostels')} style={styles.navItem}>
-            <div style={{ ...styles.iconPill, background: activeTab === 'hostels' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}>
-              <span style={{ fontSize: '18px' }}>🏢</span>
-            </div>
+            <div style={{ ...styles.iconPill, background: activeTab === 'hostels' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}><span style={{ fontSize: '18px' }}>🏢</span></div>
             <span style={{ ...styles.navLabel, color: activeTab === 'hostels' ? '#f8fafc' : '#94a3b8' }}>Hostels</span>
           </button>
         )}
-
         <button onClick={() => setActiveTab('complaints')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'complaints' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}>
-            <span style={{ fontSize: '18px' }}>💬</span>
-            {openCount > 0 && <span style={styles.badgeCount}>{openCount}</span>}
-          </div>
+          <div style={{ ...styles.iconPill, background: activeTab === 'complaints' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}><span style={{ fontSize: '18px' }}>💬</span>{openCount > 0 && <span style={styles.badgeCount}>{openCount}</span>}</div>
           <span style={{ ...styles.navLabel, color: activeTab === 'complaints' ? '#f8fafc' : '#94a3b8' }}>Grievances</span>
         </button>
-
         <button onClick={() => setActiveTab('clubshub')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'clubshub' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}>
-            <span style={{ fontSize: '18px' }}>⭐</span>
-            {pendingEventsCount > 0 && <span style={styles.badgeCount}>{pendingEventsCount}</span>}
-          </div>
+          <div style={{ ...styles.iconPill, background: activeTab === 'clubshub' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}><span style={{ fontSize: '18px' }}>⭐</span>{pendingEventsCount > 0 && <span style={styles.badgeCount}>{pendingEventsCount}</span>}</div>
           <span style={{ ...styles.navLabel, color: activeTab === 'clubshub' ? '#f8fafc' : '#94a3b8' }}>Clubs Hub</span>
         </button>
-
         <button onClick={() => setActiveTab('reports')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'reports' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}>
-            <span style={{ fontSize: '18px' }}>📥</span>
-          </div>
+          <div style={{ ...styles.iconPill, background: activeTab === 'reports' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}><span style={{ fontSize: '18px' }}>📥</span></div>
           <span style={{ ...styles.navLabel, color: activeTab === 'reports' ? '#f8fafc' : '#94a3b8' }}>PDF Report</span>
         </button>
-
         <button onClick={() => setActiveTab('settings')} style={styles.navItem}>
-          <div style={{ ...styles.iconPill, background: activeTab === 'settings' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}>
-            <span style={{ fontSize: '18px' }}>{isDean ? '🔑' : '👤'}</span>
-          </div>
-          <span style={{ ...styles.navLabel, color: activeTab === 'settings' ? '#f8fafc' : '#94a3b8' }}>
-            {isDean ? 'Passwords' : 'Profile'}
-          </span>
+          <div style={{ ...styles.iconPill, background: activeTab === 'settings' ? 'rgba(34, 197, 94, 0.2)' : 'transparent' }}><span style={{ fontSize: '18px' }}>{isDean ? '🔑' : '👤'}</span></div>
+          <span style={{ ...styles.navLabel, color: activeTab === 'settings' ? '#f8fafc' : '#94a3b8' }}>{isDean ? 'Passwords' : 'Profile'}</span>
         </button>
       </nav>
     </div>
@@ -427,8 +384,6 @@ const styles = {
   appWrapper: { maxWidth: '680px', margin: '0 auto', paddingBottom: '90px', minHeight: 'calc(100vh - 70px)' },
   tabContent: { padding: '14px' },
   toast: { margin: '10px 14px 0 14px', background: '#1e293b', borderLeft: '4px solid #22c55e', padding: '12px', borderRadius: '10px', color: '#f8fafc', fontSize: '13px', fontWeight: '600', cursor: 'pointer' },
-  searchWrap: { display: 'flex', alignItems: 'center', gap: '10px', background: '#1e293b', borderRadius: '999px', padding: '10px 16px', marginBottom: '12px' },
-  searchInput: { background: 'transparent', border: 'none', outline: 'none', color: '#f8fafc', fontSize: '14px', width: '100%' },
   listContainer: { display: 'flex', flexDirection: 'column' },
   chatRow: { display: 'flex', alignItems: 'center', gap: '14px', padding: '14px 6px', borderBottom: '1px solid rgba(30, 41, 59, 0.65)', cursor: 'pointer' },
   rowAvatar: { width: '48px', height: '48px', borderRadius: '50%', background: '#1e293b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '21px', flexShrink: 0 },
@@ -438,12 +393,12 @@ const styles = {
   rowTime: { color: '#94a3b8', fontSize: '11px', flexShrink: 0 },
   rowBottomLine: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' },
   rowSub: { color: '#94a3b8', fontSize: '13px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  codePill: { background: '#1e293b', color: '#38bdf8', fontSize: '11px', fontWeight: '800', padding: '2px 8px', borderRadius: '999px' },
   unreadBubble: { fontSize: '11px', fontWeight: '800', padding: '2px 8px', borderRadius: '999px', flexShrink: 0 },
   statusBadge: { fontSize: '10px', fontWeight: '700', border: '1px solid', padding: '2px 8px', borderRadius: '999px', flexShrink: 0 },
+  codePill: { background: '#1e293b', color: '#38bdf8', fontSize: '11px', fontWeight: '800', padding: '2px 8px', borderRadius: '999px' },
   emptyState: { textAlign: 'center', padding: '40px 20px', color: '#64748b', fontSize: '14px' },
   sheetCard: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: '18px', padding: '20px' },
-  detailBox: { background: '#090d16', border: '1px solid #1e293b', borderRadius: '12px', padding: '14px', fontSize: '13px', color: '#cbd5e1' },
+  detailBox: { background: '#090d16', border: '1px solid #1e293b', borderRadius: '12px', padding: '14px', fontSize: '13px', color: '#cbd5e1', marginTop: '12px' },
   label: { display: 'block', fontSize: '11px', fontWeight: '700', color: '#94a3b8', marginBottom: '6px', textTransform: 'uppercase' },
   input: { width: '100%', background: '#090d16', border: '1px solid #334155', borderRadius: '10px', padding: '12px', color: '#fff', fontSize: '14px', boxSizing: 'border-box' },
   primaryBtn: { width: '100%', background: '#22c55e', color: '#052e16', border: 'none', borderRadius: '10px', padding: '13px', fontWeight: '800', fontSize: '14px', cursor: 'pointer' },
@@ -462,45 +417,3 @@ const styles = {
   navLabel: { fontSize: '11px', fontWeight: '600' },
   badgeCount: { position: 'absolute', top: '-3px', right: '6px', background: '#22c55e', color: '#052e16', fontSize: '10px', fontWeight: '800', padding: '1px 6px', borderRadius: '999px' }
 };
-// Open WardenView.jsx, find the selectedEventAudit modal and replace/update it to support rich descriptions:
-
-      {/* ========================================================= */}
-      {/* MODAL 2: EVENT DETAILS & AI AUDIT SUMMARY SHEET           */}
-      {/* ========================================================= */}
-      {selectedEventAudit && (
-        <div style={styles.modalOverlay} onClick={() => setSelectedEventAudit(null)}>
-          <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
-            <div style={styles.modalHeader}>
-              <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '17px' }}>{selectedEventAudit.ai_audit ? '🤖 Event Audit & Details' : '🎟️ Event Details'}</h3>
-              <button onClick={() => setSelectedEventAudit(null)} style={styles.closeBtn}>✕</button>
-            </div>
-            
-            {selectedEventAudit.image_url && (
-              <img src={selectedEventAudit.image_url} alt="Event" style={{ width: '100%', height: '160px', objectFit: 'cover', borderRadius: '12px', marginBottom: '12px' }} />
-            )}
-
-            <h4 style={{ margin: '0 0 8px 0', color: '#38bdf8', fontSize: '18px' }}>{selectedEventAudit.title}</h4>
-            <div style={{ color: '#cbd5e1', fontSize: '13px', marginBottom: '12px' }}>📍 {selectedEventAudit.venue} • 📅 {selectedEventAudit.date}</div>
-
-            {selectedEventAudit.description && (
-              <p style={{ background: '#090d16', padding: '12px', borderRadius: '10px', color: '#cbd5e1', fontSize: '13px', border: '1px solid #1e293b' }}>
-                {selectedEventAudit.description}
-              </p>
-            )}
-
-            {selectedEventAudit.ai_audit && (
-              <div style={styles.detailBox}>
-                <div style={{ display: 'flex', gap: '14px', marginBottom: '12px' }}>
-                  <div>👥 Attendees: <strong>{selectedEventAudit.ai_audit.total_attendees}</strong></div>
-                  <div>⭐ Rating: <strong>{selectedEventAudit.ai_audit.average_rating} / 5.0</strong></div>
-                </div>
-                <div style={{ color: '#4ade80', fontWeight: '700' }}>👍 Key Pros:</div>
-                <ul style={{ margin: '4px 0 10px 20px', padding: 0 }}>{selectedEventAudit.ai_audit.key_pros.map((p, i) => <li key={i}>{p}</li>)}</ul>
-                <div style={{ color: '#f87171', fontWeight: '700' }}>⚠️ Areas of Improvement:</div>
-                <ul style={{ margin: '4px 0 10px 20px', padding: 0 }}>{selectedEventAudit.ai_audit.key_cons.map((c, i) => <li key={i}>{c}</li>)}</ul>
-                <div><strong>Recommendation:</strong> {selectedEventAudit.ai_audit.recommendation}</div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
