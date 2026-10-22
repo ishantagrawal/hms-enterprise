@@ -1,83 +1,102 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
 export default function ClubPortal({ user, apiUrl }) {
-  const [activeTab, setActiveTab] = useState('profile');
+  const [page, setPage] = useState('home');
   const [clubs, setClubs] = useState([]);
   const [events, setEvents] = useState([]);
-  const [notices, setNotices] = useState([]);
-  const [selectedEventFeedback, setSelectedEventFeedback] = useState(null);
   const [msg, setMsg] = useState(null);
+  const [selectedEvent, setSelectedEvent] = useState(null);
 
-  // 1. Manual Club Profile & Dossier State
-  const [dossier, setDossier] = useState({
-    name: '', tagline: '', mission: '', faculty_advisor: '',
-    head_coordinator: '', banner_url: '', avatar_url: '', extra_dean_info: ''
-  });
+  // Club Info
+  const [facultyAdvisor, setFacultyAdvisor] = useState('');
+  const [headCoordinator, setHeadCoordinator] = useState('');
+  const [missionInput, setMissionInput] = useState('');
+  const [extraInfoInput, setExtraInfoInput] = useState('');
 
-  // 2. Manual Member Roster Form
+  // Custom Member Position Form (Supports any custom role name & multiple people per role)
   const [memberForm, setMemberForm] = useState({ name: '', roll: '', position: '', phone: '' });
 
-  // 3. Gallery Upload Form (Device File OR URL)
-  const [galleryForm, setGalleryForm] = useState({ media_type: 'image', media_url: '', caption: '' });
-
-  // 4. Manual Event Requisition Form (100% Free-Text Manual Venue)
+  // Comprehensive Manual Event Request Form + Unlimited Custom Fields
   const [eventForm, setEventForm] = useState({
-    title: '', date: '2026-10-29', start_time: '16:00', end_time: '19:00',
-    venue: '', description: '', image_url: '', registration_link: ''
+    title: '',
+    date: '2026-10-29',
+    start_time: '10:00',
+    end_time: '13:00',
+    venue: '',
+    description: '',
+    budget: '',
+    funding_source: '',
+    chief_guest: '',
+    expected_attendance: '',
+    logistics_needs: '',
+    image_url: '',
+    registration_link: ''
   });
+  const [eventCustomFields, setEventCustomFields] = useState([]);
 
-  // 5. Targeted Notice Form
+  // Comprehensive Notice Request Form + Custom Fields
   const [noticeForm, setNoticeForm] = useState({
-    title: '', message: '', target_branch: 'All', target_year: 'All', attachment_link: ''
+    title: '',
+    message: '',
+    target_branch: 'All Branches',
+    target_year: 'All Years',
+    image_url: '',
+    registration_link: ''
   });
+  const [noticeCustomFields, setNoticeCustomFields] = useState([]);
+
+  // Gallery
+  const [galleryCaption, setGalleryCaption] = useState('');
+  const [galleryUrl, setGalleryUrl] = useState('');
 
   const loadClubData = useCallback(async () => {
     try {
-      const [cRes, eRes, nRes] = await Promise.all([
+      const [cRes, eRes] = await Promise.all([
         fetch(`${apiUrl}/api/unicore/clubs`),
-        fetch(`${apiUrl}/api/unicore/events`),
-        fetch(`${apiUrl}/api/unicore/notices`)
+        fetch(`${apiUrl}/api/unicore/events`)
       ]);
       if (cRes.ok) {
         const cData = await cRes.json();
         setClubs(cData);
         const myC = cData.find((c) => c.club_id.toUpperCase() === user.user_id.toUpperCase());
         if (myC) {
-          setDossier({
-            name: myC.name || '',
-            tagline: myC.tagline || '',
-            mission: myC.mission || '',
-            faculty_advisor: myC.faculty_advisor || '',
-            head_coordinator: myC.head_coordinator || '',
-            banner_url: myC.banner_url || '',
-            avatar_url: myC.avatar_url || '',
-            extra_dean_info: myC.extra_dean_info || ''
-          });
+          setFacultyAdvisor(myC.faculty_advisor || '');
+          setHeadCoordinator(myC.head_coordinator || '');
+          setMissionInput(myC.mission || '');
+          setExtraInfoInput(myC.extra_dean_info || '');
         }
       }
       if (eRes.ok) setEvents(await eRes.json());
-      if (nRes.ok) setNotices(await nRes.json());
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error(e);
+    }
   }, [apiUrl, user.user_id]);
 
   useEffect(() => { loadClubData(); }, [loadClubData]);
 
-  // Helper to read local file from Device Gallery into Base64 Data URL
-  const handleFileUpload = (file, callback) => {
+  const handleImageUpload = (e, setter) => {
+    const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onloadend = () => callback(reader.result);
+    reader.onloadend = () => setter(reader.result);
     reader.readAsDataURL(file);
   };
 
-  const handleSaveDossier = async (e) => {
+  const handleSaveInfo = async (e) => {
     e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/unicore/clubs/update-dossier`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ club_id: user.user_id, ...dossier })
+    const res = await fetch(`${apiUrl}/api/unicore/clubs/update-info`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        club_id: user.user_id,
+        faculty_advisor: facultyAdvisor,
+        head_coordinator: headCoordinator,
+        mission: missionInput,
+        extra_dean_info: extraInfoInput
+      })
     });
     if (res.ok) {
-      setMsg('✅ Club profile, photos & dossier updated live!');
+      setMsg('✅ Club profile saved!');
       loadClubData();
     }
   };
@@ -85,402 +104,481 @@ export default function ClubPortal({ user, apiUrl }) {
   const handleAddMember = async (e) => {
     e.preventDefault();
     const res = await fetch(`${apiUrl}/api/unicore/clubs/add-member`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ club_id: user.user_id, ...memberForm })
     });
     if (res.ok) {
-      setMsg(`✅ Added ${memberForm.name} (${memberForm.position}) to club roster!`);
-      setMemberForm({ name: '', roll: '', position: '', phone: '' });
+      setMsg(`✅ Added ${memberForm.name} as ${memberForm.position}!`);
+      setMemberForm({ name: '', roll: '', position: memberForm.position, phone: '' });
       loadClubData();
     }
   };
 
-  const handleRemoveMember = async (memberId) => {
+  const handleRemoveMember = async (index) => {
     const res = await fetch(`${apiUrl}/api/unicore/clubs/remove-member`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ club_id: user.user_id, member_id: memberId })
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ club_id: user.user_id, index })
     });
-    if (res.ok) {
-      setMsg('🗑️ Member removed from roster.');
-      loadClubData();
-    }
-  };
-
-  const handleAddGalleryItem = async (e) => {
-    e.preventDefault();
-    if (!galleryForm.media_url) {
-      setMsg('❌ Please select a photo/video from your gallery or paste a URL.');
-      return;
-    }
-    const res = await fetch(`${apiUrl}/api/unicore/clubs/add-gallery`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ club_id: user.user_id, ...galleryForm })
-    });
-    if (res.ok) {
-      setMsg('📸 Media added to Club Gallery!');
-      setGalleryForm({ media_type: 'image', media_url: '', caption: '' });
-      loadClubData();
-    }
+    if (res.ok) loadClubData();
   };
 
   const handleProposeEvent = async (e) => {
     e.preventDefault();
     const res = await fetch(`${apiUrl}/api/unicore/events/propose`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...eventForm, club_id: user.user_id, submitted_by: dossier.name || user.user_id })
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...eventForm,
+        club_id: user.user_id,
+        submitted_by: headCoordinator || user.full_name,
+        custom_fields: eventCustomFields.filter((f) => f.label.trim() !== '')
+      })
     });
     const data = await res.json();
     if (res.ok && data.success) {
       setMsg(`✅ ${data.message}`);
-      setEventForm({ title: '', date: '2026-10-29', start_time: '16:00', end_time: '19:00', venue: '', description: '', image_url: '', registration_link: '' });
+      setEventCustomFields([]);
       loadClubData();
+      setPage('my_events');
     }
   };
 
-  const handleMarkEventCompleted = async (eventId) => {
-    const res = await fetch(`${apiUrl}/api/unicore/events/approve?event_id=${eventId}&action=Completed`, { method: 'POST' });
-    if (res.ok) {
-      setMsg('🏁 Event marked as Completed! Students can now submit ratings and reviews.');
-      loadClubData();
-    }
-  };
-
-  const handleSendNotice = async (e) => {
+  const handleProposeNotice = async (e) => {
     e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/unicore/notices/create`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...noticeForm, club_id: user.user_id })
+    const res = await fetch(`${apiUrl}/api/notices/propose`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...noticeForm,
+        club_id: user.user_id,
+        custom_fields: noticeCustomFields.filter((f) => f.label.trim() !== '')
+      })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      setMsg(`📢 ${data.message}`);
+      setNoticeForm({ title: '', message: '', target_branch: 'All Branches', target_year: 'All Years', image_url: '', registration_link: '' });
+      setNoticeCustomFields([]);
+      setPage('home');
+    }
+  };
+
+  const handleAddGallery = async (e) => {
+    e.preventDefault();
+    if (!galleryUrl) return;
+    const res = await fetch(`${apiUrl}/api/unicore/clubs/add-gallery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ club_id: user.user_id, media_type: 'image', media_url: galleryUrl, caption: galleryCaption })
     });
     if (res.ok) {
-      setMsg('📢 Notice submitted to Dean for approval!');
-      setNoticeForm({ title: '', message: '', target_branch: 'All', target_year: 'All', attachment_link: '' });
+      setMsg('📸 Photo added to gallery!');
+      setGalleryCaption('');
+      setGalleryUrl('');
       loadClubData();
     }
   };
 
   const myClub = clubs.find((c) => c.club_id.toUpperCase() === user.user_id.toUpperCase()) || {};
-  const myEvents = events.filter((e) => e.club_id.toUpperCase() === user.user_id.toUpperCase());
-  const myNotices = notices.filter((n) => n.club_id.toUpperCase() === user.user_id.toUpperCase());
+  const myEvents = events.filter((e) => e.club_id.toUpperCase() === (user.user_id || '').toUpperCase());
 
   return (
-    <div className="hms-container">
-      {msg && <div className="hms-toast" onClick={() => setMsg(null)}>{msg}</div>}
+    <div className="ptm-shell-layout">
+      <aside className="ptm-sidebar-desktop">
+        <button className={`ptm-side-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}>🏠 Club Hub</button>
+        <button className={`ptm-side-btn ${page === 'info' ? 'active' : ''}`} onClick={() => setPage('info')}>ℹ️ Club Info & Advisor</button>
+        <button className={`ptm-side-btn ${page === 'members' ? 'active' : ''}`} onClick={() => setPage('members')}>👥 Custom Positions ({myClub.members?.length || 0})</button>
+        <button className={`ptm-side-btn ${page === 'propose_event' ? 'active' : ''}`} onClick={() => setPage('propose_event')}>🚀 Request Event to Dean</button>
+        <button className={`ptm-side-btn ${page === 'propose_notice' ? 'active' : ''}`} onClick={() => setPage('propose_notice')}>📢 Post Student Notice</button>
+        <button className={`ptm-side-btn ${page === 'my_events' ? 'active' : ''}`} onClick={() => setPage('my_events')}>🎪 My Events ({myEvents.length})</button>
+        <button className={`ptm-side-btn ${page === 'gallery' ? 'active' : ''}`} onClick={() => setPage('gallery')}>📸 Photo Gallery</button>
+      </aside>
 
-      {/* Instagram-Style Live Club Header Preview */}
-      <div className="hms-ig-banner" style={{ backgroundImage: `url(${dossier.banner_url || 'https://images.unsplash.com/photo-1523580494863-6f3031224c94?w=1000&q=80'})` }}>
-        <div className="hms-ig-avatar">
-          {dossier.avatar_url ? <img src={dossier.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : user.user_id.slice(0, 3)}
-        </div>
-      </div>
+      <div className="ptm-page-wrap">
+        {msg && <div className="ptm-toast" onClick={() => setMsg(null)}>{msg}</div>}
 
-      <div className="hms-desktop-tabs">
-        <button className={`hms-dtab ${activeTab === 'profile' ? 'active' : ''}`} onClick={() => setActiveTab('profile')}>
-          🎨 Club Profile & Roster ({myClub.members?.length || 0})
-        </button>
-        <button className={`hms-dtab ${activeTab === 'gallery' ? 'active' : ''}`} onClick={() => setActiveTab('gallery')}>
-          📸 Media Gallery ({myClub.gallery?.length || 0})
-        </button>
-        <button className={`hms-dtab ${activeTab === 'events' ? 'active' : ''}`} onClick={() => setActiveTab('events')}>
-          🎪 Propose Events & Feedbacks ({myEvents.length})
-        </button>
-        <button className={`hms-dtab ${activeTab === 'notices' ? 'active' : ''}`} onClick={() => setActiveTab('notices')}>
-          📢 Student Notices ({myNotices.length})
-        </button>
-      </div>
-
-      {/* TAB 1: 100% MANUAL CLUB PROFILE & MEMBER ROSTER */}
-      {activeTab === 'profile' && (
-        <div className="hms-grid-2">
-          <div className="hms-card">
-            <div className="hms-section-label">✏️ Customize Club Identity, Photos & Dossier</div>
-            <form onSubmit={handleSaveDossier} className="hms-stack">
-              <div>
-                <label className="hms-label">Official Club Name</label>
-                <input type="text" className="hms-input" placeholder="Enter Full Club Name" value={dossier.name} onChange={(e) => setDossier({ ...dossier, name: e.target.value })} required />
-              </div>
-              <div>
-                <label className="hms-label">Short Tagline</label>
-                <input type="text" className="hms-input" placeholder="e.g. Official Robotics & AI Society of SVNIT" value={dossier.tagline} onChange={(e) => setDossier({ ...dossier, tagline: e.target.value })} />
-              </div>
-              <div className="hms-grid-2" style={{ gap: '8px' }}>
-                <div>
-                  <label className="hms-label">Faculty Advisor</label>
-                  <input type="text" className="hms-input" placeholder="e.g. Dr. R. K. Gupta" value={dossier.faculty_advisor} onChange={(e) => setDossier({ ...dossier, faculty_advisor: e.target.value })} />
-                </div>
-                <div>
-                  <label className="hms-label">Head Coordinator</label>
-                  <input type="text" className="hms-input" placeholder="Student Head Name" value={dossier.head_coordinator} onChange={(e) => setDossier({ ...dossier, head_coordinator: e.target.value })} />
-                </div>
-              </div>
-              <div>
-                <label className="hms-label">Club Mission & Complete Description</label>
-                <textarea rows="3" className="hms-input" placeholder="Describe what your club does..." value={dossier.mission} onChange={(e) => setDossier({ ...dossier, mission: e.target.value })} />
-              </div>
-
-              <div className="hms-grid-2" style={{ gap: '8px' }}>
-                <div>
-                  <label className="hms-label">Profile Photo (Gallery or URL)</label>
-                  <label className="hms-file-label">
-                    📁 Upload Avatar from Device
-                    <input type="file" accept="image/*" hidden onChange={(e) => handleFileUpload(e.target.files[0], (res) => setDossier({ ...dossier, avatar_url: res }))} />
-                  </label>
-                  <input type="text" className="hms-input" style={{ marginTop: '6px' }} placeholder="Or paste Avatar Image URL" value={dossier.avatar_url} onChange={(e) => setDossier({ ...dossier, avatar_url: e.target.value })} />
-                </div>
-                <div>
-                  <label className="hms-label">Cover Banner (Gallery or URL)</label>
-                  <label className="hms-file-label">
-                    🖼️ Upload Banner from Device
-                    <input type="file" accept="image/*" hidden onChange={(e) => handleFileUpload(e.target.files[0], (res) => setDossier({ ...dossier, banner_url: res }))} />
-                  </label>
-                  <input type="text" className="hms-input" style={{ marginTop: '6px' }} placeholder="Or paste Banner Image URL" value={dossier.banner_url} onChange={(e) => setDossier({ ...dossier, banner_url: e.target.value })} />
-                </div>
-              </div>
-
-              <div>
-                <label className="hms-label">Additional Notes / Achievements for Dean</label>
-                <textarea rows="2" className="hms-input" placeholder="Budget notes, equipment list, competition wins..." value={dossier.extra_dean_info} onChange={(e) => setDossier({ ...dossier, extra_dean_info: e.target.value })} />
-              </div>
-              <button type="submit" className="hms-btn-primary">💾 Save All Club Details</button>
-            </form>
-          </div>
-
-          <div className="hms-card">
-            <div className="hms-section-label">➕ Manually Add Club Members & Positions</div>
-            <p className="hms-muted" style={{ marginBottom: '12px' }}>
-              Add your Head Member, Technical Head, Stage & Logistics Head, Promotional Members, etc.
-            </p>
-            <form onSubmit={handleAddMember} className="hms-stack" style={{ marginBottom: '20px' }}>
-              <div className="hms-grid-2" style={{ gap: '8px' }}>
-                <input type="text" className="hms-input" placeholder="Member Full Name" value={memberForm.name} onChange={(e) => setMemberForm({ ...memberForm, name: e.target.value })} required />
-                <input type="text" className="hms-input" placeholder="Roll No (e.g. U24CS011)" value={memberForm.roll} onChange={(e) => setMemberForm({ ...memberForm, roll: e.target.value })} required />
-              </div>
-              <div className="hms-grid-2" style={{ gap: '8px' }}>
-                <input type="text" className="hms-input" placeholder="Role (e.g. Stage & Logistics Head)" value={memberForm.position} onChange={(e) => setMemberForm({ ...memberForm, position: e.target.value })} required />
-                <input type="text" className="hms-input" placeholder="Contact Phone" value={memberForm.phone} onChange={(e) => setMemberForm({ ...memberForm, phone: e.target.value })} required />
-              </div>
-              <button type="submit" className="hms-btn-primary">+ Add Member to Club Roster</button>
-            </form>
-
-            <div className="hms-section-label">👥 Current Club Roster ({myClub.members?.length || 0})</div>
-            <div className="hms-stack" style={{ maxHeight: '320px', overflowY: 'auto' }}>
-              {myClub.members?.map((m) => (
-                <div key={m.id || m.roll} className="hms-row-item">
-                  <div>
-                    <div className="hms-item-title">{m.name}</div>
-                    <div className="hms-item-sub">{m.roll} • {m.phone}</div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span className="hms-pill-badge">{m.position}</span>
-                    {m.id && <button className="hms-btn-ghost-sm" onClick={() => handleRemoveMember(m.id)}>✕</button>}
-                  </div>
-                </div>
-              ))}
+        {page === 'home' && (
+          <div>
+            <div className="ptm-card">
+              <span className="ptm-tag-pill">OFFICIAL CLUB PORTAL • {user.user_id}</span>
+              <h2 style={{ margin: '8px 0 4px 0' }}>{myClub.name || user.full_name}</h2>
+              <p className="ptm-list-sub">{myClub.mission}</p>
             </div>
-          </div>
-        </div>
-      )}
 
-      {/* TAB 2: GALLERY UPLOADS (FROM DEVICE GALLERY OR URL) */}
-      {activeTab === 'gallery' && (
-        <div className="hms-grid-2">
-          <div className="hms-card">
-            <div className="hms-section-label">📸 Upload Photos & Videos to Club Gallery</div>
-            <form onSubmit={handleAddGalleryItem} className="hms-stack">
-              <select className="hms-input" value={galleryForm.media_type} onChange={(e) => setGalleryForm({ ...galleryForm, media_type: e.target.value })}>
-                <option value="image">🖼️ Photo / Image</option>
-                <option value="video">🎥 Video Clip</option>
-              </select>
-
-              <label className="hms-file-label">
-                📂 Choose Photo / Video from Device Gallery
-                <input
-                  type="file"
-                  accept="image/*,video/*"
-                  hidden
-                  onChange={(e) => {
-                    const file = e.target.files[0];
-                    if (file) {
-                      const isVid = file.type.startsWith('video');
-                      handleFileUpload(file, (base64) => setGalleryForm({ ...galleryForm, media_type: isVid ? 'video' : 'image', media_url: base64 }));
-                    }
-                  }}
-                />
-              </label>
-
-              <input type="text" className="hms-input" placeholder="Or paste Image / Video URL" value={galleryForm.media_url} onChange={(e) => setGalleryForm({ ...galleryForm, media_url: e.target.value })} />
-              <input type="text" className="hms-input" placeholder="Caption / Event Moment Description" value={galleryForm.caption} onChange={(e) => setGalleryForm({ ...galleryForm, caption: e.target.value })} required />
-              <button type="submit" className="hms-btn-primary">✨ Publish to Club Gallery</button>
-            </form>
-          </div>
-
-          <div className="hms-card">
-            <div className="hms-section-label">🖼️ Published Club Gallery ({myClub.gallery?.length || 0})</div>
-            <div className="hms-gallery-grid">
-              {myClub.gallery?.map((g, i) => (
-                <div key={i} className="hms-gallery-item">
-                  {g.media_type === 'video' ? <video src={g.media_url} controls /> : <img src={g.media_url} alt={g.caption} />}
-                  <div style={{ padding: '10px', fontSize: '12px' }}>{g.caption}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 3: MANUAL VENUE EVENT PROPOSALS & EVENT-WISE STUDENT FEEDBACKS */}
-      {activeTab === 'events' && (
-        <div className="hms-grid-2">
-          <div className="hms-card">
-            <div className="hms-section-label">🚀 Propose Event to Dean (100% Manual Venue & Media)</div>
-            <form onSubmit={handleProposeEvent} className="hms-stack">
-              <input type="text" className="hms-input" placeholder="Event Title" value={eventForm.title} onChange={(e) => setEventForm({ ...eventForm, title: e.target.value })} required />
-              <div>
-                <label className="hms-label">Manual Event Venue (Type Any Campus Location)</label>
-                <input type="text" className="hms-input" placeholder="e.g. SAC Open Lawn, Mechanical Seminar Hall, Main Ground..." value={eventForm.venue} onChange={(e) => setEventForm({ ...eventForm, venue: e.target.value })} required />
+            <div className="ptm-card">
+              <div className="ptm-section-title">Manage {user.user_id} Club</div>
+              <div className="ptm-icon-grid">
+                <button className="ptm-icon-tile" onClick={() => setPage('info')}>
+                  <div className="ptm-icon-circle">ℹ️</div>
+                  <span className="ptm-icon-label">Club Info & Advisor</span>
+                </button>
+                <button className="ptm-icon-tile" onClick={() => setPage('members')}>
+                  <div className="ptm-icon-circle">👥</div>
+                  <span className="ptm-icon-label">Positions & Members</span>
+                </button>
+                <button className="ptm-icon-tile" onClick={() => setPage('propose_event')}>
+                  <div className="ptm-icon-circle">🚀</div>
+                  <span className="ptm-icon-label">Request Event to Dean</span>
+                </button>
+                <button className="ptm-icon-tile" onClick={() => setPage('propose_notice')}>
+                  <div className="ptm-icon-circle">📢</div>
+                  <span className="ptm-icon-label">Send Notice to Students</span>
+                </button>
               </div>
-              <div className="hms-grid-2" style={{ gap: '8px' }}>
-                <div><label className="hms-label">Event Date</label><input type="date" className="hms-input" value={eventForm.date} onChange={(e) => setEventForm({ ...eventForm, date: e.target.value })} required /></div>
-                <div><label className="hms-label">Start & End Time</label>
-                  <div style={{ display: 'flex', gap: '6px' }}>
-                    <input type="time" className="hms-input" value={eventForm.start_time} onChange={(e) => setEventForm({ ...eventForm, start_time: e.target.value })} required />
-                    <input type="time" className="hms-input" value={eventForm.end_time} onChange={(e) => setEventForm({ ...eventForm, end_time: e.target.value })} required />
-                  </div>
-                </div>
+            </div>
+
+            <div className="ptm-card">
+              <div className="ptm-row-between" style={{ marginBottom: '10px' }}>
+                <div className="ptm-section-title" style={{ margin: 0 }}>Recent Events ({myEvents.length})</div>
+                <button className="ptm-btn-secondary" onClick={() => setPage('gallery')}>📸 Upload Photos</button>
               </div>
-              <textarea rows="3" className="hms-input" placeholder="Complete Event Description for Students & Dean..." value={eventForm.description} onChange={(e) => setEventForm({ ...eventForm, description: e.target.value })} required />
-
-              <label className="hms-file-label">
-                🖼️ Upload Event Poster from Device Gallery
-                <input type="file" accept="image/*" hidden onChange={(e) => handleFileUpload(e.target.files[0], (res) => setEventForm({ ...eventForm, image_url: res }))} />
-              </label>
-              <input type="text" className="hms-input" placeholder="Or paste Poster Image URL" value={eventForm.image_url} onChange={(e) => setEventForm({ ...eventForm, image_url: e.target.value })} />
-              <input type="url" className="hms-input" placeholder="Google Form Registration / Audition Link (Optional)" value={eventForm.registration_link} onChange={(e) => setEventForm({ ...eventForm, registration_link: e.target.value })} />
-              <button type="submit" className="hms-btn-primary">⚡ Request Dean Permission</button>
-            </form>
-          </div>
-
-          <div className="hms-card">
-            <div className="hms-section-label">📊 My Club Events — Click to View Student Feedbacks ({myEvents.length})</div>
-            <div className="hms-stack">
-              {myEvents.map((ev) => (
-                <div key={ev.event_id} className="hms-card" style={{ background: '#090d16', cursor: 'pointer' }} onClick={() => setSelectedEventFeedback(ev)}>
-                  <div className="hms-row-between">
-                    <span className="hms-item-title">{ev.title}</span>
-                    <span className="hms-pill-badge">{ev.status}</span>
-                  </div>
-                  <div className="hms-item-sub" style={{ marginTop: '4px' }}>📍 {ev.venue} • 📅 {ev.date} ({ev.start_time} - {ev.end_time})</div>
-                  <div className="hms-row-between" style={{ marginTop: '10px' }}>
-                    <span style={{ fontSize: '12px', color: '#4ade80', fontWeight: 800 }}>
-                      👥 {ev.rsvps?.length || 0} Attending • ⭐ {ev.feedbacks?.length || 0} Feedbacks
-                    </span>
-                    {ev.status === 'Approved' && (
-                      <button
-                        className="hms-btn-ghost-sm"
-                        onClick={(e) => { e.stopPropagation(); handleMarkEventCompleted(ev.event_id); }}
-                      >
-                        🏁 Mark Event Completed
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 4: TARGETED STUDENT NOTICES (BRANCH & YEAR WISE) */}
-      {activeTab === 'notices' && (
-        <div className="hms-grid-2">
-          <div className="hms-card">
-            <div className="hms-section-label">📢 Send Targeted Notice to Students (Requires Dean Approval)</div>
-            <form onSubmit={handleSendNotice} className="hms-stack">
-              <input type="text" className="hms-input" placeholder="Notice Title (e.g. 1st Year Civil Workshop / Audition Notice)" value={noticeForm.title} onChange={(e) => setNoticeForm({ ...noticeForm, title: e.target.value })} required />
-              <div className="hms-grid-2" style={{ gap: '8px' }}>
-                <div>
-                  <label className="hms-label">Target Branch / Dept</label>
-                  <select className="hms-input" value={noticeForm.target_branch} onChange={(e) => setNoticeForm({ ...noticeForm, target_branch: e.target.value })}>
-                    <option value="All">All Branches</option>
-                    <option value="Civil Engineering">Civil Engineering</option>
-                    <option value="Computer Engineering">Computer Engineering</option>
-                    <option value="Mechanical Engineering">Mechanical Engineering</option>
-                    <option value="Electrical Engineering">Electrical Engineering</option>
-                    <option value="Electronics Engineering">Electronics Engineering</option>
-                    <option value="Artificial Intelligence">Artificial Intelligence</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="hms-label">Target Year</label>
-                  <select className="hms-input" value={noticeForm.target_year} onChange={(e) => setNoticeForm({ ...noticeForm, target_year: e.target.value })}>
-                    <option value="All">All Years</option>
-                    <option value="1st Year">1st Year Only</option>
-                    <option value="2nd Year">2nd Year Only</option>
-                    <option value="3rd Year">3rd Year Only</option>
-                    <option value="4th Year">4th Year Only</option>
-                  </select>
-                </div>
-              </div>
-              <textarea rows="3" className="hms-input" placeholder="Notice message & instructions..." value={noticeForm.message} onChange={(e) => setNoticeForm({ ...noticeForm, message: e.target.value })} required />
-              <input type="url" className="hms-input" placeholder="Optional Google Form / Audition Link" value={noticeForm.attachment_link} onChange={(e) => setNoticeForm({ ...noticeForm, attachment_link: e.target.value })} />
-              <button type="submit" className="hms-btn-primary">🚀 Send Notice to Dean for Approval</button>
-            </form>
-          </div>
-
-          <div className="hms-card">
-            <div className="hms-section-label">📋 Sent Notices Status ({myNotices.length})</div>
-            <div className="hms-stack">
-              {myNotices.map((n) => (
-                <div key={n.notice_id} className="hms-row-item">
-                  <div>
-                    <div className="hms-item-title">{n.title}</div>
-                    <div className="hms-item-sub">Target: {n.target_branch} ({n.target_year}) • {n.message}</div>
-                  </div>
-                  <span className="hms-pill-badge">{n.status}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: EVENT-WISE FEEDBACK & ATTENDANCE DETAILS */}
-      {selectedEventFeedback && (
-        <div className="hms-modal-backdrop" onClick={() => setSelectedEventFeedback(null)}>
-          <div className="hms-modal-box" onClick={(e) => e.stopPropagation()}>
-            <div className="hms-row-between" style={{ marginBottom: '12px' }}>
-              <span className="hms-pill-badge">EVENT ANALYTICS • {selectedEventFeedback.event_id}</span>
-              <button className="hms-close-btn" onClick={() => setSelectedEventFeedback(null)}>✕</button>
-            </div>
-            <h3>{selectedEventFeedback.title}</h3>
-            <div className="hms-detail-box" style={{ marginBottom: '14px' }}>
-              <div>📍 <strong>Venue:</strong> {selectedEventFeedback.venue}</div>
-              <div style={{ marginTop: '4px' }}>👥 <strong>Students Attended / RSVP'd ({selectedEventFeedback.rsvps?.length || 0}):</strong> {selectedEventFeedback.rsvps?.join(', ') || 'None yet'}</div>
-            </div>
-            <div className="hms-section-label">⭐ Student Feedbacks ({selectedEventFeedback.feedbacks?.length || 0})</div>
-            {(!selectedEventFeedback.feedbacks || selectedEventFeedback.feedbacks.length === 0) ? (
-              <div className="hms-empty-card" style={{ padding: '18px' }}>No student feedbacks yet.</div>
-            ) : (
-              <div className="hms-stack">
-                {selectedEventFeedback.feedbacks.map((f, i) => (
-                  <div key={i} className="hms-row-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
-                    <div className="hms-row-between" style={{ width: '100%' }}>
-                      <strong>{f.student_name} ({f.student_id})</strong>
-                      <span style={{ color: '#fbbf24' }}>{'⭐'.repeat(f.rating)}</span>
+              {myEvents.length === 0 ? (
+                <div className="ptm-list-sub">No events proposed yet.</div>
+              ) : (
+                <div className="ptm-list">
+                  {myEvents.map((ev) => (
+                    <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
+                      <div className="ptm-avatar-pastel">🎪</div>
+                      <div className="ptm-list-main">
+                        <div className="ptm-list-title">{ev.title}</div>
+                        <div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date} • 👥 {ev.rsvps?.length || 0} RSVPs</div>
+                      </div>
+                      <span className="ptm-status-badge" style={{ background: '#E0F2FE', color: '#002970' }}>{ev.status} ›</span>
                     </div>
-                    <div className="hms-item-sub" style={{ color: '#e2e8f0', marginTop: '4px' }}>{f.review}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* PAGE: CLUB INFO */}
+        {page === 'info' && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+              <h1 className="ptm-page-title">Club Info & Faculty Advisor</h1>
+            </div>
+            <div className="ptm-card">
+              <form onSubmit={handleSaveInfo} className="ptm-form-stack">
+                <div>
+                  <label className="ptm-label">Faculty Advisor Name & Department</label>
+                  <input type="text" className="ptm-input" placeholder="e.g. Dr. R. K. Gupta (Comp. Engg.)" value={facultyAdvisor} onChange={(e) => setFacultyAdvisor(e.target.value)} required />
+                </div>
+                <div>
+                  <label className="ptm-label">Head Student Coordinator / Convener</label>
+                  <input type="text" className="ptm-input" placeholder="Full Name" value={headCoordinator} onChange={(e) => setHeadCoordinator(e.target.value)} required />
+                </div>
+                <div>
+                  <label className="ptm-label">Club Bio & Mission</label>
+                  <textarea rows="3" className="ptm-input" value={missionInput} onChange={(e) => setMissionInput(e.target.value)} required />
+                </div>
+                <div>
+                  <label className="ptm-label">Additional Information for Dean</label>
+                  <textarea rows="2" className="ptm-input" value={extraInfoInput} onChange={(e) => setExtraInfoInput(e.target.value)} />
+                </div>
+                <button type="submit" className="ptm-btn-primary">Save Club Profile</button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* PAGE: 100% CUSTOMIZABLE POSITIONS & MEMBERS */}
+        {page === 'members' && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+              <h1 className="ptm-page-title">Custom Positions & Members</h1>
+              <p className="ptm-page-sub">Type any custom position name (e.g. Convener, Co-Chair, Stage Lead, Executive) and add one or multiple people to that role.</p>
+            </div>
+
+            <div className="ptm-card">
+              <div className="ptm-section-title">Add Member to Any Custom Position</div>
+              <form onSubmit={handleAddMember} className="ptm-form-stack">
+                <div className="ptm-grid-2">
+                  <div>
+                    <label className="ptm-label">Custom Position / Role Title</label>
+                    <input type="text" className="ptm-input" placeholder="e.g. Technical Head, PR Team, Co-Convener" value={memberForm.position} onChange={(e) => setMemberForm({ ...memberForm, position: e.target.value })} required />
+                  </div>
+                  <div>
+                    <label className="ptm-label">Student Full Name</label>
+                    <input type="text" className="ptm-input" placeholder="Full Name" value={memberForm.name} onChange={(e) => setMemberForm({ ...memberForm, name: e.target.value })} required />
+                  </div>
+                </div>
+                <div className="ptm-grid-2">
+                  <div>
+                    <label className="ptm-label">Roll Number</label>
+                    <input type="text" className="ptm-input" placeholder="e.g. U24CS011" value={memberForm.roll} onChange={(e) => setMemberForm({ ...memberForm, roll: e.target.value })} required />
+                  </div>
+                  <div>
+                    <label className="ptm-label">Phone Number</label>
+                    <input type="text" className="ptm-input" placeholder="+91 9876543210" value={memberForm.phone} onChange={(e) => setMemberForm({ ...memberForm, phone: e.target.value })} />
+                  </div>
+                </div>
+                <button type="submit" className="ptm-btn-primary">+ Add Member to Position</button>
+              </form>
+            </div>
+
+            <div className="ptm-card">
+              <div className="ptm-section-title">Current Club Roster ({myClub.members?.length || 0})</div>
+              {(!myClub.members || myClub.members.length === 0) ? (
+                <div className="ptm-list-sub">No members added yet.</div>
+              ) : (
+                <div className="ptm-list">
+                  {myClub.members.map((m, idx) => (
+                    <div key={idx} className="ptm-list-row">
+                      <div className="ptm-avatar-pastel" style={{ background: '#E0F2FE', color: '#002970' }}>
+                        {m.name.slice(0, 2).toUpperCase()}
+                      </div>
+                      <div className="ptm-list-main">
+                        <div className="ptm-list-title">{m.name} ({m.roll})</div>
+                        <div className="ptm-list-sub">Position: <strong>{m.position}</strong> {m.phone && `• 📞 ${m.phone}`}</div>
+                      </div>
+                      <button className="ptm-btn-secondary" onClick={() => handleRemoveMember(idx)}>Remove</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* PAGE: RICH MANUAL EVENT PROPOSAL TO DEAN */}
+        {page === 'propose_event' && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+              <h1 className="ptm-page-title">Request Event Permission from Dean</h1>
+              <p className="ptm-page-sub">Fill all event details, budget, chief guest, and add any custom fields required for Dean approval.</p>
+            </div>
+
+            <div className="ptm-card">
+              <form onSubmit={handleProposeEvent} className="ptm-form-stack">
+                <div>
+                  <label className="ptm-label">Event Name / Title</label>
+                  <input type="text" className="ptm-input" placeholder="e.g. Algothon 2026" value={eventForm.title} onChange={(e) => setEventForm({ ...eventForm, title: e.target.value })} required />
+                </div>
+                <div className="ptm-grid-2">
+                  <div>
+                    <label className="ptm-label">Manual Venue (Type Any Campus Location)</label>
+                    <input type="text" className="ptm-input" placeholder="e.g. SAC Amphitheatre, Old CRC Lawn" value={eventForm.venue} onChange={(e) => setEventForm({ ...eventForm, venue: e.target.value })} required />
+                  </div>
+                  <div>
+                    <label className="ptm-label">Event Date</label>
+                    <input type="date" className="ptm-input" value={eventForm.date} onChange={(e) => setEventForm({ ...eventForm, date: e.target.value })} required />
+                  </div>
+                </div>
+                <div className="ptm-grid-2">
+                  <div><label className="ptm-label">Start Time</label><input type="time" className="ptm-input" value={eventForm.start_time} onChange={(e) => setEventForm({ ...eventForm, start_time: e.target.value })} required /></div>
+                  <div><label className="ptm-label">End Time</label><input type="time" className="ptm-input" value={eventForm.end_time} onChange={(e) => setEventForm({ ...eventForm, end_time: e.target.value })} required /></div>
+                </div>
+
+                <div className="ptm-grid-2">
+                  <div>
+                    <label className="ptm-label">Estimated Budget (₹)</label>
+                    <input type="text" className="ptm-input" placeholder="e.g. ₹45,000" value={eventForm.budget} onChange={(e) => setEventForm({ ...eventForm, budget: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="ptm-label">Funding Source / Sponsors</label>
+                    <input type="text" className="ptm-input" placeholder="e.g. Institute SAC Grant + Sponsors" value={eventForm.funding_source} onChange={(e) => setEventForm({ ...eventForm, funding_source: e.target.value })} />
+                  </div>
+                </div>
+
+                <div className="ptm-grid-2">
+                  <div>
+                    <label className="ptm-label">Chief Guest / External Speakers / Judges</label>
+                    <input type="text" className="ptm-input" placeholder="Names & Designations of Guests" value={eventForm.chief_guest} onChange={(e) => setEventForm({ ...eventForm, chief_guest: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="ptm-label">Expected Student Attendance</label>
+                    <input type="text" className="ptm-input" placeholder="e.g. 400+ Students" value={eventForm.expected_attendance} onChange={(e) => setEventForm({ ...eventForm, expected_attendance: e.target.value })} />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="ptm-label">Logistics, Sound, Security & Permission Details</label>
+                  <input type="text" className="ptm-input" placeholder="e.g. 4 Wireless Mics, Projector, Late Night Hostel Entry Permission for Girls" value={eventForm.logistics_needs} onChange={(e) => setEventForm({ ...eventForm, logistics_needs: e.target.value })} />
+                </div>
+
+                <div>
+                  <label className="ptm-label">Full Event Description (Seen by Dean & Students)</label>
+                  <textarea rows="3" className="ptm-input" placeholder="Complete event overview..." value={eventForm.description} onChange={(e) => setEventForm({ ...eventForm, description: e.target.value })} required />
+                </div>
+
+                <div className="ptm-grid-2">
+                  <div>
+                    <label className="ptm-label">Upload Event Poster Photo (From Device)</label>
+                    <input type="file" accept="image/*" className="ptm-input" onChange={(e) => handleImageUpload(e, (val) => setEventForm({ ...eventForm, image_url: val }))} />
+                  </div>
+                  <div>
+                    <label className="ptm-label">Google Form / Registration Link</label>
+                    <input type="url" className="ptm-input" placeholder="https://docs.google.com/forms/..." value={eventForm.registration_link} onChange={(e) => setEventForm({ ...eventForm, registration_link: e.target.value })} />
+                  </div>
+                </div>
+
+                {/* UNLIMITED CUSTOM FIELDS FOR DEAN */}
+                <div style={{ background: '#F8FAFC', padding: '14px', borderRadius: '14px', border: '1px solid #E2E8F0' }}>
+                  <div className="ptm-row-between" style={{ marginBottom: '10px' }}>
+                    <span className="ptm-label" style={{ margin: 0 }}>📌 Additional Custom Fields for Dean</span>
+                    <button
+                      type="button"
+                      className="ptm-btn-secondary"
+                      onClick={() => setEventCustomFields([...eventCustomFields, { label: '', value: '' }])}
+                    >
+                      + Add Custom Detail Field
+                    </button>
+                  </div>
+                  {eventCustomFields.map((cf, idx) => (
+                    <div key={idx} className="ptm-grid-2" style={{ marginBottom: '8px' }}>
+                      <input
+                        type="text"
+                        className="ptm-input"
+                        placeholder="Field Name (e.g. Guest Accommodation)"
+                        value={cf.label}
+                        onChange={(e) => {
+                          const copy = [...eventCustomFields];
+                          copy[idx].label = e.target.value;
+                          setEventCustomFields(copy);
+                        }}
+                      />
+                      <input
+                        type="text"
+                        className="ptm-input"
+                        placeholder="Details (e.g. SVNIT Guest House 2 Rooms)"
+                        value={cf.value}
+                        onChange={(e) => {
+                          const copy = [...eventCustomFields];
+                          copy[idx].value = e.target.value;
+                          setEventCustomFields(copy);
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                <button type="submit" className="ptm-btn-primary">Submit Complete Event Dossier to Dean</button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* PAGE: POST NOTICE TO STUDENTS */}
+        {page === 'propose_notice' && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+              <h1 className="ptm-page-title">Send Notice / Announcement</h1>
+            </div>
+            <div className="ptm-card">
+              <form onSubmit={handleProposeNotice} className="ptm-form-stack">
+                <div>
+                  <label className="ptm-label">Notice Title</label>
+                  <input type="text" className="ptm-input" placeholder="e.g. Recruitment & Auditions Open for 1st Year" value={noticeForm.title} onChange={(e) => setNoticeForm({ ...noticeForm, title: e.target.value })} required />
+                </div>
+                <div>
+                  <label className="ptm-label">Detailed Message</label>
+                  <textarea rows="3" className="ptm-input" value={noticeForm.message} onChange={(e) => setNoticeForm({ ...noticeForm, message: e.target.value })} required />
+                </div>
+                <div className="ptm-grid-2">
+                  <div><label className="ptm-label">Target Year</label><input type="text" className="ptm-input" value={noticeForm.target_year} onChange={(e) => setNoticeForm({ ...noticeForm, target_year: e.target.value })} required /></div>
+                  <div><label className="ptm-label">Target Department / Branch</label><input type="text" className="ptm-input" value={noticeForm.target_branch} onChange={(e) => setNoticeForm({ ...noticeForm, target_branch: e.target.value })} required /></div>
+                </div>
+                <div className="ptm-grid-2">
+                  <div>
+                    <label className="ptm-label">Attach Notice Image / Poster</label>
+                    <input type="file" accept="image/*" className="ptm-input" onChange={(e) => handleImageUpload(e, (val) => setNoticeForm({ ...noticeForm, image_url: val }))} />
+                  </div>
+                  <div>
+                    <label className="ptm-label">Google Form Link (Optional)</label>
+                    <input type="url" className="ptm-input" placeholder="https://docs.google.com/forms/..." value={noticeForm.registration_link} onChange={(e) => setNoticeForm({ ...noticeForm, registration_link: e.target.value })} />
+                  </div>
+                </div>
+                <button type="submit" className="ptm-btn-primary">Submit Notice for Dean Approval</button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* PAGE: MY EVENTS LIST */}
+        {page === 'my_events' && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+              <h1 className="ptm-page-title">My Club Events</h1>
+            </div>
+            <div className="ptm-card">
+              <div className="ptm-list">
+                {myEvents.map((ev) => (
+                  <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
+                    <div className="ptm-avatar-pastel">🎪</div>
+                    <div className="ptm-list-main">
+                      <div className="ptm-list-title">{ev.title}</div>
+                      <div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date} • 👥 {ev.rsvps?.length || 0} RSVPs</div>
+                    </div>
+                    <span className="ptm-status-badge" style={{ background: '#E0F2FE', color: '#002970' }}>{ev.status} ›</span>
                   </div>
                 ))}
               </div>
-            )}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      <nav className="hms-bottom-nav">
-        <button onClick={() => setActiveTab('profile')} className={`hms-bnav-item ${activeTab === 'profile' ? 'active' : ''}`}><span>🎨</span><span>Profile</span></button>
-        <button onClick={() => setActiveTab('gallery')} className={`hms-bnav-item ${activeTab === 'gallery' ? 'active' : ''}`}><span>📸</span><span>Gallery</span></button>
-        <button onClick={() => setActiveTab('events')} className={`hms-bnav-item ${activeTab === 'events' ? 'active' : ''}`}><span>🎪</span><span>Events</span></button>
-        <button onClick={() => setActiveTab('notices')} className={`hms-bnav-item ${activeTab === 'notices' ? 'active' : ''}`}><span>📢</span><span>Notices</span></button>
+        {/* PAGE: EVENT DETAILS */}
+        {page === 'event_detail' && selectedEvent && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('my_events')}>←</button>
+              <h1 className="ptm-page-title">{selectedEvent.title}</h1>
+            </div>
+            <div className="ptm-card">
+              <p>{selectedEvent.description}</p>
+              <div className="ptm-list">
+                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Status</div><div className="ptm-list-sub">{selectedEvent.status}</div></div></div>
+                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Confirmed Student RSVPs</div><div className="ptm-list-sub">{selectedEvent.rsvps?.length || 0} Students Attending</div></div></div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* PAGE: GALLERY */}
+        {page === 'gallery' && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+              <h1 className="ptm-page-title">Club Photo Gallery</h1>
+            </div>
+            <div className="ptm-card">
+              <form onSubmit={handleAddGallery} className="ptm-form-stack">
+                <div>
+                  <label className="ptm-label">Select Photo from Device</label>
+                  <input type="file" accept="image/*" className="ptm-input" onChange={(e) => handleImageUpload(e, setGalleryUrl)} />
+                </div>
+                <div>
+                  <label className="ptm-label">Caption</label>
+                  <input type="text" className="ptm-input" placeholder="Event moment caption..." value={galleryCaption} onChange={(e) => setGalleryCaption(e.target.value)} required />
+                </div>
+                <button type="submit" className="ptm-btn-primary">Upload Photo</button>
+              </form>
+            </div>
+            <div className="ptm-grid-2">
+              {myClub.gallery?.map((g, i) => (
+                <div key={i} className="ptm-card">
+                  <img src={g.media_url} alt={g.caption} style={{ width: '100%', height: '200px', objectFit: 'cover', borderRadius: '12px', marginBottom: '8px' }} />
+                  <div className="ptm-list-title">{g.caption}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <nav className="ptm-bottom-nav">
+        <button className={`ptm-bnav-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}><span>🏠</span><span>Home</span></button>
+        <button className={`ptm-bnav-btn ${page === 'members' ? 'active' : ''}`} onClick={() => setPage('members')}><span>👥</span><span>Members</span></button>
+        <button className={`ptm-bnav-btn ${page === 'propose_event' ? 'active' : ''}`} onClick={() => setPage('propose_event')}><span>🚀</span><span>Propose</span></button>
+        <button className={`ptm-bnav-btn ${page === 'propose_notice' ? 'active' : ''}`} onClick={() => setPage('propose_notice')}><span>📢</span><span>Notice</span></button>
       </nav>
     </div>
   );

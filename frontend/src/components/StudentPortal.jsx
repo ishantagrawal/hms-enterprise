@@ -1,554 +1,635 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
-const COMPLAINT_CATEGORIES = [
-  { id: 'Electricity', title: 'Electricity', icon: '⚡' },
-  { id: 'Plumbing', title: 'Plumbing', icon: '🚰' },
-  { id: 'LAN / Wi-Fi', title: 'LAN / Wi-Fi', icon: '🌐' },
-  { id: 'Carpentry', title: 'Carpentry', icon: '🪚' },
-  { id: 'Water Cooler', title: 'RO / Water Cooler', icon: '💧' },
-  { id: 'Mess & Hygiene', title: 'Cleaning & Hygiene', icon: '🧹' }
-];
-
-const getCategoryIcon = (catName) => {
-  const found = COMPLAINT_CATEGORIES.find((c) => c.id === catName);
-  return found ? found.icon : '🛠️';
-};
-
-const getStatusColor = (status) => {
-  if (status === 'Completed' || status === 'Approved') return '#4ade80';
-  if (status === 'Awaiting Confirmation') return '#38bdf8';
-  if (status === 'Pending' || status === 'In Progress') return '#fbbf24';
-  return '#f87171';
-};
-
 export default function StudentPortal({ user, apiUrl }) {
-  const [activeTab, setActiveTab] = useState('complaints');
+  const [page, setPage] = useState('home');
   const [complaints, setComplaints] = useState([]);
   const [departments, setDepartments] = useState([]);
-  const [showNewModal, setShowNewModal] = useState(false);
-  const [selectedTicket, setSelectedTicket] = useState(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [msg, setMsg] = useState(null);
-
-  // New Complaint Form
-  const [category, setCategory] = useState('Electricity');
-  const [summary, setSummary] = useState('');
-  const [description, setDescription] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  // Events & EventRadar States
   const [events, setEvents] = useState([]);
   const [clubs, setClubs] = useState([]);
+  const [notices, setNotices] = useState([]);
+  const [msg, setMsg] = useState(null);
+
+  // Drill-down selections
+  const [selectedTicket, setSelectedTicket] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
-  const [selectedClubView, setSelectedClubView] = useState(null);
+  const [selectedClub, setSelectedClub] = useState(null);
+  const [clubSubView, setClubSubView] = useState('hub');
+  const [selectedNotice, setSelectedNotice] = useState(null);
+
+  // Forms
+  const [category, setCategory] = useState('ELECTRICITY');
+  const [summary, setSummary] = useState('');
+  const [description, setDescription] = useState('');
   const [feedbackRating, setFeedbackRating] = useState(5);
   const [feedbackReview, setFeedbackReview] = useState('');
-
-  // Password Change State
   const [oldPass, setOldPass] = useState('');
   const [newPass, setNewPass] = useState('');
 
+  // Calendar
+  const [calYear, setCalYear] = useState(2026);
+  const [calMonth, setCalMonth] = useState(9);
+  const [selectedDateStr, setSelectedDateStr] = useState('2026-10-25');
+
   const loadStudentData = useCallback(async () => {
     try {
-      const [cRes, dRes, eRes, clRes] = await Promise.all([
+      const [cRes, dRes, eRes, clRes, nRes] = await Promise.all([
         fetch(`${apiUrl}/api/complaints?role=Student&user_id=${user.user_id}`),
-        fetch(`${apiUrl}/api/departments`),
+        fetch(`${apiUrl}/api/departments?hostel_block=${encodeURIComponent(user.hostel_block || 'All')}`),
         fetch(`${apiUrl}/api/unicore/events`),
-        fetch(`${apiUrl}/api/unicore/clubs`)
+        fetch(`${apiUrl}/api/unicore/clubs`),
+        fetch(`${apiUrl}/api/notices?role=Student`)
       ]);
       if (cRes.ok) setComplaints(await cRes.json());
-      if (dRes.ok) setDepartments(await dRes.json());
+      if (dRes.ok) {
+        const dList = await dRes.json();
+        setDepartments(dList);
+        if (dList.length > 0) setCategory(dList[0].id);
+      }
       if (eRes.ok) setEvents(await eRes.json());
       if (clRes.ok) setClubs(await clRes.json());
+      if (nRes.ok) setNotices(await nRes.json());
     } catch (e) {
       console.error(e);
     }
-  }, [apiUrl, user.user_id]);
+  }, [apiUrl, user.user_id, user.hostel_block]);
 
-  useEffect(() => {
-    loadStudentData();
-  }, [loadStudentData]);
+  useEffect(() => { loadStudentData(); }, [loadStudentData]);
 
   const handleCreateComplaint = async (e) => {
     e.preventDefault();
-    setSubmitting(true);
-    try {
-      const res = await fetch(`${apiUrl}/api/complaints`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: user.user_id, category, summary, description })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setMsg(`✅ Grievance registered & routed to ${data.ticket.routed_to}!`);
-        setSummary('');
-        setDescription('');
-        setShowNewModal(false);
-        loadStudentData();
-      }
-    } catch {
-      setMsg('❌ Failed to submit complaint.');
+    const res = await fetch(`${apiUrl}/api/complaints`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ student_id: user.user_id, category, summary, description })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      setMsg(`✅ Grievance ${data.ticket.ticket_id} submitted!`);
+      setSummary('');
+      setDescription('');
+      loadStudentData();
+      setPage('my_complaints');
     }
-    setSubmitting(false);
   };
 
-  const handleStudentVerify = async (ticketId, satisfied) => {
-    try {
-      const res = await fetch(`${apiUrl}/api/complaints/student-verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticket_id: ticketId, satisfied })
-      });
-      if (res.ok) {
-        setMsg(satisfied ? '✅ Issue verified & closed successfully!' : '🔄 Ticket reopened for maintenance re-check!');
-        setSelectedTicket(null);
-        loadStudentData();
-      }
-    } catch {
-      setMsg('❌ Verification error.');
+  const handleVerify = async (ticketId, satisfied) => {
+    const res = await fetch(`${apiUrl}/api/complaints/student-verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticket_id: ticketId, satisfied })
+    });
+    if (res.ok) {
+      setMsg(satisfied ? '✅ Marked Resolved & Closed!' : '🔄 Reopened for maintenance!');
+      loadStudentData();
+      setPage('my_complaints');
     }
   };
 
   const handleRsvp = async (eventId) => {
-    try {
-      const res = await fetch(`${apiUrl}/api/unicore/events/rsvp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ event_id: eventId, student_id: user.user_id })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setMsg(data.message);
-        setEvents((prev) => prev.map((ev) => (ev.event_id === eventId ? { ...ev, rsvps: data.rsvps } : ev)));
-        setSelectedEvent((prev) => (prev && prev.event_id === eventId ? { ...prev, rsvps: data.rsvps } : prev));
-      }
-    } catch {
-      setMsg('❌ Failed to update RSVP.');
+    const res = await fetch(`${apiUrl}/api/unicore/events/rsvp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event_id: eventId, student_id: user.user_id })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      setMsg(data.message);
+      setEvents(events.map((ev) => (ev.event_id === eventId ? { ...ev, rsvps: data.rsvps } : ev)));
+      setSelectedEvent((prev) => (prev ? { ...prev, rsvps: data.rsvps } : null));
     }
   };
 
-  const handleFeedbackSubmit = async (e, eventId) => {
+  const handleFeedback = async (e, eventId) => {
     e.preventDefault();
-    try {
-      const res = await fetch(`${apiUrl}/api/unicore/events/feedback`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          event_id: eventId,
-          student_id: user.user_id,
-          rating: feedbackRating,
-          review: feedbackReview
-        })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setMsg('🤖 Thank you! Feedback added to AI Audit engine.');
-        setFeedbackReview('');
-        setSelectedEvent(data.event);
-        loadStudentData();
-      }
-    } catch {
-      setMsg('❌ Failed to submit feedback.');
+    const res = await fetch(`${apiUrl}/api/unicore/events/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event_id: eventId, student_id: user.user_id, rating: feedbackRating, review: feedbackReview })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      setMsg('⭐ Review submitted!');
+      setFeedbackReview('');
+      setSelectedEvent(data.event);
+      loadStudentData();
     }
   };
 
-  const handleSelfPassChange = async (e) => {
+  const handlePassChange = async (e) => {
     e.preventDefault();
-    try {
-      const res = await fetch(`${apiUrl}/api/student/change-password`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: user.user_id, old_password: oldPass, new_password: newPass })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setMsg('✅ Custom password saved successfully!');
-        setOldPass('');
-        setNewPass('');
-      } else {
-        setMsg(`❌ ${data.detail || 'Password change failed'}`);
-      }
-    } catch {
-      setMsg('❌ Connection error.');
+    const res = await fetch(`${apiUrl}/api/student/change-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ student_id: user.user_id, old_password: oldPass, new_password: newPass })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      setMsg('✅ Custom password saved!');
+      setOldPass('');
+      setNewPass('');
+    } else {
+      setMsg(`❌ ${data.detail || 'Error'}`);
     }
   };
 
-  const filteredComplaints = complaints.filter(
-    (c) =>
-      c.summary.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.ticket_id.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const visibleEvents = events.filter((e) => e.status === 'Approved' || e.status === 'Completed');
+  const actionNeeded = complaints.filter((c) => c.status === 'Awaiting Confirmation').length;
 
-  const actionPending = complaints.filter((c) => c.status === 'Awaiting Confirmation').length;
-  const studentVisibleEvents = events.filter((e) => e.status === 'Approved' || e.status === 'Completed');
-  const upcomingEvents = studentVisibleEvents.filter((e) => e.status === 'Approved');
-  const completedEvents = studentVisibleEvents.filter((e) => e.status === 'Completed');
+  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const firstDay = new Date(calYear, calMonth, 1).getDay();
+  const daysNum = new Date(calYear, calMonth + 1, 0).getDate();
 
   return (
-    <div className="hms-container">
-      {msg && <div className="hms-toast" onClick={() => setMsg(null)}>{msg}</div>}
+    <div className="ptm-shell-layout">
+      {/* LAPTOP SIDEBAR */}
+      <aside className="ptm-sidebar-desktop">
+        <button className={`ptm-side-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}>🏠 Student Home</button>
+        <button className={`ptm-side-btn ${page === 'new_complaint' ? 'active' : ''}`} onClick={() => setPage('new_complaint')}>➕ Lodge Grievance</button>
+        <button className={`ptm-side-btn ${page === 'my_complaints' ? 'active' : ''}`} onClick={() => setPage('my_complaints')}>💬 My Grievances ({complaints.length})</button>
+        <button className={`ptm-side-btn ${page === 'clubs_list' ? 'active' : ''}`} onClick={() => setPage('clubs_list')}>🎭 Campus Clubs ({clubs.length})</button>
+        <button className={`ptm-side-btn ${page === 'events_list' ? 'active' : ''}`} onClick={() => setPage('events_list')}>🎪 EventRadar ({visibleEvents.length})</button>
+        <button className={`ptm-side-btn ${page === 'calendar' ? 'active' : ''}`} onClick={() => setPage('calendar')}>🗓️ Event Calendar</button>
+        <button className={`ptm-side-btn ${page === 'notices' ? 'active' : ''}`} onClick={() => setPage('notices')}>📢 Notice Board ({notices.length})</button>
+        <button className={`ptm-side-btn ${page === 'profile' ? 'active' : ''}`} onClick={() => setPage('profile')}>👤 My Profile</button>
+      </aside>
 
-      <div className="hms-desktop-tabs">
-        <button className={`hms-dtab ${activeTab === 'complaints' ? 'active' : ''}`} onClick={() => setActiveTab('complaints')}>
-          💬 My Grievances {actionPending > 0 && <span className="hms-badge-inline">{actionPending}</span>}
-        </button>
-        <button className={`hms-dtab ${activeTab === 'eventradar' ? 'active' : ''}`} onClick={() => setActiveTab('eventradar')}>
-          📡 EventRadar & Clubs ({studentVisibleEvents.length})
-        </button>
-        <button className={`hms-dtab ${activeTab === 'attendance' ? 'active' : ''}`} onClick={() => setActiveTab('attendance')}>
-          📅 Night Attendance
-        </button>
-        <button className={`hms-dtab ${activeTab === 'leave' ? 'active' : ''}`} onClick={() => setActiveTab('leave')}>
-          🪪 Leave Pass
-        </button>
-        <button className={`hms-dtab ${activeTab === 'profile' ? 'active' : ''}`} onClick={() => setActiveTab('profile')}>
-          👤 Profile & Security
-        </button>
-      </div>
+      <div className="ptm-page-wrap">
+        {msg && <div className="ptm-toast" onClick={() => setMsg(null)}>{msg}</div>}
 
-      {/* TAB 1: COMPLAINTS */}
-      {activeTab === 'complaints' && (
-        <div>
-          <div className="hms-toolbar">
-            <div className="hms-search-box">
-              <span>🔍</span>
-              <input type="text" placeholder="Search complaints by summary, category, or ID..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+        {/* =====================================================
+            STUDENT HOME (Paytm Style Grid & Summary Cards)
+        ===================================================== */}
+        {page === 'home' && (
+          <div>
+            <div className="ptm-mini-grid">
+              <div className="ptm-mini-card" onClick={() => setPage('profile')}>
+                <div className="ptm-row-between">
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#6B7280' }}>{user.hostel_block}</span>
+                  <span>🏠</span>
+                </div>
+                <div style={{ fontSize: '20px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>Room {user.room}</div>
+                <button className="ptm-mini-btn">{user.year || 'Resident'} • {user.user_id}</button>
+              </div>
+
+              <div className="ptm-mini-card" onClick={() => setPage('my_complaints')}>
+                <div className="ptm-row-between">
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#6B7280' }}>My Grievances</span>
+                  <span>🛠️</span>
+                </div>
+                <div style={{ fontSize: '20px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>{complaints.length} Tickets</div>
+                <button className="ptm-mini-btn">
+                  {actionNeeded > 0 ? `⚡ ${actionNeeded} Awaiting Verify` : 'Check Status →'}
+                </button>
+              </div>
             </div>
-            <button className="hms-btn-primary" style={{ width: 'auto' }} onClick={() => setShowNewModal(true)}>
-              + Lodge New Grievance
-            </button>
+
+            <div className="ptm-card">
+              <div className="ptm-section-title">Hostel & Maintenance Services</div>
+              <div className="ptm-icon-grid">
+                <button className="ptm-icon-tile" onClick={() => setPage('new_complaint')}>
+                  <div className="ptm-icon-circle">➕</div>
+                  <span className="ptm-icon-label">Lodge Grievance</span>
+                </button>
+                <button className="ptm-icon-tile" onClick={() => setPage('my_complaints')}>
+                  <div className="ptm-icon-circle">
+                    💬
+                    {actionNeeded > 0 && <span className="ptm-tile-badge">{actionNeeded}</span>}
+                  </div>
+                  <span className="ptm-icon-label">Track Status</span>
+                </button>
+                <button className="ptm-icon-tile" onClick={() => setPage('coming_soon')}>
+                  <div className="ptm-icon-circle light">📅</div>
+                  <span className="ptm-icon-label">Attendance</span>
+                </button>
+                <button className="ptm-icon-tile" onClick={() => setPage('coming_soon')}>
+                  <div className="ptm-icon-circle light">🪪</div>
+                  <span className="ptm-icon-label">Leave Pass</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="ptm-card">
+              <div className="ptm-section-title">Campus Life, Clubs & Notice Board</div>
+              <div className="ptm-icon-grid">
+                <button className="ptm-icon-tile" onClick={() => setPage('events_list')}>
+                  <div className="ptm-icon-circle">🎪</div>
+                  <span className="ptm-icon-label">Upcoming Events</span>
+                </button>
+                <button className="ptm-icon-tile" onClick={() => setPage('clubs_list')}>
+                  <div className="ptm-icon-circle">🎭</div>
+                  <span className="ptm-icon-label">Student Clubs</span>
+                </button>
+                <button className="ptm-icon-tile" onClick={() => setPage('notices')}>
+                  <div className="ptm-icon-circle">
+                    📢
+                    {notices.length > 0 && <span className="ptm-tile-badge">{notices.length}</span>}
+                  </div>
+                  <span className="ptm-icon-label">Notice Board</span>
+                </button>
+                <button className="ptm-icon-tile" onClick={() => setPage('calendar')}>
+                  <div className="ptm-icon-circle">🗓️</div>
+                  <span className="ptm-icon-label">Event Calendar</span>
+                </button>
+              </div>
+            </div>
           </div>
+        )}
 
-          {filteredComplaints.length === 0 ? (
-            <div className="hms-empty-card">
-              <div style={{ fontSize: '40px', marginBottom: '8px' }}>📭</div>
-              <h3>No Grievances Found</h3>
-              <p className="hms-muted">Tap "+ Lodge New Grievance" to report any room or hostel issue.</p>
+        {/* PAGE: LODGE NEW COMPLAINT */}
+        {page === 'new_complaint' && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+              <h1 className="ptm-page-title">Lodge Hostel Grievance</h1>
+              <p className="ptm-page-sub">{user.hostel_block} • Room {user.room}</p>
             </div>
-          ) : (
-            <div className="hms-grid-2">
-              {filteredComplaints.map((c) => (
-                <div key={c.ticket_id} className="hms-item-card" onClick={() => setSelectedTicket(c)}>
-                  <div className="hms-avatar-circle">{getCategoryIcon(c.category)}</div>
-                  <div style={{ flex: 1 }}>
-                    <div className="hms-row-between">
-                      <span className="hms-item-title">{c.summary}</span>
-                      <span className="hms-muted-xs">{c.created_at.split(',')[0]}</span>
-                    </div>
-                    <p className="hms-item-sub" style={{ margin: '4px 0' }}>{c.description}</p>
-                    <div className="hms-row-between" style={{ marginTop: '6px' }}>
-                      <span className="hms-item-sub">{c.ticket_id} • {c.category}</span>
-                      <span className="hms-status-pill" style={{ color: getStatusColor(c.status), borderColor: getStatusColor(c.status) }}>
-                        {c.status === 'Awaiting Confirmation' ? '⚡ Tap to Verify Resolution' : c.status}
+            <div className="ptm-card">
+              <form onSubmit={handleCreateComplaint} className="ptm-form-stack">
+                <div>
+                  <label className="ptm-label">Select Maintenance Department</label>
+                  <select className="ptm-input" value={category} onChange={(e) => setCategory(e.target.value)}>
+                    {departments.map((d) => <option key={d.id} value={d.id}>{d.icon} {d.title}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="ptm-label">Short Issue Title</label>
+                  <input type="text" className="ptm-input" placeholder="e.g. Ceiling fan regulator not working" value={summary} onChange={(e) => setSummary(e.target.value)} required />
+                </div>
+                <div>
+                  <label className="ptm-label">Detailed Description</label>
+                  <textarea rows="3" className="ptm-input" placeholder="Describe the issue and preferred time..." value={description} onChange={(e) => setDescription(e.target.value)} required />
+                </div>
+                <button type="submit" className="ptm-btn-primary">Submit Grievance</button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* PAGE: MY COMPLAINTS */}
+        {page === 'my_complaints' && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+              <div className="ptm-row-between">
+                <h1 className="ptm-page-title">My Grievances</h1>
+                <button className="ptm-btn-secondary" onClick={() => setPage('new_complaint')}>+ New</button>
+              </div>
+            </div>
+            <div className="ptm-card">
+              {complaints.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '24px', color: '#6B7280' }}>No complaints logged yet.</div>
+              ) : (
+                <div className="ptm-list">
+                  {complaints.map((c) => (
+                    <div key={c.ticket_id} className="ptm-list-row" onClick={() => { setSelectedTicket(c); setPage('ticket_detail'); }}>
+                      <div className="ptm-avatar-pastel">🛠️</div>
+                      <div className="ptm-list-main">
+                        <div className="ptm-list-title">{c.summary}</div>
+                        <div className="ptm-list-sub">{c.ticket_id} • {c.routed_to}</div>
+                        <span className="ptm-tag-pill">{c.created_at}</span>
+                      </div>
+                      <span className="ptm-status-badge" style={{ background: c.status === 'Completed' ? '#DCFCE7' : '#FEF3C7', color: c.status === 'Completed' ? '#15803D' : '#B45309' }}>
+                        {c.status} ›
                       </span>
                     </div>
-                  </div>
+                  ))}
                 </div>
-              ))}
+              )}
             </div>
-          )}
-          <button className="hms-fab-mobile" onClick={() => setShowNewModal(true)}>+</button>
-        </div>
-      )}
+          </div>
+        )}
 
-      {/* TAB 2: EVENTRADAR & CLUBS */}
-      {activeTab === 'eventradar' && (
-        <div className="hms-stack" style={{ gap: '22px' }}>
-          <div className="hms-grid-2">
-            <div className="hms-card">
-              <div className="hms-section-label">🎟️ Upcoming Campus Events ({upcomingEvents.length})</div>
-              <div className="hms-stack">
-                {upcomingEvents.map((ev) => {
-                  const isGoing = ev.rsvps?.some((r) => r.toUpperCase() === user.user_id.toUpperCase());
-                  return (
-                    <div key={ev.event_id} className="hms-item-card" onClick={() => setSelectedEvent(ev)}>
-                      <div className="hms-avatar-circle">🎪</div>
-                      <div style={{ flex: 1 }}>
-                        <div className="hms-row-between">
-                          <span className="hms-item-title">{ev.title}</span>
-                          <span className="hms-pill-badge">{ev.club_id}</span>
-                        </div>
-                        <p className="hms-item-sub" style={{ margin: '4px 0', color: '#cbd5e1' }}>{ev.description}</p>
-                        <div className="hms-item-sub">📍 {ev.venue} • 📅 {ev.date} ({ev.start_time} - {ev.end_time})</div>
-                        <div className="hms-row-between" style={{ marginTop: '8px' }}>
-                          <span style={{ fontSize: '12px', color: '#4ade80', fontWeight: 800 }}>
-                            👥 {ev.rsvps?.length || 0} Students Attending
-                          </span>
-                          <span className="hms-status-pill" style={{ color: isGoing ? '#4ade80' : '#c084fc', borderColor: isGoing ? '#4ade80' : '#8b5cf6' }}>
-                            {isGoing ? '✓ You Are Going' : 'View Details →'}
-                          </span>
-                        </div>
+        {/* PAGE: TICKET DETAIL & 2-STEP STUDENT VERIFICATION */}
+        {page === 'ticket_detail' && selectedTicket && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('my_complaints')}>←</button>
+              <span className="ptm-tag-pill" style={{ width: 'fit-content' }}>{selectedTicket.ticket_id}</span>
+              <h1 className="ptm-page-title">{selectedTicket.summary}</h1>
+            </div>
+            <div className="ptm-card">
+              <p>{selectedTicket.description}</p>
+              <div className="ptm-list">
+                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">1️⃣ Complaint Registered</div><div className="ptm-list-sub">{selectedTicket.created_at} • Routed to {selectedTicket.routed_to}</div></div></div>
+                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">2️⃣ Staff Action Remark</div><div className="ptm-list-sub">{selectedTicket.staff_remark || 'Assigned to maintenance wing'}</div></div></div>
+                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">3️⃣ Current Status</div><div className="ptm-list-sub">{selectedTicket.status}</div></div></div>
+              </div>
+
+              {selectedTicket.status !== 'Completed' && (
+                <div className="ptm-grid-2" style={{ marginTop: '16px' }}>
+                  <button className="ptm-btn-primary" onClick={() => handleVerify(selectedTicket.ticket_id, true)}>
+                    ✅ Yes, Issue is Resolved
+                  </button>
+                  <button className="ptm-btn-danger" onClick={() => handleVerify(selectedTicket.ticket_id, false)}>
+                    ❌ Not Resolved (Reopen)
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* PAGE: STUDENT CLUBS DIRECTORY & FULL CLUB PAGE */}
+        {page === 'clubs_list' && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+              <h1 className="ptm-page-title">Campus Student Clubs</h1>
+            </div>
+            <div className="ptm-card">
+              {clubs.length === 0 ? (
+                <div className="ptm-list-sub">No clubs registered yet.</div>
+              ) : (
+                <div className="ptm-list">
+                  {clubs.map((c) => (
+                    <div key={c.club_id} className="ptm-list-row" onClick={() => { setSelectedClub(c); setClubSubView('hub'); setPage('club_detail'); }}>
+                      <div className="ptm-avatar-pastel" style={{ background: '#E0F2FE', color: '#002970' }}>{c.club_id.slice(0, 2)}</div>
+                      <div className="ptm-list-main">
+                        <div className="ptm-list-title">{c.name}</div>
+                        <div className="ptm-list-sub">{c.mission}</div>
                       </div>
+                      <span>›</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {page === 'club_detail' && selectedClub && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => clubSubView !== 'hub' ? setClubSubView('hub') : setPage('clubs_list')}>←</button>
+              <h1 className="ptm-page-title">{selectedClub.name}</h1>
+              <p className="ptm-page-sub">{selectedClub.mission}</p>
+            </div>
+            <div className="ptm-card">
+              <div className="ptm-icon-grid">
+                <button className="ptm-icon-tile" onClick={() => setClubSubView('hub')}><div className="ptm-icon-circle">🎪</div><span className="ptm-icon-label">Club Events</span></button>
+                <button className="ptm-icon-tile" onClick={() => setClubSubView('members')}><div className="ptm-icon-circle">👥</div><span className="ptm-icon-label">Members ({selectedClub.members?.length || 0})</span></button>
+                <button className="ptm-icon-tile" onClick={() => setClubSubView('gallery')}><div className="ptm-icon-circle">📸</div><span className="ptm-icon-label">Gallery</span></button>
+                <button className="ptm-icon-tile" onClick={() => setClubSubView('info')}><div className="ptm-icon-circle">ℹ️</div><span className="ptm-icon-label">Club Info</span></button>
+              </div>
+            </div>
+
+            {clubSubView === 'hub' && (
+              <div className="ptm-card">
+                <div className="ptm-section-title">Events by {selectedClub.club_id}</div>
+                <div className="ptm-list">
+                  {visibleEvents.filter((e) => e.club_id.toUpperCase() === selectedClub.club_id.toUpperCase()).map((ev) => (
+                    <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
+                      <div className="ptm-avatar-pastel">🎪</div>
+                      <div className="ptm-list-main"><div className="ptm-list-title">{ev.title}</div><div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date}</div></div>
+                      <span>›</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {clubSubView === 'members' && (
+              <div className="ptm-card">
+                <div className="ptm-section-title">Committee Members</div>
+                <div className="ptm-list">
+                  {selectedClub.members?.map((m, i) => (
+                    <div key={i} className="ptm-list-row">
+                      <div className="ptm-avatar-pastel">{m.name.slice(0, 2)}</div>
+                      <div className="ptm-list-main"><div className="ptm-list-title">{m.name}</div><div className="ptm-list-sub">{m.roll}</div></div>
+                      <span className="ptm-tag-pill">{m.position}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {clubSubView === 'gallery' && (
+              <div className="ptm-grid-2">
+                {selectedClub.gallery?.map((g, i) => (
+                  <div key={i} className="ptm-card">
+                    <img src={g.media_url} alt={g.caption} style={{ width: '100%', height: '200px', objectFit: 'cover', borderRadius: '12px', marginBottom: '8px' }} />
+                    <div className="ptm-list-title">{g.caption}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {clubSubView === 'info' && (
+              <div className="ptm-card">
+                <div className="ptm-list-title">Faculty Advisor: {selectedClub.faculty_advisor}</div>
+                <div className="ptm-list-sub" style={{ marginTop: '6px' }}>Head Coordinator: {selectedClub.head_coordinator}</div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* PAGE: EVENTS LIST & FULL EVENT PAGE */}
+        {page === 'events_list' && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+              <h1 className="ptm-page-title">EventRadar — Campus Events</h1>
+            </div>
+            <div className="ptm-card">
+              {visibleEvents.length === 0 ? (
+                <div className="ptm-list-sub">No upcoming events right now.</div>
+              ) : (
+                <div className="ptm-list">
+                  {visibleEvents.map((ev) => (
+                    <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
+                      <div className="ptm-avatar-pastel">🎪</div>
+                      <div className="ptm-list-main">
+                        <div className="ptm-list-title">{ev.title}</div>
+                        <div className="ptm-list-sub">{ev.club_id} • 📍 {ev.venue} • 📅 {ev.date}</div>
+                        <span className="ptm-tag-pill">👥 {ev.rsvps?.length || 0} Attending</span>
+                      </div>
+                      <span>›</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {page === 'event_detail' && selectedEvent && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('events_list')}>←</button>
+              <span className="ptm-tag-pill" style={{ width: 'fit-content' }}>{selectedEvent.club_id}</span>
+              <h1 className="ptm-page-title">{selectedEvent.title}</h1>
+            </div>
+            {selectedEvent.image_url && (
+              <div className="ptm-card" style={{ padding: '10px' }}>
+                <img src={selectedEvent.image_url} alt={selectedEvent.title} style={{ width: '100%', maxHeight: '260px', objectFit: 'cover', borderRadius: '14px' }} />
+              </div>
+            )}
+            <div className="ptm-card">
+              <p>{selectedEvent.description}</p>
+              <div className="ptm-list">
+                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">📍 Venue & Timing</div><div className="ptm-list-sub">{selectedEvent.venue} • {selectedEvent.date} ({selectedEvent.start_time} - {selectedEvent.end_time})</div></div></div>
+                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">👥 Live Attendance</div><div className="ptm-list-sub">{selectedEvent.rsvps?.length || 0} Students Confirmed Attending</div></div></div>
+              </div>
+              {selectedEvent.registration_link && (
+                <a href={selectedEvent.registration_link} target="_blank" rel="noreferrer" className="ptm-btn-secondary" style={{ display: 'block', textAlign: 'center', textDecoration: 'none', margin: '12px 0' }}>
+                  🔗 Open Registration / Google Form Link
+                </a>
+              )}
+              {selectedEvent.status !== 'Completed' ? (
+                <button className="ptm-btn-primary" style={{ marginTop: '12px' }} onClick={() => handleRsvp(selectedEvent.event_id)}>
+                  {selectedEvent.rsvps?.includes(user.user_id) ? '✅ You Are Attending (Tap to Cancel)' : '🎟️ Yes, I Am Attending (RSVP)'}
+                </button>
+              ) : (
+                <form onSubmit={(e) => handleFeedback(e, selectedEvent.event_id)} className="ptm-form-stack" style={{ marginTop: '16px' }}>
+                  <div className="ptm-section-title">Rate This Completed Event</div>
+                  <select className="ptm-input" value={feedbackRating} onChange={(e) => setFeedbackRating(Number(e.target.value))}>
+                    <option value={5}>⭐⭐⭐⭐⭐ 5 - Excellent</option>
+                    <option value={4}>⭐⭐⭐⭐ 4 - Very Good</option>
+                    <option value={3}>⭐⭐⭐ 3 - Good</option>
+                  </select>
+                  <textarea rows="2" className="ptm-input" placeholder="Write your review..." value={feedbackReview} onChange={(e) => setFeedbackReview(e.target.value)} required />
+                  <button type="submit" className="ptm-btn-primary">Submit Feedback</button>
+                </form>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* PAGE: NOTICE BOARD */}
+        {page === 'notices' && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+              <h1 className="ptm-page-title">Campus Notice Board</h1>
+            </div>
+            <div className="ptm-card">
+              {notices.length === 0 ? (
+                <div className="ptm-list-sub">No official notices published yet.</div>
+              ) : (
+                <div className="ptm-list">
+                  {notices.map((n) => (
+                    <div key={n.notice_id} className="ptm-list-row" onClick={() => { setSelectedNotice(n); setPage('notice_detail'); }}>
+                      <div className="ptm-avatar-pastel">📢</div>
+                      <div className="ptm-list-main">
+                        <div className="ptm-list-title">{n.title}</div>
+                        <div className="ptm-list-sub">{n.club_id} • For: {n.target_year} ({n.target_branch})</div>
+                      </div>
+                      <span>›</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {page === 'notice_detail' && selectedNotice && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('notices')}>←</button>
+              <span className="ptm-tag-pill" style={{ width: 'fit-content' }}>{selectedNotice.club_id}</span>
+              <h1 className="ptm-page-title">{selectedNotice.title}</h1>
+            </div>
+            <div className="ptm-card">
+              {selectedNotice.image_url && <img src={selectedNotice.image_url} alt="Notice" style={{ width: '100%', borderRadius: '14px', marginBottom: '12px' }} />}
+              <p>{selectedNotice.message}</p>
+              <div className="ptm-list-sub">🎯 Target: {selectedNotice.target_year} • {selectedNotice.target_branch}</div>
+              {selectedNotice.registration_link && (
+                <a href={selectedNotice.registration_link} target="_blank" rel="noreferrer" className="ptm-btn-primary" style={{ display: 'block', textAlign: 'center', textDecoration: 'none', marginTop: '14px' }}>
+                  🔗 Open Official Form / Link
+                </a>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* PAGE: CALENDAR */}
+        {page === 'calendar' && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+              <h1 className="ptm-page-title">Event Calendar</h1>
+            </div>
+            <div className="ptm-card">
+              <div className="ptm-row-between" style={{ marginBottom: '14px' }}>
+                <button className="ptm-btn-secondary" onClick={() => setCalMonth((m) => (m === 0 ? 11 : m - 1))}>◀</button>
+                <h3 style={{ margin: 0 }}>{monthNames[calMonth]} {calYear}</h3>
+                <button className="ptm-btn-secondary" onClick={() => setCalMonth((m) => (m === 11 ? 0 : m + 1))}>▶</button>
+              </div>
+              <div className="ptm-cal-grid">
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => <div key={d} className="ptm-cal-weekday">{d}</div>)}
+                {Array.from({ length: firstDay }).map((_, i) => <div key={`e-${i}`} className="ptm-cal-cell empty" />)}
+                {Array.from({ length: daysNum }).map((_, i) => {
+                  const dayNum = i + 1;
+                  const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+                  const dayEvents = visibleEvents.filter((e) => e.date === dateStr);
+                  return (
+                    <div key={dateStr} className={`ptm-cal-cell ${selectedDateStr === dateStr ? 'selected' : ''}`} onClick={() => setSelectedDateStr(dateStr)}>
+                      <span className="ptm-cal-daynum">{dayNum}</span>
+                      {dayEvents.length > 0 && <div className="ptm-cal-event-chip">{dayEvents[0].title}</div>}
                     </div>
                   );
                 })}
               </div>
             </div>
-
-            <div className="hms-card">
-              <div className="hms-section-label">⭐ Past Events — AI Feedback & Audits ({completedEvents.length})</div>
-              <div className="hms-stack">
-                {completedEvents.map((ev) => (
-                  <div key={ev.event_id} className="hms-item-card" onClick={() => setSelectedEvent(ev)}>
-                    <div className="hms-avatar-circle">🏁</div>
-                    <div style={{ flex: 1 }}>
-                      <div className="hms-row-between">
-                        <span className="hms-item-title">{ev.title}</span>
-                        <span className="hms-pill-badge">{ev.club_id}</span>
-                      </div>
-                      <p className="hms-item-sub" style={{ margin: '4px 0' }}>{ev.description}</p>
-                      <div className="hms-row-between" style={{ marginTop: '6px' }}>
-                        <span style={{ fontSize: '12px', color: '#fbbf24', fontWeight: 700 }}>
-                          ⭐ Rating: {ev.ai_audit?.average_rating || 4.9}/5.0
-                        </span>
-                        <span style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 700 }}>Tap to Rate & View AI Audit →</span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="hms-card">
-            <div className="hms-section-label">🏛️ Explore Official Student Clubs ({clubs.length})</div>
-            <div className="hms-grid-3">
-              {clubs.map((c) => (
-                <div key={c.club_id} className="hms-item-card" onClick={() => setSelectedClubView(c)}>
-                  <div className="hms-avatar-circle">🎭</div>
-                  <div style={{ flex: 1 }}>
-                    <div className="hms-row-between">
-                      <span className="hms-item-title">{c.name}</span>
-                      <span className="hms-pill-badge">{c.club_id}</span>
-                    </div>
-                    <p className="hms-item-sub" style={{ margin: '6px 0' }}>{c.mission}</p>
-                    <div style={{ fontSize: '11px', color: '#c084fc', fontWeight: 700 }}>
-                      👥 {c.members?.length || 0} Core Members • Tap for Dossier
-                    </div>
-                  </div>
+            <div className="ptm-card">
+              <div className="ptm-section-title">Events on {selectedDateStr}</div>
+              {visibleEvents.filter((e) => e.date === selectedDateStr).map((ev) => (
+                <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
+                  <div className="ptm-avatar-pastel">🎪</div>
+                  <div className="ptm-list-main"><div className="ptm-list-title">{ev.title}</div><div className="ptm-list-sub">📍 {ev.venue}</div></div>
+                  <span>›</span>
                 </div>
               ))}
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* TAB 3: ATTENDANCE - COMING SOON */}
-      {activeTab === 'attendance' && (
-        <div className="hms-card" style={{ textAlign: 'center', padding: '50px 20px', maxWidth: '540px', margin: '0 auto' }}>
-          <span className="hms-pill-badge">PHASE 2 ROLLOUT • COMING SOON</span>
-          <div style={{ fontSize: '50px', margin: '16px 0' }}>📅</div>
-          <h3>Hostel Night Attendance</h3>
-          <p className="hms-muted">Smart geo-fenced night roll-call synced with the Council of Wardens is currently under phase-2 deployment.</p>
-        </div>
-      )}
-
-      {/* TAB 4: LEAVE PASS - COMING SOON */}
-      {activeTab === 'leave' && (
-        <div className="hms-card" style={{ textAlign: 'center', padding: '50px 20px', maxWidth: '540px', margin: '0 auto' }}>
-          <span className="hms-pill-badge">PHASE 2 ROLLOUT • COMING SOON</span>
-          <div style={{ fontSize: '50px', margin: '16px 0' }}>🪪</div>
-          <h3>Digital Leave & Gate Outpass</h3>
-          <p className="hms-muted">Paperless leave applications with instant Warden approval and main-gate QR verification will be available soon.</p>
-        </div>
-      )}
-
-      {/* TAB 5: PROFILE & SECURITY */}
-      {activeTab === 'profile' && (
-        <div className="hms-grid-2">
-          <div className="hms-card" style={{ textAlign: 'center' }}>
-            <div className="hms-profile-avatar">{user.full_name.split(' ').map((n) => n[0]).join('').slice(0, 2)}</div>
-            <h2 style={{ margin: '12px 0 4px 0' }}>{user.full_name}</h2>
-            <span className="hms-pill-badge">{user.user_id} • Verified Resident</span>
-            <div className="hms-stack" style={{ marginTop: '20px', textAlign: 'left' }}>
-              <div className="hms-row-item"><span>🏢 Hostel Bhawan</span><strong>{user.hostel_block}</strong></div>
-              <div className="hms-row-item"><span>🚪 Room</span><strong>Room {user.room}</strong></div>
-              <div className="hms-row-item"><span>🎓 Department</span><strong>{user.department}</strong></div>
-              <div className="hms-row-item"><span>📞 Phone</span><strong>{user.phone}</strong></div>
-              <div className="hms-row-item"><span>✉️ Email</span><strong>{user.email}</strong></div>
+        {/* PAGE: PROFILE */}
+        {page === 'profile' && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+              <h1 className="ptm-page-title">My Resident Profile</h1>
             </div>
-          </div>
-          <div className="hms-card">
-            <div className="hms-section-label">🔐 Change My Account Password</div>
-            <p className="hms-muted" style={{ marginBottom: '14px' }}>
-              Your default password is your Date of Birth (<code>DDMMYYYY</code>). Set your custom password below.
-            </p>
-            <form onSubmit={handleSelfPassChange} className="hms-stack">
-              <input type="password" className="hms-input" placeholder="Current Password or DOB (DDMMYYYY)" value={oldPass} onChange={(e) => setOldPass(e.target.value)} required />
-              <input type="password" className="hms-input" placeholder="New Custom Password" value={newPass} onChange={(e) => setNewPass(e.target.value)} required />
-              <button type="submit" className="hms-btn-primary">💾 Save Custom Password</button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: LODGE NEW COMPLAINT */}
-      {showNewModal && (
-        <div className="hms-modal-backdrop" onClick={() => setShowNewModal(false)}>
-          <div className="hms-modal-box" onClick={(e) => e.stopPropagation()}>
-            <div className="hms-row-between" style={{ marginBottom: '12px' }}>
-              <h3 style={{ margin: 0 }}>📝 Lodge New Hostel Grievance</h3>
-              <button className="hms-close-btn" onClick={() => setShowNewModal(false)}>✕</button>
-            </div>
-            <form onSubmit={handleCreateComplaint} className="hms-stack">
-              <label className="hms-label">Select Maintenance Category</label>
-              <select className="hms-input" value={category} onChange={(e) => setCategory(e.target.value)}>
-                {departments.map((d) => (
-                  <option key={d.id} value={d.id}>{d.icon} {d.title}</option>
-                ))}
-              </select>
-              <div>
-                <label className="hms-label">Issue Headline / Summary</label>
-                <input type="text" className="hms-input" placeholder="e.g. Ceiling fan regulator sparking in B-204" value={summary} onChange={(e) => setSummary(e.target.value)} required />
-              </div>
-              <div>
-                <label className="hms-label">Detailed Problem Description</label>
-                <textarea rows="3" className="hms-input" placeholder="Provide exact room details or severity..." value={description} onChange={(e) => setDescription(e.target.value)} required />
-              </div>
-              <button type="submit" disabled={submitting} className="hms-btn-primary">
-                {submitting ? 'Submitting...' : '🚀 Submit Grievance'}
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: TICKET DETAILS & VERIFICATION */}
-      {selectedTicket && (
-        <div className="hms-modal-backdrop" onClick={() => setSelectedTicket(null)}>
-          <div className="hms-modal-box" onClick={(e) => e.stopPropagation()}>
-            <div className="hms-row-between" style={{ marginBottom: '12px' }}>
-              <span className="hms-pill-badge">{selectedTicket.ticket_id} • {selectedTicket.category}</span>
-              <button className="hms-close-btn" onClick={() => setSelectedTicket(null)}>✕</button>
-            </div>
-            <h3>{selectedTicket.summary}</h3>
-            <p className="hms-muted">{selectedTicket.description}</p>
-            <div className="hms-detail-box">
-              <div><strong>Status:</strong> <span style={{ color: getStatusColor(selectedTicket.status), fontWeight: 800 }}>{selectedTicket.status}</span></div>
-              <div style={{ marginTop: '6px' }}><strong>Routed Wing:</strong> {selectedTicket.routed_to}</div>
-              {selectedTicket.staff_remark && (
-                <div style={{ marginTop: '8px', padding: '10px', background: 'rgba(74,222,128,0.1)', borderRadius: '8px', color: '#4ade80' }}>
-                  <strong>🛠️ Staff Remark:</strong> {selectedTicket.staff_remark}
-                </div>
-              )}
-            </div>
-            {selectedTicket.status !== 'Completed' && (
-              <div style={{ marginTop: '16px', padding: '14px', background: 'rgba(139,92,246,0.12)', borderRadius: '12px', border: '1px solid #8b5cf6' }}>
-                <div style={{ fontWeight: 800, fontSize: '13px', marginBottom: '10px', textAlign: 'center' }}>
-                  Is this maintenance issue successfully resolved?
-                </div>
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <button className="hms-btn-primary" onClick={() => handleStudentVerify(selectedTicket.ticket_id, true)}>
-                    ✅ Yes, Resolved
-                  </button>
-                  <button className="hms-btn-danger" onClick={() => handleStudentVerify(selectedTicket.ticket_id, false)}>
-                    ❌ Reopen Ticket
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: EVENT DETAILS, RSVP & FEEDBACK */}
-      {selectedEvent && (
-        <div className="hms-modal-backdrop" onClick={() => setSelectedEvent(null)}>
-          <div className="hms-modal-box" onClick={(e) => e.stopPropagation()}>
-            <div className="hms-row-between" style={{ marginBottom: '12px' }}>
-              <span className="hms-pill-badge">🎪 {selectedEvent.club_id} CHAPTER • {selectedEvent.status}</span>
-              <button className="hms-close-btn" onClick={() => setSelectedEvent(null)}>✕</button>
-            </div>
-
-            {selectedEvent.image_url && <img src={selectedEvent.image_url} alt="Poster" className="hms-event-img" />}
-
-            <h3 style={{ margin: '0 0 8px 0', fontSize: '19px' }}>{selectedEvent.title}</h3>
-            <p className="hms-muted">{selectedEvent.description}</p>
-            <div className="hms-detail-box">
-              <div>📍 <strong>Venue:</strong> {selectedEvent.venue}</div>
-              <div style={{ marginTop: '4px' }}>📅 <strong>Date & Time:</strong> {selectedEvent.date} ({selectedEvent.start_time} - {selectedEvent.end_time})</div>
-              <div style={{ marginTop: '6px', color: '#4ade80', fontWeight: 800 }}>
-                👥 Live Attendance Count: {selectedEvent.rsvps?.length || 0} Students Confirmed Coming
+            <div className="ptm-card">
+              <div className="ptm-list">
+                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Full Name & Roll No</div><div className="ptm-list-sub">{user.full_name} ({user.user_id})</div></div></div>
+                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Hostel & Room Number</div><div className="ptm-list-sub">{user.hostel_block}, Room {user.room}</div></div></div>
+                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Department & Year</div><div className="ptm-list-sub">{user.department} • {user.year || 'Resident'}</div></div></div>
               </div>
             </div>
-
-            {selectedEvent.registration_link && (
-              <a href={selectedEvent.registration_link} target="_blank" rel="noreferrer" className="hms-link-btn">
-                🔗 Open Google Form Registration Link
-              </a>
-            )}
-
-            {selectedEvent.status !== 'Completed' ? (
-              <div style={{ marginTop: '14px', padding: '14px', background: 'rgba(139,92,246,0.12)', borderRadius: '12px', border: '1px solid #8b5cf6', textAlign: 'center' }}>
-                <button className="hms-btn-primary" onClick={() => handleRsvp(selectedEvent.event_id)}>
-                  {selectedEvent.rsvps?.some((r) => r.toUpperCase() === user.user_id.toUpperCase())
-                    ? `✅ You Are Attending! (${selectedEvent.rsvps.length} Going — Tap to Cancel)`
-                    : '🎟️ Yes, I Am Attending (RSVP Now)'}
-                </button>
-              </div>
-            ) : (
-              <div style={{ marginTop: '16px' }}>
-                {selectedEvent.ai_audit && (
-                  <div className="hms-detail-box" style={{ borderColor: '#8b5cf6', marginBottom: '14px' }}>
-                    <div className="hms-section-label">🤖 AI Feedback Audit</div>
-                    <div><strong>Turnout:</strong> {selectedEvent.ai_audit.total_attendees} | <strong>Rating:</strong> ⭐ {selectedEvent.ai_audit.average_rating}/5.0</div>
-                    <div style={{ color: '#4ade80', fontWeight: 700, marginTop: '8px' }}>👍 Highlights:</div>
-                    <ul style={{ margin: '4px 0 8px 18px', padding: 0 }}>{selectedEvent.ai_audit.key_pros?.map((p, i) => <li key={i}>{p}</li>)}</ul>
-                  </div>
-                )}
-                <form onSubmit={(e) => handleFeedbackSubmit(e, selectedEvent.event_id)} className="hms-stack" style={{ background: '#090d16', padding: '14px', borderRadius: '12px', border: '1px solid #334155' }}>
-                  <div className="hms-section-label" style={{ margin: 0 }}>⭐ Submit Event Rating & Review</div>
-                  <select className="hms-input" value={feedbackRating} onChange={(e) => setFeedbackRating(Number(e.target.value))}>
-                    <option value={5}>⭐⭐⭐⭐⭐ 5 - Excellent</option>
-                    <option value={4}>⭐⭐⭐⭐ 4 - Very Good</option>
-                    <option value={3}>⭐⭐⭐ 3 - Good</option>
-                    <option value={2}>⭐⭐ 2 - Fair</option>
-                    <option value={1}>⭐ 1 - Poor</option>
-                  </select>
-                  <textarea rows="2" className="hms-input" placeholder="Write your feedback..." value={feedbackReview} onChange={(e) => setFeedbackReview(e.target.value)} required />
-                  <button type="submit" className="hms-btn-primary">Submit Feedback</button>
-                </form>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: CLUB DOSSIER */}
-      {selectedClubView && (
-        <div className="hms-modal-backdrop" onClick={() => setSelectedClubView(null)}>
-          <div className="hms-modal-box" onClick={(e) => e.stopPropagation()}>
-            <div className="hms-row-between" style={{ marginBottom: '10px' }}>
-              <span className="hms-pill-badge">OFFICIAL CHAPTER • {selectedClubView.club_id}</span>
-              <button className="hms-close-btn" onClick={() => setSelectedClubView(null)}>✕</button>
-            </div>
-            <h3 style={{ margin: '0 0 6px 0' }}>{selectedClubView.name}</h3>
-            <p className="hms-muted">{selectedClubView.mission}</p>
-            <div className="hms-detail-box" style={{ marginBottom: '14px' }}>
-              <div><strong>Faculty Advisor:</strong> {selectedClubView.faculty_advisor}</div>
-              <div style={{ marginTop: '4px' }}><strong>Head Coordinator:</strong> {selectedClubView.head_coordinator}</div>
-            </div>
-            <div className="hms-section-label">👥 Core Committee Roster ({selectedClubView.members?.length || 0})</div>
-            <div className="hms-stack">
-              {selectedClubView.members?.map((m, i) => (
-                <div key={i} className="hms-row-item">
-                  <div>
-                    <div className="hms-item-title">{m.name}</div>
-                    <div className="hms-item-sub">{m.roll} • {m.phone}</div>
-                  </div>
-                  <span className="hms-pill-badge">{m.position}</span>
-                </div>
-              ))}
+            <div className="ptm-card">
+              <div className="ptm-section-title">Change Password</div>
+              <form onSubmit={handlePassChange} className="ptm-form-stack">
+                <input type="password" className="ptm-input" placeholder="Current Password or DOB (DDMMYYYY)" value={oldPass} onChange={(e) => setOldPass(e.target.value)} required />
+                <input type="password" className="ptm-input" placeholder="New Custom Password" value={newPass} onChange={(e) => setNewPass(e.target.value)} required />
+                <button type="submit" className="ptm-btn-primary">Update Password</button>
+              </form>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      <nav className="hms-bottom-nav">
-        <button onClick={() => setActiveTab('complaints')} className="hms-bnav-item"><span>💬</span><span>Complaints</span></button>
-        <button onClick={() => setActiveTab('eventradar')} className="hms-bnav-item"><span>📡</span><span>Events</span></button>
-        <button onClick={() => setActiveTab('profile')} className="hms-bnav-item"><span>👤</span><span>Profile</span></button>
+        {page === 'coming_soon' && (
+          <div>
+            <div className="ptm-drill-header">
+              <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+              <h1 className="ptm-page-title">Phase 2 Module</h1>
+            </div>
+            <div className="ptm-card" style={{ textAlign: 'center', padding: '40px 20px' }}>
+              <h3>Coming Soon After 30-Day Pilot</h3>
+              <p className="ptm-list-sub">Digital Night Attendance & Gate Outpass will be enabled in Phase 2.</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <nav className="ptm-bottom-nav">
+        <button className={`ptm-bnav-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}><span>🏠</span><span>Home</span></button>
+        <button className={`ptm-bnav-btn ${page === 'my_complaints' ? 'active' : ''}`} onClick={() => setPage('my_complaints')}><span>💬</span><span>Grievances</span></button>
+        <button className={`ptm-bnav-btn ${page === 'events_list' ? 'active' : ''}`} onClick={() => setPage('events_list')}><span>🎪</span><span>Events</span></button>
+        <button className={`ptm-bnav-btn ${page === 'notices' ? 'active' : ''}`} onClick={() => setPage('notices')}><span>📢</span><span>Notices</span></button>
+        <button className={`ptm-bnav-btn ${page === 'profile' ? 'active' : ''}`} onClick={() => setPage('profile')}><span>👤</span><span>Profile</span></button>
       </nav>
     </div>
   );
