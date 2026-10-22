@@ -1,0 +1,10 @@
+{
+  "name": "hms-enterprise",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix frontend run dev --",
+    "build": "npm --prefix frontend run build",
+    "lint": "npm --prefix frontend run lint",
+    "dev:backend": "python -m uvicorn main:app --reload --app-dir backend"
+  }
+}

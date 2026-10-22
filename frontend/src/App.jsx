@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import DeanPortal from './components/DeanPortal';
 import WardenPortal from './components/WardenPortal';
-import ClubPortal from './components/clubPortal';
+import ClubPortal from './components/ClubPortal';
 import StudentPortal from './components/StudentPortal';
 import StaffPortal from './components/StaffPortal';
 
