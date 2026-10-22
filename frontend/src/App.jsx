@@ -4,7 +4,6 @@ import WardenPortal from './components/WardenPortal';
 import ClubPortal from './components/clubPortal';
 import StudentPortal from './components/StudentPortal';
 import StaffPortal from './components/StaffPortal';
-window.GLOBAL_SILICON_VALLEY_CSS = '';
 
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://hms-enterprise-mqvx.onrender.com';
