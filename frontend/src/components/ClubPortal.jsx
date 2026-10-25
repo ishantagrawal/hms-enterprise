@@ -7,16 +7,13 @@ export default function ClubPortal({ user, apiUrl }) {
   const [msg, setMsg] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
 
-  // Club Info
   const [facultyAdvisor, setFacultyAdvisor] = useState('');
   const [headCoordinator, setHeadCoordinator] = useState('');
   const [missionInput, setMissionInput] = useState('');
   const [extraInfoInput, setExtraInfoInput] = useState('');
 
-  // Custom Member Position Form (Supports any custom role name & multiple people per role)
   const [memberForm, setMemberForm] = useState({ name: '', roll: '', position: '', phone: '' });
 
-  // Comprehensive Manual Event Request Form + Unlimited Custom Fields
   const [eventForm, setEventForm] = useState({
     title: '',
     date: '2026-10-29',
@@ -34,7 +31,6 @@ export default function ClubPortal({ user, apiUrl }) {
   });
   const [eventCustomFields, setEventCustomFields] = useState([]);
 
-  // Comprehensive Notice Request Form + Custom Fields
   const [noticeForm, setNoticeForm] = useState({
     title: '',
     message: '',
@@ -45,7 +41,6 @@ export default function ClubPortal({ user, apiUrl }) {
   });
   const [noticeCustomFields, setNoticeCustomFields] = useState([]);
 
-  // Gallery
   const [galleryCaption, setGalleryCaption] = useState('');
   const [galleryUrl, setGalleryUrl] = useState('');
 
@@ -73,14 +68,6 @@ export default function ClubPortal({ user, apiUrl }) {
   }, [apiUrl, user.user_id]);
 
   useEffect(() => { loadClubData(); }, [loadClubData]);
-
-  const handleImageUpload = (e, setter) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onloadend = () => setter(reader.result);
-    reader.readAsDataURL(file);
-  };
 
   const handleSaveInfo = async (e) => {
     e.preventDefault();
@@ -171,10 +158,10 @@ export default function ClubPortal({ user, apiUrl }) {
     const res = await fetch(`${apiUrl}/api/unicore/clubs/add-gallery`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ club_id: user.user_id, media_type: 'image', media_url: galleryUrl, caption: galleryCaption })
+      body: JSON.stringify({ club_id: user.user_id, media_type: 'link', media_url: galleryUrl, caption: galleryCaption })
     });
     if (res.ok) {
-      setMsg('📸 Photo added to gallery!');
+      setMsg('📸 Photo / Drive Link added to gallery!');
       setGalleryCaption('');
       setGalleryUrl('');
       loadClubData();
@@ -193,7 +180,7 @@ export default function ClubPortal({ user, apiUrl }) {
         <button className={`ptm-side-btn ${page === 'propose_event' ? 'active' : ''}`} onClick={() => setPage('propose_event')}>🚀 Request Event to Dean</button>
         <button className={`ptm-side-btn ${page === 'propose_notice' ? 'active' : ''}`} onClick={() => setPage('propose_notice')}>📢 Post Student Notice</button>
         <button className={`ptm-side-btn ${page === 'my_events' ? 'active' : ''}`} onClick={() => setPage('my_events')}>🎪 My Events ({myEvents.length})</button>
-        <button className={`ptm-side-btn ${page === 'gallery' ? 'active' : ''}`} onClick={() => setPage('gallery')}>📸 Photo Gallery</button>
+        <button className={`ptm-side-btn ${page === 'gallery' ? 'active' : ''}`} onClick={() => setPage('gallery')}>📸 Media Links</button>
       </aside>
 
       <div className="ptm-page-wrap">
@@ -232,7 +219,7 @@ export default function ClubPortal({ user, apiUrl }) {
             <div className="ptm-card">
               <div className="ptm-row-between" style={{ marginBottom: '10px' }}>
                 <div className="ptm-section-title" style={{ margin: 0 }}>Recent Events ({myEvents.length})</div>
-                <button className="ptm-btn-secondary" onClick={() => setPage('gallery')}>📸 Upload Photos</button>
+                <button className="ptm-btn-secondary" onClick={() => setPage('gallery')}>📸 Add Drive Photos</button>
               </div>
               {myEvents.length === 0 ? (
                 <div className="ptm-list-sub">No events proposed yet.</div>
@@ -254,7 +241,6 @@ export default function ClubPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* PAGE: CLUB INFO */}
         {page === 'info' && (
           <div>
             <div className="ptm-drill-header">
@@ -285,22 +271,19 @@ export default function ClubPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* PAGE: 100% CUSTOMIZABLE POSITIONS & MEMBERS */}
         {page === 'members' && (
           <div>
             <div className="ptm-drill-header">
               <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
               <h1 className="ptm-page-title">Custom Positions & Members</h1>
-              <p className="ptm-page-sub">Type any custom position name (e.g. Convener, Co-Chair, Stage Lead, Executive) and add one or multiple people to that role.</p>
+              <p className="ptm-page-sub">Type any custom position name and add one or multiple students to that position.</p>
             </div>
-
             <div className="ptm-card">
-              <div className="ptm-section-title">Add Member to Any Custom Position</div>
               <form onSubmit={handleAddMember} className="ptm-form-stack">
                 <div className="ptm-grid-2">
                   <div>
                     <label className="ptm-label">Custom Position / Role Title</label>
-                    <input type="text" className="ptm-input" placeholder="e.g. Technical Head, PR Team, Co-Convener" value={memberForm.position} onChange={(e) => setMemberForm({ ...memberForm, position: e.target.value })} required />
+                    <input type="text" className="ptm-input" placeholder="e.g. Convener, Tech Head, PR Team" value={memberForm.position} onChange={(e) => setMemberForm({ ...memberForm, position: e.target.value })} required />
                   </div>
                   <div>
                     <label className="ptm-label">Student Full Name</label>
@@ -345,13 +328,13 @@ export default function ClubPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* PAGE: RICH MANUAL EVENT PROPOSAL TO DEAN */}
+        {/* EVENT PROPOSAL: IMPORTANT DESCRIPTION FIRST, THEN IMAGE/DRIVE LINK BELOW */}
         {page === 'propose_event' && (
           <div>
             <div className="ptm-drill-header">
               <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
               <h1 className="ptm-page-title">Request Event Permission from Dean</h1>
-              <p className="ptm-page-sub">Fill all event details, budget, chief guest, and add any custom fields required for Dean approval.</p>
+              <p className="ptm-page-sub">Write the important event details above and attach your Google Drive poster / registration links below.</p>
             </div>
 
             <div className="ptm-card">
@@ -388,8 +371,8 @@ export default function ClubPortal({ user, apiUrl }) {
 
                 <div className="ptm-grid-2">
                   <div>
-                    <label className="ptm-label">Chief Guest / External Speakers / Judges</label>
-                    <input type="text" className="ptm-input" placeholder="Names & Designations of Guests" value={eventForm.chief_guest} onChange={(e) => setEventForm({ ...eventForm, chief_guest: e.target.value })} />
+                    <label className="ptm-label">Chief Guest / External Speakers</label>
+                    <input type="text" className="ptm-input" placeholder="Names & Designations" value={eventForm.chief_guest} onChange={(e) => setEventForm({ ...eventForm, chief_guest: e.target.value })} />
                   </div>
                   <div>
                     <label className="ptm-label">Expected Student Attendance</label>
@@ -399,26 +382,25 @@ export default function ClubPortal({ user, apiUrl }) {
 
                 <div>
                   <label className="ptm-label">Logistics, Sound, Security & Permission Details</label>
-                  <input type="text" className="ptm-input" placeholder="e.g. 4 Wireless Mics, Projector, Late Night Hostel Entry Permission for Girls" value={eventForm.logistics_needs} onChange={(e) => setEventForm({ ...eventForm, logistics_needs: e.target.value })} />
+                  <input type="text" className="ptm-input" placeholder="e.g. 4 Wireless Mics, Projector, Late Night Hostel Entry Permission" value={eventForm.logistics_needs} onChange={(e) => setEventForm({ ...eventForm, logistics_needs: e.target.value })} />
                 </div>
 
                 <div>
-                  <label className="ptm-label">Full Event Description (Seen by Dean & Students)</label>
-                  <textarea rows="3" className="ptm-input" placeholder="Complete event overview..." value={eventForm.description} onChange={(e) => setEventForm({ ...eventForm, description: e.target.value })} required />
+                  <label className="ptm-label">Important Event Description (Shown Above Links)</label>
+                  <textarea rows="4" className="ptm-input" placeholder="Write all important event rules, schedule, and instructions..." value={eventForm.description} onChange={(e) => setEventForm({ ...eventForm, description: e.target.value })} required />
                 </div>
 
                 <div className="ptm-grid-2">
                   <div>
-                    <label className="ptm-label">Upload Event Poster Photo (From Device)</label>
-                    <input type="file" accept="image/*" className="ptm-input" onChange={(e) => handleImageUpload(e, (val) => setEventForm({ ...eventForm, image_url: val }))} />
+                    <label className="ptm-label">Poster / Google Drive / Brochure Link (Shown Below Description)</label>
+                    <input type="url" className="ptm-input" placeholder="https://drive.google.com/..." value={eventForm.image_url} onChange={(e) => setEventForm({ ...eventForm, image_url: e.target.value })} />
                   </div>
                   <div>
-                    <label className="ptm-label">Google Form / Registration Link</label>
+                    <label className="ptm-label">Google Form / Registration Link (Optional)</label>
                     <input type="url" className="ptm-input" placeholder="https://docs.google.com/forms/..." value={eventForm.registration_link} onChange={(e) => setEventForm({ ...eventForm, registration_link: e.target.value })} />
                   </div>
                 </div>
 
-                {/* UNLIMITED CUSTOM FIELDS FOR DEAN */}
                 <div style={{ background: '#F8FAFC', padding: '14px', borderRadius: '14px', border: '1px solid #E2E8F0' }}>
                   <div className="ptm-row-between" style={{ marginBottom: '10px' }}>
                     <span className="ptm-label" style={{ margin: 0 }}>📌 Additional Custom Fields for Dean</span>
@@ -427,7 +409,7 @@ export default function ClubPortal({ user, apiUrl }) {
                       className="ptm-btn-secondary"
                       onClick={() => setEventCustomFields([...eventCustomFields, { label: '', value: '' }])}
                     >
-                      + Add Custom Detail Field
+                      + Add Custom Field
                     </button>
                   </div>
                   {eventCustomFields.map((cf, idx) => (
@@ -435,7 +417,7 @@ export default function ClubPortal({ user, apiUrl }) {
                       <input
                         type="text"
                         className="ptm-input"
-                        placeholder="Field Name (e.g. Guest Accommodation)"
+                        placeholder="Field Name (e.g. Guest Room)"
                         value={cf.label}
                         onChange={(e) => {
                           const copy = [...eventCustomFields];
@@ -446,7 +428,7 @@ export default function ClubPortal({ user, apiUrl }) {
                       <input
                         type="text"
                         className="ptm-input"
-                        placeholder="Details (e.g. SVNIT Guest House 2 Rooms)"
+                        placeholder="Details"
                         value={cf.value}
                         onChange={(e) => {
                           const copy = [...eventCustomFields];
@@ -464,22 +446,23 @@ export default function ClubPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* PAGE: POST NOTICE TO STUDENTS */}
+        {/* NOTICE PROPOSAL: IMPORTANT MESSAGE ABOVE, GOOGLE DRIVE/IMAGE LINK BELOW */}
         {page === 'propose_notice' && (
           <div>
             <div className="ptm-drill-header">
               <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
               <h1 className="ptm-page-title">Send Notice / Announcement</h1>
+              <p className="ptm-page-sub">Write important notice details first, then attach the Google Drive poster/image link and form link below.</p>
             </div>
             <div className="ptm-card">
               <form onSubmit={handleProposeNotice} className="ptm-form-stack">
                 <div>
-                  <label className="ptm-label">Notice Title</label>
+                  <label className="ptm-label">Notice Headline</label>
                   <input type="text" className="ptm-input" placeholder="e.g. Recruitment & Auditions Open for 1st Year" value={noticeForm.title} onChange={(e) => setNoticeForm({ ...noticeForm, title: e.target.value })} required />
                 </div>
                 <div>
-                  <label className="ptm-label">Detailed Message</label>
-                  <textarea rows="3" className="ptm-input" value={noticeForm.message} onChange={(e) => setNoticeForm({ ...noticeForm, message: e.target.value })} required />
+                  <label className="ptm-label">Important Written Notice Details (Shown First)</label>
+                  <textarea rows="4" className="ptm-input" placeholder="Write venue, timings, eligibility, and key instructions..." value={noticeForm.message} onChange={(e) => setNoticeForm({ ...noticeForm, message: e.target.value })} required />
                 </div>
                 <div className="ptm-grid-2">
                   <div><label className="ptm-label">Target Year</label><input type="text" className="ptm-input" value={noticeForm.target_year} onChange={(e) => setNoticeForm({ ...noticeForm, target_year: e.target.value })} required /></div>
@@ -487,11 +470,11 @@ export default function ClubPortal({ user, apiUrl }) {
                 </div>
                 <div className="ptm-grid-2">
                   <div>
-                    <label className="ptm-label">Attach Notice Image / Poster</label>
-                    <input type="file" accept="image/*" className="ptm-input" onChange={(e) => handleImageUpload(e, (val) => setNoticeForm({ ...noticeForm, image_url: val }))} />
+                    <label className="ptm-label">Poster / Google Drive Image Link (Shown Below Description)</label>
+                    <input type="url" className="ptm-input" placeholder="https://drive.google.com/..." value={noticeForm.image_url} onChange={(e) => setNoticeForm({ ...noticeForm, image_url: e.target.value })} />
                   </div>
                   <div>
-                    <label className="ptm-label">Google Form Link (Optional)</label>
+                    <label className="ptm-label">Google Form / Registration Link (Optional)</label>
                     <input type="url" className="ptm-input" placeholder="https://docs.google.com/forms/..." value={noticeForm.registration_link} onChange={(e) => setNoticeForm({ ...noticeForm, registration_link: e.target.value })} />
                   </div>
                 </div>
@@ -501,7 +484,6 @@ export default function ClubPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* PAGE: MY EVENTS LIST */}
         {page === 'my_events' && (
           <div>
             <div className="ptm-drill-header">
@@ -525,7 +507,6 @@ export default function ClubPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* PAGE: EVENT DETAILS */}
         {page === 'event_detail' && selectedEvent && (
           <div>
             <div className="ptm-drill-header">
@@ -533,7 +514,7 @@ export default function ClubPortal({ user, apiUrl }) {
               <h1 className="ptm-page-title">{selectedEvent.title}</h1>
             </div>
             <div className="ptm-card">
-              <p>{selectedEvent.description}</p>
+              <p style={{ whiteSpace: 'pre-line' }}>{selectedEvent.description}</p>
               <div className="ptm-list">
                 <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Status</div><div className="ptm-list-sub">{selectedEvent.status}</div></div></div>
                 <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Confirmed Student RSVPs</div><div className="ptm-list-sub">{selectedEvent.rsvps?.length || 0} Students Attending</div></div></div>
@@ -542,33 +523,40 @@ export default function ClubPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* PAGE: GALLERY */}
         {page === 'gallery' && (
           <div>
             <div className="ptm-drill-header">
               <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-              <h1 className="ptm-page-title">Club Photo Gallery</h1>
+              <h1 className="ptm-page-title">Club Photo & Drive Gallery</h1>
             </div>
             <div className="ptm-card">
               <form onSubmit={handleAddGallery} className="ptm-form-stack">
                 <div>
-                  <label className="ptm-label">Select Photo from Device</label>
-                  <input type="file" accept="image/*" className="ptm-input" onChange={(e) => handleImageUpload(e, setGalleryUrl)} />
+                  <label className="ptm-label">Google Drive Photo / Album Link</label>
+                  <input type="url" className="ptm-input" placeholder="https://drive.google.com/..." value={galleryUrl} onChange={(e) => setGalleryUrl(e.target.value)} required />
                 </div>
                 <div>
-                  <label className="ptm-label">Caption</label>
-                  <input type="text" className="ptm-input" placeholder="Event moment caption..." value={galleryCaption} onChange={(e) => setGalleryCaption(e.target.value)} required />
+                  <label className="ptm-label">Caption / Event Name</label>
+                  <input type="text" className="ptm-input" placeholder="e.g. Orientation Day 2026 Photos" value={galleryCaption} onChange={(e) => setGalleryCaption(e.target.value)} required />
                 </div>
-                <button type="submit" className="ptm-btn-primary">Upload Photo</button>
+                <button type="submit" className="ptm-btn-primary">Save Gallery Link</button>
               </form>
             </div>
-            <div className="ptm-grid-2">
-              {myClub.gallery?.map((g, i) => (
-                <div key={i} className="ptm-card">
-                  <img src={g.media_url} alt={g.caption} style={{ width: '100%', height: '200px', objectFit: 'cover', borderRadius: '12px', marginBottom: '8px' }} />
-                  <div className="ptm-list-title">{g.caption}</div>
-                </div>
-              ))}
+            <div className="ptm-card">
+              <div className="ptm-list">
+                {myClub.gallery?.map((g, i) => (
+                  <div key={i} className="ptm-list-row">
+                    <div className="ptm-avatar-pastel">📸</div>
+                    <div className="ptm-list-main">
+                      <div className="ptm-list-title">{g.caption}</div>
+                      <div className="ptm-list-sub">{g.timestamp}</div>
+                    </div>
+                    <a href={g.media_url} target="_blank" rel="noreferrer" className="ptm-btn-secondary" style={{ textDecoration: 'none' }}>
+                      Open ↗
+                    </a>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}

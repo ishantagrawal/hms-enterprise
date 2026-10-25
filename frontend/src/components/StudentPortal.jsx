@@ -7,16 +7,16 @@ export default function StudentPortal({ user, apiUrl }) {
   const [events, setEvents] = useState([]);
   const [clubs, setClubs] = useState([]);
   const [notices, setNotices] = useState([]);
+  const [ads, setAds] = useState([]);
+  const [adIdx, setAdIdx] = useState(0);
   const [msg, setMsg] = useState(null);
 
-  // Drill-down selections
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedClub, setSelectedClub] = useState(null);
   const [clubSubView, setClubSubView] = useState('hub');
   const [selectedNotice, setSelectedNotice] = useState(null);
 
-  // Forms
   const [category, setCategory] = useState('ELECTRICITY');
   const [summary, setSummary] = useState('');
   const [description, setDescription] = useState('');
@@ -25,19 +25,19 @@ export default function StudentPortal({ user, apiUrl }) {
   const [oldPass, setOldPass] = useState('');
   const [newPass, setNewPass] = useState('');
 
-  // Calendar
   const [calYear, setCalYear] = useState(2026);
   const [calMonth, setCalMonth] = useState(9);
   const [selectedDateStr, setSelectedDateStr] = useState('2026-10-25');
 
   const loadStudentData = useCallback(async () => {
     try {
-      const [cRes, dRes, eRes, clRes, nRes] = await Promise.all([
+      const [cRes, dRes, eRes, clRes, nRes, adRes] = await Promise.all([
         fetch(`${apiUrl}/api/complaints?role=Student&user_id=${user.user_id}`),
         fetch(`${apiUrl}/api/departments?hostel_block=${encodeURIComponent(user.hostel_block || 'All')}`),
         fetch(`${apiUrl}/api/unicore/events`),
         fetch(`${apiUrl}/api/unicore/clubs`),
-        fetch(`${apiUrl}/api/notices?role=Student`)
+        fetch(`${apiUrl}/api/notices?role=Student`),
+        fetch(`${apiUrl}/api/ads`)
       ]);
       if (cRes.ok) setComplaints(await cRes.json());
       if (dRes.ok) {
@@ -48,12 +48,21 @@ export default function StudentPortal({ user, apiUrl }) {
       if (eRes.ok) setEvents(await eRes.json());
       if (clRes.ok) setClubs(await clRes.json());
       if (nRes.ok) setNotices(await nRes.json());
+      if (adRes.ok) setAds(await adRes.json());
     } catch (e) {
       console.error(e);
     }
   }, [apiUrl, user.user_id, user.hostel_block]);
 
   useEffect(() => { loadStudentData(); }, [loadStudentData]);
+
+  useEffect(() => {
+    if (ads.length <= 1) return;
+    const timer = setInterval(() => {
+      setAdIdx((i) => (i + 1) % ads.length);
+    }, 4500);
+    return () => clearInterval(timer);
+  }, [ads.length]);
 
   const handleCreateComplaint = async (e) => {
     e.preventDefault();
@@ -134,6 +143,7 @@ export default function StudentPortal({ user, apiUrl }) {
 
   const visibleEvents = events.filter((e) => e.status === 'Approved' || e.status === 'Completed');
   const actionNeeded = complaints.filter((c) => c.status === 'Awaiting Confirmation').length;
+  const activeAd = ads.length > 0 ? ads[adIdx % ads.length] : null;
 
   const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   const firstDay = new Date(calYear, calMonth, 1).getDay();
@@ -141,7 +151,6 @@ export default function StudentPortal({ user, apiUrl }) {
 
   return (
     <div className="ptm-shell-layout">
-      {/* LAPTOP SIDEBAR */}
       <aside className="ptm-sidebar-desktop">
         <button className={`ptm-side-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}>🏠 Student Home</button>
         <button className={`ptm-side-btn ${page === 'new_complaint' ? 'active' : ''}`} onClick={() => setPage('new_complaint')}>➕ Lodge Grievance</button>
@@ -156,32 +165,49 @@ export default function StudentPortal({ user, apiUrl }) {
       <div className="ptm-page-wrap">
         {msg && <div className="ptm-toast" onClick={() => setMsg(null)}>{msg}</div>}
 
-        {/* =====================================================
-            STUDENT HOME (Paytm Style Grid & Summary Cards)
-        ===================================================== */}
         {page === 'home' && (
           <div>
+            {/* Top Summary Mini Cards */}
             <div className="ptm-mini-grid">
               <div className="ptm-mini-card" onClick={() => setPage('profile')}>
                 <div className="ptm-row-between">
-                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#6B7280' }}>{user.hostel_block}</span>
+                  <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>{user.hostel_block}</span>
                   <span>🏠</span>
                 </div>
-                <div style={{ fontSize: '20px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>Room {user.room}</div>
+                <div style={{ fontSize: '19px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>Room {user.room}</div>
                 <button className="ptm-mini-btn">{user.year || 'Resident'} • {user.user_id}</button>
               </div>
 
               <div className="ptm-mini-card" onClick={() => setPage('my_complaints')}>
                 <div className="ptm-row-between">
-                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#6B7280' }}>My Grievances</span>
+                  <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>My Grievances</span>
                   <span>🛠️</span>
                 </div>
-                <div style={{ fontSize: '20px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>{complaints.length} Tickets</div>
+                <div style={{ fontSize: '19px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>{complaints.length} Tickets</div>
                 <button className="ptm-mini-btn">
-                  {actionNeeded > 0 ? `⚡ ${actionNeeded} Awaiting Verify` : 'Check Status →'}
+                  {actionNeeded > 0 ? `⚡ ${actionNeeded} Verify Now` : 'Check Status →'}
                 </button>
               </div>
             </div>
+
+            {/* PAYTM IPO-STYLE PROMOTIONAL AD BANNER CAROUSEL */}
+            {activeAd && (
+              <div className="ptm-promo-banner" style={{ background: activeAd.bg_gradient || 'linear-gradient(135deg, #002970 0%, #0284C7 100%)' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <span className="ptm-promo-tag">{activeAd.sponsor_tag}</span>
+                  <h3 className="ptm-promo-title">{activeAd.title}</h3>
+                  <p className="ptm-promo-sub">{activeAd.subtitle}</p>
+                </div>
+                <div className="ptm-promo-right">
+                  {activeAd.badge_text && (
+                    <div style={{ fontSize: '11px', fontWeight: 800, color: '#E0F2FE' }}>{activeAd.badge_text}</div>
+                  )}
+                  <a href={activeAd.target_url} target="_blank" rel="noreferrer" className="ptm-promo-cta">
+                    {activeAd.cta_text || 'Apply Now →'}
+                  </a>
+                </div>
+              </div>
+            )}
 
             <div className="ptm-card">
               <div className="ptm-section-title">Hostel & Maintenance Services</div>
@@ -235,7 +261,6 @@ export default function StudentPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* PAGE: LODGE NEW COMPLAINT */}
         {page === 'new_complaint' && (
           <div>
             <div className="ptm-drill-header">
@@ -265,7 +290,6 @@ export default function StudentPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* PAGE: MY COMPLAINTS */}
         {page === 'my_complaints' && (
           <div>
             <div className="ptm-drill-header">
@@ -299,12 +323,11 @@ export default function StudentPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* PAGE: TICKET DETAIL & 2-STEP STUDENT VERIFICATION */}
         {page === 'ticket_detail' && selectedTicket && (
           <div>
             <div className="ptm-drill-header">
               <button className="ptm-back-btn" onClick={() => setPage('my_complaints')}>←</button>
-              <span className="ptm-tag-pill" style={{ width: 'fit-content' }}>{selectedTicket.ticket_id}</span>
+              <span className="ptm-tag-pill">{selectedTicket.ticket_id}</span>
               <h1 className="ptm-page-title">{selectedTicket.summary}</h1>
             </div>
             <div className="ptm-card">
@@ -314,7 +337,6 @@ export default function StudentPortal({ user, apiUrl }) {
                 <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">2️⃣ Staff Action Remark</div><div className="ptm-list-sub">{selectedTicket.staff_remark || 'Assigned to maintenance wing'}</div></div></div>
                 <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">3️⃣ Current Status</div><div className="ptm-list-sub">{selectedTicket.status}</div></div></div>
               </div>
-
               {selectedTicket.status !== 'Completed' && (
                 <div className="ptm-grid-2" style={{ marginTop: '16px' }}>
                   <button className="ptm-btn-primary" onClick={() => handleVerify(selectedTicket.ticket_id, true)}>
@@ -329,7 +351,6 @@ export default function StudentPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* PAGE: STUDENT CLUBS DIRECTORY & FULL CLUB PAGE */}
         {page === 'clubs_list' && (
           <div>
             <div className="ptm-drill-header">
@@ -368,7 +389,7 @@ export default function StudentPortal({ user, apiUrl }) {
               <div className="ptm-icon-grid">
                 <button className="ptm-icon-tile" onClick={() => setClubSubView('hub')}><div className="ptm-icon-circle">🎪</div><span className="ptm-icon-label">Club Events</span></button>
                 <button className="ptm-icon-tile" onClick={() => setClubSubView('members')}><div className="ptm-icon-circle">👥</div><span className="ptm-icon-label">Members ({selectedClub.members?.length || 0})</span></button>
-                <button className="ptm-icon-tile" onClick={() => setClubSubView('gallery')}><div className="ptm-icon-circle">📸</div><span className="ptm-icon-label">Gallery</span></button>
+                <button className="ptm-icon-tile" onClick={() => setClubSubView('gallery')}><div className="ptm-icon-circle">📸</div><span className="ptm-icon-label">Gallery Links</span></button>
                 <button className="ptm-icon-tile" onClick={() => setClubSubView('info')}><div className="ptm-icon-circle">ℹ️</div><span className="ptm-icon-label">Club Info</span></button>
               </div>
             </div>
@@ -404,13 +425,22 @@ export default function StudentPortal({ user, apiUrl }) {
             )}
 
             {clubSubView === 'gallery' && (
-              <div className="ptm-grid-2">
-                {selectedClub.gallery?.map((g, i) => (
-                  <div key={i} className="ptm-card">
-                    <img src={g.media_url} alt={g.caption} style={{ width: '100%', height: '200px', objectFit: 'cover', borderRadius: '12px', marginBottom: '8px' }} />
-                    <div className="ptm-list-title">{g.caption}</div>
-                  </div>
-                ))}
+              <div className="ptm-card">
+                <div className="ptm-section-title">Club Media & Drive Links</div>
+                <div className="ptm-list">
+                  {selectedClub.gallery?.map((g, i) => (
+                    <div key={i} className="ptm-list-row">
+                      <div className="ptm-avatar-pastel">📸</div>
+                      <div className="ptm-list-main">
+                        <div className="ptm-list-title">{g.caption}</div>
+                        <div className="ptm-list-sub">{g.timestamp}</div>
+                      </div>
+                      <a href={g.media_url} target="_blank" rel="noreferrer" className="ptm-btn-secondary" style={{ textDecoration: 'none' }}>
+                        Open Link ↗
+                      </a>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -423,7 +453,6 @@ export default function StudentPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* PAGE: EVENTS LIST & FULL EVENT PAGE */}
         {page === 'events_list' && (
           <div>
             <div className="ptm-drill-header">
@@ -452,31 +481,38 @@ export default function StudentPortal({ user, apiUrl }) {
           </div>
         )}
 
+        {/* EVENT DETAIL: WRITTEN DESCRIPTION FIRST, THEN POSTER/DRIVE LINK BELOW */}
         {page === 'event_detail' && selectedEvent && (
           <div>
             <div className="ptm-drill-header">
               <button className="ptm-back-btn" onClick={() => setPage('events_list')}>←</button>
-              <span className="ptm-tag-pill" style={{ width: 'fit-content' }}>{selectedEvent.club_id}</span>
+              <span className="ptm-tag-pill">{selectedEvent.club_id}</span>
               <h1 className="ptm-page-title">{selectedEvent.title}</h1>
             </div>
-            {selectedEvent.image_url && (
-              <div className="ptm-card" style={{ padding: '10px' }}>
-                <img src={selectedEvent.image_url} alt={selectedEvent.title} style={{ width: '100%', maxHeight: '260px', objectFit: 'cover', borderRadius: '14px' }} />
-              </div>
-            )}
             <div className="ptm-card">
-              <p>{selectedEvent.description}</p>
+              <div className="ptm-section-title">Important Event Information</div>
+              <p style={{ whiteSpace: 'pre-line', color: '#1F2937', marginBottom: '16px' }}>{selectedEvent.description}</p>
               <div className="ptm-list">
                 <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">📍 Venue & Timing</div><div className="ptm-list-sub">{selectedEvent.venue} • {selectedEvent.date} ({selectedEvent.start_time} - {selectedEvent.end_time})</div></div></div>
-                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">👥 Live Attendance</div><div className="ptm-list-sub">{selectedEvent.rsvps?.length || 0} Students Confirmed Attending</div></div></div>
+                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">👥 Confirmed Student Attendance</div><div className="ptm-list-sub">{selectedEvent.rsvps?.length || 0} Students Attending</div></div></div>
               </div>
-              {selectedEvent.registration_link && (
-                <a href={selectedEvent.registration_link} target="_blank" rel="noreferrer" className="ptm-btn-secondary" style={{ display: 'block', textAlign: 'center', textDecoration: 'none', margin: '12px 0' }}>
-                  🔗 Open Registration / Google Form Link
-                </a>
-              )}
+
+              {/* Poster / Drive Link & Google Form Links Placed Cleanly Below Info */}
+              <div className="ptm-form-stack" style={{ marginTop: '14px' }}>
+                {selectedEvent.image_url && (
+                  <a href={selectedEvent.image_url} target="_blank" rel="noreferrer" className="ptm-btn-secondary" style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}>
+                    🖼️ View Event Poster / Google Drive Attachment ↗
+                  </a>
+                )}
+                {selectedEvent.registration_link && (
+                  <a href={selectedEvent.registration_link} target="_blank" rel="noreferrer" className="ptm-btn-secondary" style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}>
+                    📝 Open Registration / Google Form ↗
+                  </a>
+                )}
+              </div>
+
               {selectedEvent.status !== 'Completed' ? (
-                <button className="ptm-btn-primary" style={{ marginTop: '12px' }} onClick={() => handleRsvp(selectedEvent.event_id)}>
+                <button className="ptm-btn-primary" style={{ marginTop: '14px' }} onClick={() => handleRsvp(selectedEvent.event_id)}>
                   {selectedEvent.rsvps?.includes(user.user_id) ? '✅ You Are Attending (Tap to Cancel)' : '🎟️ Yes, I Am Attending (RSVP)'}
                 </button>
               ) : (
@@ -495,7 +531,7 @@ export default function StudentPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* PAGE: NOTICE BOARD */}
+        {/* NOTICE BOARD: WRITTEN DESCRIPTION FIRST, THEN DRIVE/IMAGE LINK BELOW */}
         {page === 'notices' && (
           <div>
             <div className="ptm-drill-header">
@@ -527,23 +563,32 @@ export default function StudentPortal({ user, apiUrl }) {
           <div>
             <div className="ptm-drill-header">
               <button className="ptm-back-btn" onClick={() => setPage('notices')}>←</button>
-              <span className="ptm-tag-pill" style={{ width: 'fit-content' }}>{selectedNotice.club_id}</span>
+              <span className="ptm-tag-pill">{selectedNotice.club_id} • {selectedNotice.created_at}</span>
               <h1 className="ptm-page-title">{selectedNotice.title}</h1>
             </div>
             <div className="ptm-card">
-              {selectedNotice.image_url && <img src={selectedNotice.image_url} alt="Notice" style={{ width: '100%', borderRadius: '14px', marginBottom: '12px' }} />}
-              <p>{selectedNotice.message}</p>
-              <div className="ptm-list-sub">🎯 Target: {selectedNotice.target_year} • {selectedNotice.target_branch}</div>
-              {selectedNotice.registration_link && (
-                <a href={selectedNotice.registration_link} target="_blank" rel="noreferrer" className="ptm-btn-primary" style={{ display: 'block', textAlign: 'center', textDecoration: 'none', marginTop: '14px' }}>
-                  🔗 Open Official Form / Link
-                </a>
-              )}
+              <div className="ptm-section-title">Important Notice Details</div>
+              <p style={{ whiteSpace: 'pre-line', color: '#1F2937', marginBottom: '14px' }}>{selectedNotice.message}</p>
+              <div className="ptm-list-sub" style={{ marginBottom: '16px' }}>
+                🎯 <strong>Target Audience:</strong> {selectedNotice.target_year} • {selectedNotice.target_branch}
+              </div>
+
+              <div className="ptm-form-stack">
+                {selectedNotice.image_url && (
+                  <a href={selectedNotice.image_url} target="_blank" rel="noreferrer" className="ptm-btn-secondary" style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}>
+                    🖼️ View Attached Poster / Google Drive Image ↗
+                  </a>
+                )}
+                {selectedNotice.registration_link && (
+                  <a href={selectedNotice.registration_link} target="_blank" rel="noreferrer" className="ptm-btn-primary" style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}>
+                    🔗 Open Official Form / Registration Link ↗
+                  </a>
+                )}
+              </div>
             </div>
           </div>
         )}
 
-        {/* PAGE: CALENDAR */}
         {page === 'calendar' && (
           <div>
             <div className="ptm-drill-header">
@@ -585,7 +630,6 @@ export default function StudentPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* PAGE: PROFILE */}
         {page === 'profile' && (
           <div>
             <div className="ptm-drill-header">
