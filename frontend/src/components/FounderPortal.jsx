@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
-export default function FounderPortal({ user, apiUrl }) {
+export default function FounderPortal({ apiUrl, onLogout }) {
   const [ads, setAds] = useState([]);
   const [msg, setMsg] = useState(null);
   const [form, setForm] = useState({
@@ -57,11 +57,26 @@ export default function FounderPortal({ user, apiUrl }) {
   };
 
   return (
-    <div className="ptm-page-wrap">
+    <div
+      className="ptm-founder-screen"
+      style={{
+        width: '100%',
+        minHeight: 'calc(100vh - 60px)',
+        padding: '16px 0',
+        color: '#111827',
+        backgroundColor: '#F5F7FA'
+      }}
+    >
+      <div className="ptm-page-wrap">
       {msg && <div className="ptm-toast" onClick={() => setMsg(null)}>{msg}</div>}
       
       <div className="ptm-drill-header">
-        <span className="ptm-tag-pill">FOUNDER & MASTER ADMIN PORTAL</span>
+        <div className="ptm-row-between">
+          <span className="ptm-tag-pill">FOUNDER & MASTER ADMIN PORTAL</span>
+          <button type="button" className="ptm-btn-danger" style={{ width: 'auto', padding: '8px 14px' }} onClick={onLogout}>
+            Sign Out
+          </button>
+        </div>
         <h1 className="ptm-page-title">Campus Ad & Sponsor Studio</h1>
         <p className="ptm-page-sub">Publish 15-day promotional banners (Paytm/Jio IPO style) directly to all Student & Warden home screens.</p>
       </div>
@@ -141,6 +156,7 @@ export default function FounderPortal({ user, apiUrl }) {
             ))}
           </div>
         )}
+      </div>
       </div>
     </div>
   );

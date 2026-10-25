@@ -226,6 +226,7 @@ export default function App() {
 
   if (!authReady) return null;
 
+  const isFounder = user?.role === 'Founder' || user?.user_id === 'FOUNDER';
   const initials = user?.full_name
     ? user.full_name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
     : 'SV';
@@ -352,15 +353,17 @@ export default function App() {
                 <button className="ptm-install-chip" onClick={handleInstallClick}>
                   📲 <span className="ptm-hide-xs">Install</span>
                 </button>
-                <button className="ptm-logout-btn" onClick={handleLogout}>
-                  Sign Out
-                </button>
+                {!isFounder && (
+                  <button className="ptm-logout-btn" onClick={handleLogout}>
+                    Sign Out
+                  </button>
+                )}
               </div>
             </div>
           </header>
 
           <main className="ptm-main-container">
-            {user.role === 'Founder' && <FounderAdPortal apiUrl={API_URL} />}
+            {isFounder && <FounderPortal apiUrl={API_URL} onLogout={handleLogout} />}
             {user.role === 'Dean' && <DeanPortal user={user} apiUrl={API_URL} />}
             {user.role === 'Student' && <StudentPortal user={user} apiUrl={API_URL} />}
             {user.role === 'Warden' && <WardenPortal user={user} apiUrl={API_URL} />}
