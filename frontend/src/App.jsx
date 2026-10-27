@@ -1,14 +1,36 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import DeanPortal from './components/DeanPortal';
 import WardenPortal from './components/WardenPortal';
 import ClubPortal from './components/ClubPortal';
 import StudentPortal from './components/StudentPortal';
 import StaffPortal from './components/StaffPortal';
 import FounderPortal from './components/FounderPortal';
+import { apiFetch } from './api';
 
 window.GLOBAL_SILICON_VALLEY_CSS = '';
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://hms-enterprise-mqvx.onrender.com';
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '312566505039-bvh0tfh4gao8bi6jqs65fkgni7pbn5bn.apps.googleusercontent.com';
+
+function ProfileRow({ label, value }) {
+  return (
+    <div className="ptm-list-row">
+      <div className="ptm-list-main">
+        <div className="ptm-list-title">{label}</div>
+        <div className="ptm-list-sub">{value || '—'}</div>
+      </div>
+    </div>
+  );
+}
+
+function profileDraftFromUser(user) {
+  return {
+    hostel_block: user.hostel_block || '',
+    wing: user.wing || '',
+    room: user.room || '',
+    phone: user.phone || ''
+  };
+}
 
 // Built-in Founder Ad Manager Component (Login ID: FOUNDER | Pass: ishant123)
 function FounderAdPortal({ apiUrl }) {
@@ -28,7 +50,7 @@ function FounderAdPortal({ apiUrl }) {
 
   const loadAds = async () => {
     try {
-      const res = await fetch(`${apiUrl}/api/ads`);
+      const res = await apiFetch(`${apiUrl}/api/ads`);
       if (res.ok) setAds(await res.json());
     } catch {}
   };
@@ -37,7 +59,7 @@ function FounderAdPortal({ apiUrl }) {
 
   const handleCreate = async (e) => {
     e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/ads/create`, {
+    const res = await apiFetch(`${apiUrl}/api/ads/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(form)
@@ -51,7 +73,7 @@ function FounderAdPortal({ apiUrl }) {
   };
 
   const handleDelete = async (id) => {
-    await fetch(`${apiUrl}/api/ads/delete?ad_id=${id}`, { method: 'POST' });
+    await apiFetch(`${apiUrl}/api/ads/delete?ad_id=${id}`, { method: 'POST' });
     loadAds();
   };
 
@@ -141,30 +163,127 @@ function FounderAdPortal({ apiUrl }) {
 export default function App() {
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
-  const [userIdInput, setUserIdInput] = useState('');
-  const [passwordInput, setPasswordInput] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [serverProgress, setServerProgress] = useState(0);
+  const [hostels, setHostels] = useState([]);
+  const [profileDraft, setProfileDraft] = useState({ hostel_block: '', wing: '', room: '', phone: '' });
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileError, setProfileError] = useState('');
+  const [showProfile, setShowProfile] = useState(false);
 
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
 
-  useEffect(() => {
+  const handleGoogleCredential = useCallback(async (credential) => {
+    setLoginError(null);
+    setLoading(true);
     try {
-      const saved = localStorage.getItem('hms_user');
-      if (saved) setUser(JSON.parse(saved));
-    } catch {}
-    setAuthReady(true);
+      const res = await fetch(`${API_URL}/api/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.detail || 'Google sign-in failed.');
+      }
+      localStorage.setItem('hms_google_credential', credential);
+      localStorage.setItem('hms_user', JSON.stringify(data.user));
+      setProfileDraft(profileDraftFromUser(data.user));
+      setUser(data.user);
+    } catch (error) {
+      setLoginError(error.message || 'Could not verify your SVNIT Google account.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
+  useEffect(() => {
+    const restoreSession = async () => {
+      const credential = localStorage.getItem('hms_google_credential');
+      if (credential) {
+        try {
+          const res = await apiFetch(`${API_URL}/api/auth/me`);
+          if (!res.ok) throw new Error('Google session expired.');
+          const data = await res.json();
+          localStorage.setItem('hms_user', JSON.stringify(data.user));
+          setProfileDraft(profileDraftFromUser(data.user));
+          setUser(data.user);
+        } catch {
+          localStorage.removeItem('hms_google_credential');
+          localStorage.removeItem('hms_user');
+        }
+      } else {
+        localStorage.removeItem('hms_user');
+      }
+      setAuthReady(true);
+    };
+    restoreSession();
     const handleBeforeInstallPrompt = (e) => {
       e.preventDefault();
       setDeferredPrompt(e);
     };
+    const handleGoogleScriptError = () => {
+      setLoginError('Google Sign-In could not load. Check your connection and refresh the page.');
+    };
+    const handleAuthExpired = () => {
+      setUser(null);
+      setShowProfile(false);
+      setLoginError('Your Google session expired. Please sign in again.');
+    };
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('google-identity-error', handleGoogleScriptError);
+    window.addEventListener('hms-auth-expired', handleAuthExpired);
+    if (window.googleIdentityLoadFailed) handleGoogleScriptError();
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('google-identity-error', handleGoogleScriptError);
+      window.removeEventListener('hms-auth-expired', handleAuthExpired);
+    };
   }, []);
+
+  useEffect(() => {
+    if (!authReady || user || loading) return undefined;
+    const renderGoogleButton = () => {
+      if (!window.google?.accounts?.id) return false;
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: ({ credential }) => handleGoogleCredential(credential)
+      });
+      const container = document.getElementById('google-signin-button');
+      if (container) {
+        container.replaceChildren();
+        window.google.accounts.id.renderButton(container, {
+          theme: 'outline',
+          size: 'large',
+          shape: 'pill',
+          text: 'signin_with',
+          width: 320
+        });
+      }
+      return true;
+    };
+    const script = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
+    if (!renderGoogleButton()) {
+      script?.addEventListener('load', renderGoogleButton, { once: true });
+      return () => script?.removeEventListener('load', renderGoogleButton);
+    }
+    return undefined;
+  }, [authReady, user, loading, handleGoogleCredential]);
+
+  useEffect(() => {
+    if (user?.role !== 'Student') return;
+    const incomplete = !user.hostel_block || !user.wing || !user.room || !user.phone;
+    if (!incomplete) return;
+    apiFetch(`${API_URL}/api/hostels`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error('Could not load the SVNIT hostel list.');
+        setHostels(await res.json());
+        setProfileError('');
+      })
+      .catch((error) => setProfileError(error.message));
+  }, [user]);
 
   useEffect(() => {
     let t;
@@ -185,48 +304,41 @@ export default function App() {
     }
   };
 
-  const handleLogin = async (e) => {
+  const handleProfileSave = async (e) => {
     e.preventDefault();
-    setLoginError(null);
-    setLoading(true);
+    setProfileSaving(true);
+    setProfileError('');
     try {
-      const res = await fetch(`${API_URL}/api/auth/login`, {
-        method: 'POST',
+      const res = await apiFetch(`${API_URL}/api/profile`, {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: userIdInput.trim(), password: passwordInput.trim() })
+        body: JSON.stringify(profileDraft)
       });
       const data = await res.json();
-      if (res.ok && data.success) {
-        setServerProgress(100);
-        setTimeout(() => {
-          setUser(data.user);
-          try {
-            localStorage.setItem('hms_user', JSON.stringify(data.user));
-          } catch {}
-          setLoading(false);
-        }, 180);
-      } else {
-        setLoading(false);
-        setLoginError(data.detail || 'Invalid Roll No / ID or Password');
+      if (!res.ok || !data.success) {
+        throw new Error(data.detail || 'Could not save your profile.');
       }
-    } catch {
-      setLoading(false);
-      setLoginError('Connecting to SVNIT Server... Please try again in a few seconds.');
+      localStorage.setItem('hms_user', JSON.stringify(data.user));
+      setProfileDraft(profileDraftFromUser(data.user));
+      setUser(data.user);
+    } catch (error) {
+      setProfileError(error.message || 'Could not save your profile.');
+    } finally {
+      setProfileSaving(false);
     }
   };
 
   const handleLogout = () => {
-    try {
-      localStorage.removeItem('hms_user');
-    } catch {}
+    localStorage.removeItem('hms_user');
+    localStorage.removeItem('hms_google_credential');
     setUser(null);
-    setUserIdInput('');
-    setPasswordInput('');
+    setShowProfile(false);
   };
 
   if (!authReady) return null;
 
   const isFounder = user?.role === 'Founder' || user?.user_id === 'FOUNDER';
+  const studentProfileIncomplete = user?.role === 'Student' && (!user.hostel_block || !user.wing || !user.room || !user.phone);
   const initials = user?.full_name
     ? user.full_name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
     : 'SV';
@@ -276,7 +388,7 @@ export default function App() {
               </button>
             </div>
             <h1 className="ptm-login-heading">Campus & Hostel Portal</h1>
-            <p className="ptm-login-sub">Sign in with your Roll Number & Date of Birth (DDMMYYYY) or Official ID</p>
+            <p className="ptm-login-sub">Sign in with your official SVNIT Google account (@svnit.ac.in)</p>
 
             {loginError && <div className="ptm-alert-error">{loginError}</div>}
 
@@ -291,46 +403,12 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              <form onSubmit={handleLogin} className="ptm-form-stack">
-                <div>
-                  <label className="ptm-label">Roll Number / Official ID</label>
-                  <input
-                    type="text"
-                    className="ptm-input"
-                    placeholder="e.g. U26CE011, DEAN, CW_GAJJAR"
-                    value={userIdInput}
-                    onChange={(e) => setUserIdInput(e.target.value)}
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="ptm-label">Password or DOB (DDMMYYYY)</label>
-                  <div style={{ position: 'relative' }}>
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      className="ptm-input"
-                      style={{ paddingRight: '44px' }}
-                      placeholder="Enter DOB (e.g. 10072007) or Password"
-                      value={passwordInput}
-                      onChange={(e) => setPasswordInput(e.target.value)}
-                      required
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      style={{
-                        position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)',
-                        background: 'none', border: 'none', fontSize: '16px', cursor: 'pointer'
-                      }}
-                    >
-                      {showPassword ? '🙈' : '👁️'}
-                    </button>
-                  </div>
-                </div>
-                <button type="submit" className="ptm-btn-primary" style={{ marginTop: '6px' }}>
-                  Sign In Securely →
-                </button>
-              </form>
+              <div className="ptm-form-stack">
+                <div id="google-signin-button" style={{ minHeight: '44px', display: 'flex', justifyContent: 'center' }} />
+                <p className="ptm-list-sub" style={{ textAlign: 'center' }}>
+                  Use your institute Google account to continue.
+                </p>
+              </div>
             )}
           </div>
         </div>
@@ -338,7 +416,7 @@ export default function App() {
         <>
           <header className="ptm-header">
             <div className="ptm-header-inner">
-              <div className="ptm-header-left">
+              <button type="button" className="ptm-header-left ptm-profile-trigger" onClick={() => setShowProfile(true)} aria-label="Open profile">
                 <div className="ptm-user-avatar">{initials}</div>
                 <div className="ptm-header-text">
                   <div className="ptm-header-title">
@@ -348,7 +426,7 @@ export default function App() {
                     {user.full_name}
                   </div>
                 </div>
-              </div>
+              </button>
               <div className="ptm-header-actions">
                 <button className="ptm-install-chip" onClick={handleInstallClick}>
                   📲 <span className="ptm-hide-xs">Install</span>
@@ -370,6 +448,71 @@ export default function App() {
             {user.role === 'ClubOrganizer' && <ClubPortal user={user} apiUrl={API_URL} />}
             {user.role === 'Staff' && <StaffPortal user={user} apiUrl={API_URL} />}
           </main>
+          {showProfile && !studentProfileIncomplete && (
+            <div className="ptm-modal-backdrop" onClick={() => setShowProfile(false)}>
+              <section className="ptm-modal-card" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title" onClick={(event) => event.stopPropagation()}>
+                <button type="button" className="ptm-modal-close" onClick={() => setShowProfile(false)} aria-label="Close profile">×</button>
+                <h2 id="profile-modal-title" className="ptm-page-title">Your Profile</h2>
+                <div className="ptm-list">
+                  <ProfileRow label="Name" value={user.full_name} />
+                  <ProfileRow label={user.role === 'Student' ? 'Roll Number' : 'Account ID'} value={user.user_id} />
+                  {user.role === 'Student' ? (
+                    <>
+                      <ProfileRow label="Academic Year" value={user.year || 'Not provided'} />
+                      <ProfileRow label="Branch" value={user.department || 'Not provided'} />
+                      <ProfileRow label="Hostel" value={user.hostel_block || 'Not set'} />
+                      <ProfileRow label="Wing" value={user.wing || 'Not set'} />
+                      <ProfileRow label="Room" value={user.room || 'Not set'} />
+                      <ProfileRow label="Mobile" value={user.phone || 'Not set'} />
+                    </>
+                  ) : (
+                    <>
+                      <ProfileRow label="Role" value={user.role} />
+                      <ProfileRow label="Department" value={user.department || '—'} />
+                      <ProfileRow label="Hostel" value={user.hostel_block || '—'} />
+                    </>
+                  )}
+                  <ProfileRow label="Official Email" value={user.email} />
+                </div>
+              </section>
+            </div>
+          )}
+          {studentProfileIncomplete && (
+            <div className="ptm-modal-backdrop">
+              <section className="ptm-modal-card" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+                <span className="ptm-tag-pill">FIRST-TIME SETUP</span>
+                <h2 id="onboarding-title" className="ptm-page-title">Complete Your Hostel Profile</h2>
+                <p className="ptm-page-sub" style={{ marginBottom: '14px' }}>
+                  Roll number, academic year, and branch are read from your SVNIT email. Enter your current hostel details to enable complaints and registers.
+                </p>
+                {profileError && <div className="ptm-alert-error">{profileError}</div>}
+                {!profileError && hostels.length === 0 && <div className="ptm-list-sub">No hostels are configured yet. Please contact the Dean's office.</div>}
+                <form onSubmit={handleProfileSave} className="ptm-form-stack">
+                  <label className="ptm-label">Hostel
+                    <select className="ptm-input" value={profileDraft.hostel_block} onChange={(event) => setProfileDraft({ ...profileDraft, hostel_block: event.target.value })} required>
+                      <option value="">Select hostel</option>
+                      {hostels.map((hostel) => <option key={hostel} value={hostel}>{hostel}</option>)}
+                    </select>
+                  </label>
+                  <label className="ptm-label">Wing
+                    <select className="ptm-input" value={profileDraft.wing} onChange={(event) => setProfileDraft({ ...profileDraft, wing: event.target.value })} required>
+                      <option value="">Select wing</option>
+                      {'ABCDEFGH'.split('').map((letter) => <option key={letter} value={`Wing ${letter}`}>Wing {letter}</option>)}
+                    </select>
+                  </label>
+                  <label className="ptm-label">Room Number
+                    <input className="ptm-input" value={profileDraft.room} onChange={(event) => setProfileDraft({ ...profileDraft, room: event.target.value })} maxLength={20} required />
+                  </label>
+                  <label className="ptm-label">Mobile Number
+                    <input className="ptm-input" type="tel" value={profileDraft.phone} onChange={(event) => setProfileDraft({ ...profileDraft, phone: event.target.value })} autoComplete="tel" required />
+                  </label>
+                  <button type="submit" className="ptm-btn-primary" disabled={profileSaving || hostels.length === 0}>
+                    {profileSaving ? 'Saving…' : 'Save Hostel Profile'}
+                  </button>
+                </form>
+              </section>
+            </div>
+          )}
         </>
       )}
     </div>
@@ -407,6 +550,45 @@ const PAYTM_APPLE_CSS = `
     display: flex;
     flex-direction: column;
     background: #F5F7FA;
+  }
+  .ptm-profile-trigger {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .ptm-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 300;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(15, 23, 42, 0.62);
+  }
+  .ptm-modal-card {
+    position: relative;
+    width: min(100%, 520px);
+    max-height: min(90vh, 760px);
+    overflow-y: auto;
+    padding: 24px;
+    border-radius: 20px;
+    background: #FFFFFF;
+    color: #111827;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.25);
+  }
+  .ptm-modal-close {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    border: 0;
+    background: transparent;
+    color: #64748B;
+    font-size: 28px;
+    cursor: pointer;
   }
 
   /* FIXED MOBILE-SAFE HEADER (Never clips or overflows!) */

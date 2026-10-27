@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { apiFetch } from '../api';
 
 export default function StudentPortal({ user, apiUrl }) {
   const [page, setPage] = useState('home');
@@ -22,8 +23,6 @@ export default function StudentPortal({ user, apiUrl }) {
   const [description, setDescription] = useState('');
   const [feedbackRating, setFeedbackRating] = useState(5);
   const [feedbackReview, setFeedbackReview] = useState('');
-  const [oldPass, setOldPass] = useState('');
-  const [newPass, setNewPass] = useState('');
 
   const [calYear, setCalYear] = useState(2026);
   const [calMonth, setCalMonth] = useState(9);
@@ -32,12 +31,12 @@ export default function StudentPortal({ user, apiUrl }) {
   const loadStudentData = useCallback(async () => {
     try {
       const [cRes, dRes, eRes, clRes, nRes, adRes] = await Promise.all([
-        fetch(`${apiUrl}/api/complaints?role=Student&user_id=${user.user_id}`),
-        fetch(`${apiUrl}/api/departments?hostel_block=${encodeURIComponent(user.hostel_block || 'All')}`),
-        fetch(`${apiUrl}/api/unicore/events`),
-        fetch(`${apiUrl}/api/unicore/clubs`),
-        fetch(`${apiUrl}/api/notices?role=Student`),
-        fetch(`${apiUrl}/api/ads`)
+        apiFetch(`${apiUrl}/api/complaints?role=Student&user_id=${user.user_id}`),
+        apiFetch(`${apiUrl}/api/departments?hostel_block=${encodeURIComponent(user.hostel_block || 'All')}`),
+        apiFetch(`${apiUrl}/api/unicore/events`),
+        apiFetch(`${apiUrl}/api/unicore/clubs`),
+        apiFetch(`${apiUrl}/api/notices?role=Student`),
+        apiFetch(`${apiUrl}/api/ads`)
       ]);
       if (cRes.ok) setComplaints(await cRes.json());
       if (dRes.ok) {
@@ -66,7 +65,7 @@ export default function StudentPortal({ user, apiUrl }) {
 
   const handleCreateComplaint = async (e) => {
     e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/complaints`, {
+    const res = await apiFetch(`${apiUrl}/api/complaints`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ student_id: user.user_id, category, summary, description })
@@ -82,7 +81,7 @@ export default function StudentPortal({ user, apiUrl }) {
   };
 
   const handleVerify = async (ticketId, satisfied) => {
-    const res = await fetch(`${apiUrl}/api/complaints/student-verify`, {
+    const res = await apiFetch(`${apiUrl}/api/complaints/student-verify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ticket_id: ticketId, satisfied })
@@ -95,7 +94,7 @@ export default function StudentPortal({ user, apiUrl }) {
   };
 
   const handleRsvp = async (eventId) => {
-    const res = await fetch(`${apiUrl}/api/unicore/events/rsvp`, {
+    const res = await apiFetch(`${apiUrl}/api/unicore/events/rsvp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ event_id: eventId, student_id: user.user_id })
@@ -110,7 +109,7 @@ export default function StudentPortal({ user, apiUrl }) {
 
   const handleFeedback = async (e, eventId) => {
     e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/unicore/events/feedback`, {
+    const res = await apiFetch(`${apiUrl}/api/unicore/events/feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ event_id: eventId, student_id: user.user_id, rating: feedbackRating, review: feedbackReview })
@@ -121,23 +120,6 @@ export default function StudentPortal({ user, apiUrl }) {
       setFeedbackReview('');
       setSelectedEvent(data.event);
       loadStudentData();
-    }
-  };
-
-  const handlePassChange = async (e) => {
-    e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/student/change-password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ student_id: user.user_id, old_password: oldPass, new_password: newPass })
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setMsg('✅ Custom password saved!');
-      setOldPass('');
-      setNewPass('');
-    } else {
-      setMsg(`❌ ${data.detail || 'Error'}`);
     }
   };
 
@@ -639,17 +621,10 @@ export default function StudentPortal({ user, apiUrl }) {
             <div className="ptm-card">
               <div className="ptm-list">
                 <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Full Name & Roll No</div><div className="ptm-list-sub">{user.full_name} ({user.user_id})</div></div></div>
-                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Hostel & Room Number</div><div className="ptm-list-sub">{user.hostel_block}, Room {user.room}</div></div></div>
+                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Hostel, Wing & Room Number</div><div className="ptm-list-sub">{user.hostel_block}, {user.wing}, Room {user.room}</div></div></div>
                 <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Department & Year</div><div className="ptm-list-sub">{user.department} • {user.year || 'Resident'}</div></div></div>
+                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Mobile</div><div className="ptm-list-sub">{user.phone || 'Not provided'}</div></div></div>
               </div>
-            </div>
-            <div className="ptm-card">
-              <div className="ptm-section-title">Change Password</div>
-              <form onSubmit={handlePassChange} className="ptm-form-stack">
-                <input type="password" className="ptm-input" placeholder="Current Password or DOB (DDMMYYYY)" value={oldPass} onChange={(e) => setOldPass(e.target.value)} required />
-                <input type="password" className="ptm-input" placeholder="New Custom Password" value={newPass} onChange={(e) => setNewPass(e.target.value)} required />
-                <button type="submit" className="ptm-btn-primary">Update Password</button>
-              </form>
             </div>
           </div>
         )}

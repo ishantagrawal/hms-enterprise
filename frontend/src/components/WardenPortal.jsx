@@ -1,4 +1,6 @@
 ﻿import React, { useState, useEffect, useCallback } from 'react';
+import { apiFetch } from '../api';
+import { downloadComplaintRegister } from '../registerPdf';
 
 export default function WardenPortal({ user, apiUrl }) {
   const [page, setPage] = useState('home');
@@ -8,30 +10,29 @@ export default function WardenPortal({ user, apiUrl }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [msg, setMsg] = useState(null);
+  const [wingFilter, setWingFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
 
   const hostelName = user.hostel_block && user.hostel_block !== 'All' ? user.hostel_block : 'Gajjar Bhawan';
 
-  // 6-Field Student Onboarding (Roll No, Name, Room No, Department, Year, DOB)
+  // Student import data is limited to the fields needed for hostel operations.
   const [studentForm, setStudentForm] = useState({
     user_id: '',
     full_name: '',
     room: '',
     department: 'Civil Engineering',
-    year: '1st Year',
-    dob: ''
+    year: '1st Year'
   });
 
   const [bulkCsvText, setBulkCsvText] = useState('');
-  const [deptForm, setDeptForm] = useState({ dept_id: '', name: '', password: '123', icon: '🧹' });
+  const [deptForm, setDeptForm] = useState({ dept_id: '', name: '', email: '', icon: '🧹' });
 
   const loadWardenData = useCallback(async () => {
     try {
-      const [cRes, dRes, sRes] = await Promise.all([
-        fetch(`${apiUrl}/api/complaints?role=Warden&hostel_block=${encodeURIComponent(hostelName)}`),
-        fetch(`${apiUrl}/api/departments?hostel_block=${encodeURIComponent(hostelName)}`),
-        fetch(`${apiUrl}/api/warden/students?hostel_block=${encodeURIComponent(hostelName)}`)
+      const [dRes, sRes] = await Promise.all([
+        apiFetch(`${apiUrl}/api/departments?hostel_block=${encodeURIComponent(hostelName)}`),
+        apiFetch(`${apiUrl}/api/warden/students?hostel_block=${encodeURIComponent(hostelName)}`)
       ]);
-      if (cRes.ok) setComplaints(await cRes.json());
       if (dRes.ok) setDepartments(await dRes.json());
       if (sRes.ok) setStudents(await sRes.json());
     } catch (e) {
@@ -39,11 +40,27 @@ export default function WardenPortal({ user, apiUrl }) {
     }
   }, [apiUrl, hostelName]);
 
+  const loadWardenComplaints = useCallback(async () => {
+    try {
+      const query = new URLSearchParams({
+        role: 'Warden',
+        hostel_block: hostelName,
+        wing: wingFilter,
+        category: categoryFilter
+      });
+      const response = await apiFetch(`${apiUrl}/api/complaints?${query.toString()}`);
+      if (response.ok) setComplaints(await response.json());
+    } catch (e) {
+      console.error(e);
+    }
+  }, [apiUrl, hostelName, wingFilter, categoryFilter]);
+
   useEffect(() => { loadWardenData(); }, [loadWardenData]);
+  useEffect(() => { loadWardenComplaints(); }, [loadWardenComplaints]);
 
   const handleAddStudent = async (e) => {
     e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/warden/add-student`, {
+    const res = await apiFetch(`${apiUrl}/api/warden/add-student`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...studentForm, hostel_block: hostelName })
@@ -51,7 +68,7 @@ export default function WardenPortal({ user, apiUrl }) {
     const data = await res.json();
     if (res.ok && data.success) {
       setMsg(`✅ ${data.message}`);
-      setStudentForm({ user_id: '', full_name: '', room: '', department: studentForm.department, year: studentForm.year, dob: '' });
+      setStudentForm({ user_id: '', full_name: '', room: '', department: studentForm.department, year: studentForm.year });
       loadWardenData();
     } else {
       setMsg(`❌ ${data.detail || 'Error'}`);
@@ -64,24 +81,23 @@ export default function WardenPortal({ user, apiUrl }) {
     const parsed = [];
     for (let line of lines) {
       const p = line.split(',').map((x) => x.trim());
-      // 6 Fields: RollNo, Name, RoomNo, Department, Year, DOB(DDMMYYYY)
-      if (p.length >= 6) {
+      // Five fields: roll number, name, room, department, and academic year.
+      if (p.length >= 5) {
         parsed.push({
           user_id: p[0],
           full_name: p[1],
           room: p[2],
           department: p[3],
           year: p[4],
-          dob: p[5],
           hostel_block: hostelName
         });
       }
     }
     if (parsed.length === 0) {
-      setMsg('❌ Format required: RollNo, Name, RoomNo, Department, Year, DOB(DDMMYYYY)');
+      setMsg('❌ Format required: RollNo, Name, RoomNo, Department, Year');
       return;
     }
-    const res = await fetch(`${apiUrl}/api/warden/upload-students`, {
+    const res = await apiFetch(`${apiUrl}/api/warden/upload-students`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(parsed)
@@ -92,22 +108,12 @@ export default function WardenPortal({ user, apiUrl }) {
       setBulkCsvText('');
       loadWardenData();
       setPage('directory');
-    }
-  };
-
-  const handleResetDob = async (rollNo) => {
-    const res = await fetch(`${apiUrl}/api/warden/reset-student-password?warden_id=${user.user_id}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target_user_id: rollNo, new_password: 'DOB' })
-    });
-    const data = await res.json();
-    if (res.ok && data.success) setMsg(`✅ ${data.message}`);
+    } else setMsg(`❌ ${data.detail || 'Could not upload the student list.'}`);
   };
 
   const handleCreateHostelDept = async (e) => {
     e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/departments/create`, {
+    const res = await apiFetch(`${apiUrl}/api/departments/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...deptForm, dept_type: 'Hostel', hostel_block: hostelName })
@@ -115,8 +121,16 @@ export default function WardenPortal({ user, apiUrl }) {
     const data = await res.json();
     if (res.ok && data.success) {
       setMsg(`✅ ${data.message}`);
-      setDeptForm({ dept_id: '', name: '', password: '123', icon: '🧹' });
+      setDeptForm({ dept_id: '', name: '', email: '', icon: '🧹' });
       loadWardenData();
+    } else setMsg(`❌ ${data.detail || 'Could not save department.'}`);
+  };
+
+  const handleDownloadRegister = async () => {
+    try {
+      await downloadComplaintRegister({ title: 'Hostel Complaint Register', hostel: hostelName, complaints });
+    } catch (error) {
+      setMsg(`❌ ${error.message || 'Could not generate the complaint register PDF.'}`);
     }
   };
 
@@ -138,6 +152,7 @@ export default function WardenPortal({ user, apiUrl }) {
         <button className={`ptm-side-btn ${page === 'directory' ? 'active' : ''}`} onClick={() => setPage('directory')}>🎓 Student Directory ({students.length})</button>
         <button className={`ptm-side-btn ${page === 'departments' ? 'active' : ''}`} onClick={() => setPage('departments')}>🛠️ Hostel Maintenance Wings</button>
         <button className={`ptm-side-btn ${page === 'complaints' ? 'active' : ''}`} onClick={() => setPage('complaints')}>💬 Hostel Complaints ({openComplaints.length})</button>
+        <button className={`ptm-side-btn ${page === 'register' ? 'active' : ''}`} onClick={() => setPage('register')}>📋 Complaint Register</button>
       </aside>
 
       <div className="ptm-page-wrap">
@@ -167,7 +182,7 @@ export default function WardenPortal({ user, apiUrl }) {
                 </button>
                 <button className="ptm-icon-tile" onClick={() => setPage('directory')}>
                   <div className="ptm-icon-circle">🔍</div>
-                  <span className="ptm-icon-label">Search & Reset DOB Pass</span>
+                  <span className="ptm-icon-label">Student Directory</span>
                 </button>
                 <button className="ptm-icon-tile" onClick={() => setPage('departments')}>
                   <div className="ptm-icon-circle">🛠️</div>
@@ -188,13 +203,13 @@ export default function WardenPortal({ user, apiUrl }) {
             <div className="ptm-drill-header">
               <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
               <h1 className="ptm-page-title">Onboard {hostelName} Students</h1>
-              <p className="ptm-page-sub">Requires 6 fields: Roll Number, Name, Room Number, Department, Year, and DOB (DDMMYYYY)</p>
+              <p className="ptm-page-sub">Add residents using their SVNIT roll number and hostel details. Sign-in is handled by Google.</p>
             </div>
 
             <div className="ptm-card">
               <div className="ptm-section-title">1. Bulk Paste Student List (6 Columns)</div>
               <p className="ptm-list-sub" style={{ marginBottom: '12px' }}>
-                Format per line: <strong>RollNo, Name, RoomNo, Department, Year, DOB(DDMMYYYY)</strong>
+                Format per line: <strong>RollNo, Name, RoomNo, Department, Year</strong>
               </p>
               <form onSubmit={handleBulkUpload} className="ptm-form-stack">
                 <textarea
@@ -222,15 +237,9 @@ export default function WardenPortal({ user, apiUrl }) {
                     <input type="text" className="ptm-input" placeholder="e.g. Ishant Agrawal" value={studentForm.full_name} onChange={(e) => setStudentForm({ ...studentForm, full_name: e.target.value })} required />
                   </div>
                 </div>
-                <div className="ptm-grid-2">
-                  <div>
-                    <label className="ptm-label">Room Number</label>
-                    <input type="text" className="ptm-input" placeholder="e.g. B-204" value={studentForm.room} onChange={(e) => setStudentForm({ ...studentForm, room: e.target.value })} required />
-                  </div>
-                  <div>
-                    <label className="ptm-label">Date of Birth (DDMMYYYY = Password)</label>
-                    <input type="text" className="ptm-input" placeholder="e.g. 10072007" value={studentForm.dob} onChange={(e) => setStudentForm({ ...studentForm, dob: e.target.value })} required />
-                  </div>
+                <div>
+                  <label className="ptm-label">Room Number</label>
+                  <input type="text" className="ptm-input" placeholder="e.g. B-204" value={studentForm.room} onChange={(e) => setStudentForm({ ...studentForm, room: e.target.value })} required />
                 </div>
                 <div className="ptm-grid-2">
                   <div>
@@ -253,7 +262,7 @@ export default function WardenPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* STUDENT DIRECTORY & 1-CLICK DOB RESET */}
+        {/* STUDENT DIRECTORY */}
         {page === 'directory' && (
           <div>
             <div className="ptm-drill-header">
@@ -277,11 +286,7 @@ export default function WardenPortal({ user, apiUrl }) {
                       <div className="ptm-list-main">
                         <div className="ptm-list-title">{st.full_name} ({st.user_id})</div>
                         <div className="ptm-list-sub">🚪 Room {st.room} • {st.year} • {st.department}</div>
-                        <span className="ptm-tag-pill">DOB: {st.dob}</span>
                       </div>
-                      <button className="ptm-btn-secondary" onClick={() => handleResetDob(st.user_id)}>
-                        Reset to DOB
-                      </button>
                     </div>
                   ))}
                 </div>
@@ -302,8 +307,8 @@ export default function WardenPortal({ user, apiUrl }) {
               <form onSubmit={handleCreateHostelDept} className="ptm-form-stack">
                 <div className="ptm-grid-2">
                   <div>
-                    <label className="ptm-label">Department Login ID</label>
-                    <input type="text" className="ptm-input" placeholder="e.g. GAJJAR_PLUMB" value={deptForm.dept_id} onChange={(e) => setDeptForm({ ...deptForm, dept_id: e.target.value })} required />
+                    <label className="ptm-label">Department ID (auto-prefixed for this hostel)</label>
+                    <input type="text" className="ptm-input" placeholder="e.g. PLUMBING" value={deptForm.dept_id} onChange={(e) => setDeptForm({ ...deptForm, dept_id: e.target.value })} required />
                   </div>
                   <div>
                     <label className="ptm-label">Department Name</label>
@@ -311,10 +316,10 @@ export default function WardenPortal({ user, apiUrl }) {
                   </div>
                 </div>
                 <div className="ptm-grid-2">
-                  <div><label className="ptm-label">Password</label><input type="text" className="ptm-input" value={deptForm.password} onChange={(e) => setDeptForm({ ...deptForm, password: e.target.value })} required /></div>
+                  <div><label className="ptm-label">Staff official Google email</label><input type="email" className="ptm-input" placeholder="staff@svnit.ac.in" value={deptForm.email} onChange={(e) => setDeptForm({ ...deptForm, email: e.target.value })} required /></div>
                   <div><label className="ptm-label">Icon</label><input type="text" className="ptm-input" value={deptForm.icon} onChange={(e) => setDeptForm({ ...deptForm, icon: e.target.value })} required /></div>
                 </div>
-                <button type="submit" className="ptm-btn-primary">+ Create Department Login</button>
+                <button type="submit" className="ptm-btn-primary">+ Create Department and Google Access</button>
               </form>
             </div>
             <div className="ptm-card">
@@ -325,7 +330,7 @@ export default function WardenPortal({ user, apiUrl }) {
                     <div className="ptm-avatar-pastel">{d.icon}</div>
                     <div className="ptm-list-main">
                       <div className="ptm-list-title">{d.title}</div>
-                      <div className="ptm-list-sub">Login ID: <strong>{d.id}</strong></div>
+                      <div className="ptm-list-sub">Department ID: <strong>{d.id}</strong> • Google account: {d.login_email || 'Not configured'}</div>
                     </div>
                   </div>
                 ))}
@@ -363,6 +368,53 @@ export default function WardenPortal({ user, apiUrl }) {
           </div>
         )}
 
+        {page === 'register' && (
+          <div>
+            <div className="ptm-drill-header">
+              <span className="ptm-tag-pill">{hostelName} • PHYSICAL REGISTER</span>
+              <h1 className="ptm-page-title">Hostel Complaint Register</h1>
+              <p className="ptm-page-sub">Filter maintenance requests by wing and category, then export a print-ready landscape register.</p>
+            </div>
+            <div className="ptm-card">
+              <div className="ptm-grid-2">
+                <label className="ptm-label">Wing
+                  <select className="ptm-input" value={wingFilter} onChange={(event) => setWingFilter(event.target.value)}>
+                    <option value="">All Wings</option>
+                    {'ABCDEFGH'.split('').map((letter) => <option key={letter} value={`Wing ${letter}`}>Wing {letter}</option>)}
+                  </select>
+                </label>
+                <label className="ptm-label">Category
+                  <select className="ptm-input" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
+                    <option value="">All Categories</option>
+                    {departments.map((department) => <option key={department.id} value={department.id}>{department.title}</option>)}
+                  </select>
+                </label>
+              </div>
+              <button type="button" className="ptm-btn-primary" style={{ marginTop: '12px' }} onClick={handleDownloadRegister}>
+                Download Register PDF ({complaints.length})
+              </button>
+            </div>
+            <div className="ptm-card" style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '760px', textAlign: 'left' }}>
+                <thead><tr>{['Ticket / Date', 'Wing / Room', 'Student', 'Category', 'Complaint / Action', 'Status'].map((heading) => <th key={heading} style={{ padding: '9px', borderBottom: '2px solid #CBD5E1' }}>{heading}</th>)}</tr></thead>
+                <tbody>
+                  {complaints.map((complaint) => (
+                    <tr key={complaint.ticket_id}>
+                      <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.ticket_id}<br />{complaint.created_at}</td>
+                      <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.wing || 'Unassigned'}<br />{complaint.room}</td>
+                      <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.student_name}<br />{complaint.student_id}</td>
+                      <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.routed_to}</td>
+                      <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.summary}<br />{complaint.staff_remark || complaint.description}</td>
+                      <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.status}</td>
+                    </tr>
+                  ))}
+                  {complaints.length === 0 && <tr><td colSpan="6" style={{ padding: '20px', textAlign: 'center' }}>No complaints match these filters.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {page === 'ticket_detail' && selectedTicket && (
           <div>
             <div className="ptm-drill-header">
@@ -387,6 +439,7 @@ export default function WardenPortal({ user, apiUrl }) {
         <button className={`ptm-bnav-btn ${page === 'onboard' ? 'active' : ''}`} onClick={() => setPage('onboard')}><span>➕</span><span>Add Student</span></button>
         <button className={`ptm-bnav-btn ${page === 'directory' ? 'active' : ''}`} onClick={() => setPage('directory')}><span>🎓</span><span>Directory</span></button>
         <button className={`ptm-bnav-btn ${page === 'complaints' ? 'active' : ''}`} onClick={() => setPage('complaints')}><span>💬</span><span>Complaints</span></button>
+        <button className={`ptm-bnav-btn ${page === 'register' ? 'active' : ''}`} onClick={() => setPage('register')}><span>📋</span><span>Register</span></button>
       </nav>
     </div>
   );

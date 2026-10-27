@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { apiFetch } from '../api';
 
 const SVNIT_HOSTELS = [
   { code: 'CW_GAJJAR', name: 'Gajjar Bhawan', phone: '0261-2201659' },
@@ -31,11 +32,9 @@ export default function DeanPortal({ apiUrl }) {
   const [previousPage, setPreviousPage] = useState('home');
 
   // Forms
-  const [clubForm, setClubForm] = useState({ club_id: '', name: '', password: '123' });
-  const [deptForm, setDeptForm] = useState({ dept_id: '', name: '', password: '123', icon: '⚡' });
-  const [wardenForm, setWardenForm] = useState({ user_id: 'CW_GAJJAR', hostel_block: 'Gajjar Bhawan', password: '123', phone: '0261-2201659' });
-  const [resetId, setResetId] = useState('');
-  const [resetPass, setResetPass] = useState('');
+  const [clubForm, setClubForm] = useState({ club_id: '', name: '', email: '' });
+  const [deptForm, setDeptForm] = useState({ dept_id: '', name: '', email: '', icon: '⚡' });
+  const [wardenForm, setWardenForm] = useState({ user_id: 'CW_GAJJAR', hostel_block: 'Gajjar Bhawan', email: '', phone: '0261-2201659' });
 
   // Calendar State
   const [calYear, setCalYear] = useState(2026);
@@ -52,12 +51,12 @@ export default function DeanPortal({ apiUrl }) {
   const loadDeanData = useCallback(async () => {
     try {
       const [cRes, eRes, nRes, dRes, compRes, stRes] = await Promise.all([
-        fetch(`${apiUrl}/api/unicore/clubs`),
-        fetch(`${apiUrl}/api/unicore/events`),
-        fetch(`${apiUrl}/api/notices?role=Dean`),
-        fetch(`${apiUrl}/api/departments`),
-        fetch(`${apiUrl}/api/complaints?role=Dean`),
-        fetch(`${apiUrl}/api/warden/students?hostel_block=All`)
+        apiFetch(`${apiUrl}/api/unicore/clubs`),
+        apiFetch(`${apiUrl}/api/unicore/events`),
+        apiFetch(`${apiUrl}/api/notices?role=Dean`),
+        apiFetch(`${apiUrl}/api/departments`),
+        apiFetch(`${apiUrl}/api/complaints?role=Dean`),
+        apiFetch(`${apiUrl}/api/warden/students?hostel_block=All`)
       ]);
       if (cRes.ok) setClubs(await cRes.json());
       if (eRes.ok) setEvents(await eRes.json());
@@ -97,7 +96,7 @@ export default function DeanPortal({ apiUrl }) {
   };
 
   const handleApproveEvent = async (eventId, action) => {
-    const res = await fetch(`${apiUrl}/api/unicore/events/approve?event_id=${eventId}&action=${action}`, { method: 'POST' });
+    const res = await apiFetch(`${apiUrl}/api/unicore/events/approve?event_id=${eventId}&action=${action}`, { method: 'POST' });
     if (res.ok) {
       setMsg(`✅ Event ${eventId} marked as ${action}!`);
       loadDeanData();
@@ -106,7 +105,7 @@ export default function DeanPortal({ apiUrl }) {
   };
 
   const handleApproveNotice = async (noticeId, action) => {
-    const res = await fetch(`${apiUrl}/api/notices/approve?notice_id=${noticeId}&action=${action}`, { method: 'POST' });
+    const res = await apiFetch(`${apiUrl}/api/notices/approve?notice_id=${noticeId}&action=${action}`, { method: 'POST' });
     if (res.ok) {
       setMsg(`✅ Notice marked as ${action}!`);
       loadDeanData();
@@ -116,7 +115,7 @@ export default function DeanPortal({ apiUrl }) {
 
   const handleCreateClub = async (e) => {
     e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/dean/create-club`, {
+    const res = await apiFetch(`${apiUrl}/api/dean/create-club`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(clubForm)
@@ -124,7 +123,7 @@ export default function DeanPortal({ apiUrl }) {
     const data = await res.json();
     if (res.ok && data.success) {
       setMsg(`✅ ${data.message}`);
-      setClubForm({ club_id: '', name: '', password: '123' });
+      setClubForm({ club_id: '', name: '', email: '' });
       loadDeanData();
       setPage('clubs_list');
     } else {
@@ -134,7 +133,7 @@ export default function DeanPortal({ apiUrl }) {
 
   const handleCreateCentralDept = async (e) => {
     e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/departments/create`, {
+    const res = await apiFetch(`${apiUrl}/api/departments/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...deptForm, dept_type: 'Central', hostel_block: 'All' })
@@ -142,36 +141,23 @@ export default function DeanPortal({ apiUrl }) {
     const data = await res.json();
     if (res.ok && data.success) {
       setMsg(`✅ ${data.message}`);
-      setDeptForm({ dept_id: '', name: '', password: '123', icon: '⚡' });
+      setDeptForm({ dept_id: '', name: '', email: '', icon: '⚡' });
       loadDeanData();
-    }
+    } else setMsg(`❌ ${data.detail || 'Could not save department.'}`);
   };
 
   const handleSaveWarden = async (e) => {
     e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/dean/create-warden`, {
+    const res = await apiFetch(`${apiUrl}/api/dean/create-warden`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(wardenForm)
     });
     const data = await res.json();
-    if (res.ok && data.success) setMsg(`✅ ${data.message}`);
-  };
-
-  const handleResetPassword = async (e) => {
-    e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/dean/reset-password?admin_id=DEAN`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target_user_id: resetId, new_password: resetPass })
-    });
-    const data = await res.json();
     if (res.ok && data.success) {
       setMsg(`✅ ${data.message}`);
-      setResetId('');
-      setResetPass('');
     } else {
-      setMsg(`❌ ${data.detail || 'Account not found'}`);
+      setMsg(`❌ ${data.detail || 'Could not save warden account.'}`);
     }
   };
 
@@ -798,7 +784,7 @@ export default function DeanPortal({ apiUrl }) {
             <div className="ptm-drill-header">
               <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
               <h1 className="ptm-page-title">Create Club Portal Login</h1>
-              <p className="ptm-page-sub">Assign a unique ID and Password. The club will log in and fill all their member & event details manually.</p>
+              <p className="ptm-page-sub">Assign a unique account ID and the club representative's official SVNIT Google email.</p>
             </div>
             <div className="ptm-card">
               <form onSubmit={handleCreateClub} className="ptm-form-stack">
@@ -811,10 +797,10 @@ export default function DeanPortal({ apiUrl }) {
                   <input type="text" className="ptm-input" placeholder="e.g. DRISHTI Robotics & Innovation Club" value={clubForm.name} onChange={(e) => setClubForm({ ...clubForm, name: e.target.value })} required />
                 </div>
                 <div>
-                  <label className="ptm-label">Initial Password</label>
-                  <input type="text" className="ptm-input" value={clubForm.password} onChange={(e) => setClubForm({ ...clubForm, password: e.target.value })} required />
+                  <label className="ptm-label">Official Google email</label>
+                  <input type="email" className="ptm-input" placeholder="representative@svnit.ac.in" value={clubForm.email} onChange={(e) => setClubForm({ ...clubForm, email: e.target.value })} required />
                 </div>
-                <button type="submit" className="ptm-btn-primary">Create Club Account</button>
+                <button type="submit" className="ptm-btn-primary">Create Google-Enabled Club Account</button>
               </form>
             </div>
           </div>
@@ -832,11 +818,11 @@ export default function DeanPortal({ apiUrl }) {
             </div>
 
             <div className="ptm-card">
-              <div className="ptm-section-title">Create New Central Department & Login</div>
+              <div className="ptm-section-title">Create or Configure a Central Department</div>
               <form onSubmit={handleCreateCentralDept} className="ptm-form-stack">
                 <div className="ptm-grid-2">
                   <div>
-                    <label className="ptm-label">Department Login ID</label>
+                    <label className="ptm-label">Department ID</label>
                     <input type="text" className="ptm-input" placeholder="e.g. SOLAR_LIGHT" value={deptForm.dept_id} onChange={(e) => setDeptForm({ ...deptForm, dept_id: e.target.value })} required />
                   </div>
                   <div>
@@ -846,15 +832,15 @@ export default function DeanPortal({ apiUrl }) {
                 </div>
                 <div className="ptm-grid-2">
                   <div>
-                    <label className="ptm-label">Login Password</label>
-                    <input type="text" className="ptm-input" value={deptForm.password} onChange={(e) => setDeptForm({ ...deptForm, password: e.target.value })} required />
+                    <label className="ptm-label">Staff official Google email</label>
+                    <input type="email" className="ptm-input" placeholder="staff@svnit.ac.in" value={deptForm.email} onChange={(e) => setDeptForm({ ...deptForm, email: e.target.value })} required />
                   </div>
                   <div>
                     <label className="ptm-label">Emoji Icon</label>
                     <input type="text" className="ptm-input" value={deptForm.icon} onChange={(e) => setDeptForm({ ...deptForm, icon: e.target.value })} required />
                   </div>
                 </div>
-                <button type="submit" className="ptm-btn-primary">+ Add Central Department</button>
+                <button type="submit" className="ptm-btn-primary">Save Central Department Google Access</button>
               </form>
             </div>
 
@@ -866,7 +852,7 @@ export default function DeanPortal({ apiUrl }) {
                     <div className="ptm-avatar-pastel">{d.icon}</div>
                     <div className="ptm-list-main">
                       <div className="ptm-list-title">{d.title}</div>
-                      <div className="ptm-list-sub">Login ID: <strong>{d.id}</strong></div>
+                      <div className="ptm-list-sub">Department ID: <strong>{d.id}</strong> • Google account: {d.login_email || 'Not configured'}</div>
                     </div>
                   </div>
                 ))}
@@ -876,37 +862,44 @@ export default function DeanPortal({ apiUrl }) {
         )}
 
         {/* =====================================================
-            PAGE 10: HOSTEL WARDENS & PASSWORD RESET
+            PAGE 10: HOSTEL WARDEN GOOGLE ACCESS
         ===================================================== */}
         {page === 'wardens' && (
           <div>
             <div className="ptm-drill-header">
               <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-              <h1 className="ptm-page-title">Hostel Wardens & Credentials</h1>
+              <h1 className="ptm-page-title">Hostel Warden Google Access</h1>
             </div>
 
             <div className="ptm-card">
-              <div className="ptm-section-title">Reset Password for Any Club / Warden / Department</div>
-              <form onSubmit={handleResetPassword} className="ptm-form-stack">
-                <div className="ptm-grid-2">
-                  <input type="text" className="ptm-input" placeholder="Account ID (e.g. CW_GAJJAR, ACM, ELECTRICITY)" value={resetId} onChange={(e) => setResetId(e.target.value)} required />
-                  <input type="text" className="ptm-input" placeholder="New Password" value={resetPass} onChange={(e) => setResetPass(e.target.value)} required />
-                </div>
-                <button type="submit" className="ptm-btn-primary">Update Account Password</button>
+              <div className="ptm-section-title">Configure a Warden's Official Google Email</div>
+              <form onSubmit={handleSaveWarden} className="ptm-form-stack">
+                <label className="ptm-label">Warden account
+                  <select className="ptm-input" value={wardenForm.user_id} onChange={(event) => {
+                    const selected = SVNIT_HOSTELS.find((hostel) => hostel.code === event.target.value);
+                    setWardenForm({ ...wardenForm, user_id: selected.code, hostel_block: selected.name, phone: selected.phone, email: '' });
+                  }}>
+                    {SVNIT_HOSTELS.map((hostel) => <option key={hostel.code} value={hostel.code}>{hostel.name}</option>)}
+                  </select>
+                </label>
+                <label className="ptm-label">Official Google email
+                  <input type="email" className="ptm-input" placeholder="warden@svnit.ac.in" value={wardenForm.email} onChange={(event) => setWardenForm({ ...wardenForm, email: event.target.value })} required />
+                </label>
+                <button type="submit" className="ptm-btn-primary">Save Warden Google Access</button>
               </form>
             </div>
 
             <div className="ptm-card">
-              <div className="ptm-section-title">All 9 SVNIT Hostel Warden Logins</div>
+              <div className="ptm-section-title">All 9 SVNIT Hostel Warden Accounts</div>
               <div className="ptm-list">
                 {SVNIT_HOSTELS.map((h) => (
-                  <div key={h.code} className="ptm-list-row" onClick={() => setResetId(h.code)}>
+                  <div key={h.code} className="ptm-list-row" onClick={() => setWardenForm({ ...wardenForm, user_id: h.code, hostel_block: h.name, phone: h.phone, email: '' })}>
                     <div className="ptm-avatar-pastel" style={{ background: '#E0F2FE', color: '#002970' }}>🏢</div>
                     <div className="ptm-list-main">
                       <div className="ptm-list-title">{h.name}</div>
                       <div className="ptm-list-sub">Login ID: <strong>{h.code}</strong> • Office: {h.phone}</div>
                     </div>
-                    <span className="ptm-tag-pill">Tap to Reset Pass</span>
+                    <span className="ptm-tag-pill">Configure</span>
                   </div>
                 ))}
               </div>

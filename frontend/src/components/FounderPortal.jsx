@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { apiFetch } from '../api';
 
 export default function FounderPortal({ apiUrl, onLogout }) {
   const [ads, setAds] = useState([]);
@@ -17,7 +18,7 @@ export default function FounderPortal({ apiUrl, onLogout }) {
 
   const loadAds = useCallback(async () => {
     try {
-      const res = await fetch(`${apiUrl}/api/ads`);
+      const res = await apiFetch(`${apiUrl}/api/ads`);
       if (res.ok) setAds(await res.json());
     } catch (e) {
       console.error(e);
@@ -28,7 +29,7 @@ export default function FounderPortal({ apiUrl, onLogout }) {
 
   const handleCreate = async (e) => {
     e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/ads/create`, {
+    const res = await apiFetch(`${apiUrl}/api/ads/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(form)
@@ -52,7 +53,7 @@ export default function FounderPortal({ apiUrl, onLogout }) {
   };
 
   const handleDelete = async (id) => {
-    await fetch(`${apiUrl}/api/ads/delete?ad_id=${id}`, { method: 'POST' });
+    await apiFetch(`${apiUrl}/api/ads/delete?ad_id=${id}`, { method: 'POST' });
     loadAds();
   };
 

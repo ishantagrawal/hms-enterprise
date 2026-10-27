@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { apiFetch } from '../api';
 
 export default function ClubPortal({ user, apiUrl }) {
   const [page, setPage] = useState('home');
@@ -47,8 +48,8 @@ export default function ClubPortal({ user, apiUrl }) {
   const loadClubData = useCallback(async () => {
     try {
       const [cRes, eRes] = await Promise.all([
-        fetch(`${apiUrl}/api/unicore/clubs`),
-        fetch(`${apiUrl}/api/unicore/events`)
+        apiFetch(`${apiUrl}/api/unicore/clubs`),
+        apiFetch(`${apiUrl}/api/unicore/events`)
       ]);
       if (cRes.ok) {
         const cData = await cRes.json();
@@ -71,7 +72,7 @@ export default function ClubPortal({ user, apiUrl }) {
 
   const handleSaveInfo = async (e) => {
     e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/unicore/clubs/update-info`, {
+    const res = await apiFetch(`${apiUrl}/api/unicore/clubs/update-info`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -90,7 +91,7 @@ export default function ClubPortal({ user, apiUrl }) {
 
   const handleAddMember = async (e) => {
     e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/unicore/clubs/add-member`, {
+    const res = await apiFetch(`${apiUrl}/api/unicore/clubs/add-member`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ club_id: user.user_id, ...memberForm })
@@ -103,7 +104,7 @@ export default function ClubPortal({ user, apiUrl }) {
   };
 
   const handleRemoveMember = async (index) => {
-    const res = await fetch(`${apiUrl}/api/unicore/clubs/remove-member`, {
+    const res = await apiFetch(`${apiUrl}/api/unicore/clubs/remove-member`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ club_id: user.user_id, index })
@@ -113,7 +114,7 @@ export default function ClubPortal({ user, apiUrl }) {
 
   const handleProposeEvent = async (e) => {
     e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/unicore/events/propose`, {
+    const res = await apiFetch(`${apiUrl}/api/unicore/events/propose`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -134,7 +135,7 @@ export default function ClubPortal({ user, apiUrl }) {
 
   const handleProposeNotice = async (e) => {
     e.preventDefault();
-    const res = await fetch(`${apiUrl}/api/notices/propose`, {
+    const res = await apiFetch(`${apiUrl}/api/notices/propose`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -155,7 +156,7 @@ export default function ClubPortal({ user, apiUrl }) {
   const handleAddGallery = async (e) => {
     e.preventDefault();
     if (!galleryUrl) return;
-    const res = await fetch(`${apiUrl}/api/unicore/clubs/add-gallery`, {
+    const res = await apiFetch(`${apiUrl}/api/unicore/clubs/add-gallery`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ club_id: user.user_id, media_type: 'link', media_url: galleryUrl, caption: galleryCaption })

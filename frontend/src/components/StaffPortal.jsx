@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { apiFetch } from '../api';
+import { downloadComplaintRegister } from '../registerPdf';
 
 export default function StaffPortal({ user, apiUrl }) {
   const [page, setPage] = useState('list');
@@ -6,26 +8,28 @@ export default function StaffPortal({ user, apiUrl }) {
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [remark, setRemark] = useState('');
   const [msg, setMsg] = useState(null);
+  const [wingFilter, setWingFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
 
   const deptCode = user.department || user.user_id;
   const hostelScope = user.hostel_block || 'All';
 
   const loadQueue = useCallback(async () => {
     try {
-      const q = new URLSearchParams({ role: 'Staff', user_id: user.user_id, department: deptCode, hostel_block: hostelScope });
-      const res = await fetch(`${apiUrl}/api/complaints?${q.toString()}`);
+      const q = new URLSearchParams({ role: 'Staff', user_id: user.user_id, department: deptCode, hostel_block: hostelScope, wing: wingFilter, category: categoryFilter });
+      const res = await apiFetch(`${apiUrl}/api/complaints?${q.toString()}`);
       if (res.ok) setComplaints(await res.json());
     } catch (e) {
       console.error(e);
     }
-  }, [apiUrl, user.user_id, deptCode, hostelScope]);
+  }, [apiUrl, user.user_id, deptCode, hostelScope, wingFilter, categoryFilter]);
 
   useEffect(() => { loadQueue(); }, [loadQueue]);
 
   const handleResolve = async (e) => {
     e.preventDefault();
     if (!selectedTicket) return;
-    const res = await fetch(`${apiUrl}/api/complaints/staff-resolve`, {
+    const res = await apiFetch(`${apiUrl}/api/complaints/staff-resolve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ticket_id: selectedTicket.ticket_id, staff_remark: remark })
@@ -35,6 +39,14 @@ export default function StaffPortal({ user, apiUrl }) {
       setRemark('');
       loadQueue();
       setPage('list');
+    }
+  };
+
+  const handleDownloadRegister = async () => {
+    try {
+      await downloadComplaintRegister({ title: `${user.full_name} Complaint Register`, hostel: hostelScope, complaints });
+    } catch (error) {
+      setMsg(`❌ ${error.message || 'Could not generate the complaint register PDF.'}`);
     }
   };
 
@@ -51,6 +63,26 @@ export default function StaffPortal({ user, apiUrl }) {
           </div>
 
           <div className="ptm-card">
+            <div className="ptm-grid-2">
+              <label className="ptm-label">Wing
+                <select className="ptm-input" value={wingFilter} onChange={(event) => setWingFilter(event.target.value)}>
+                  <option value="">All Wings</option>
+                  {'ABCDEFGH'.split('').map((letter) => <option key={letter} value={`Wing ${letter}`}>Wing {letter}</option>)}
+                </select>
+              </label>
+              <label className="ptm-label">Category
+                <select className="ptm-input" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
+                  <option value="">All Assigned Categories</option>
+                  <option value={deptCode}>{user.full_name}</option>
+                </select>
+              </label>
+            </div>
+            <button type="button" className="ptm-btn-primary" style={{ marginTop: '12px' }} onClick={handleDownloadRegister}>
+              Download Register PDF ({complaints.length})
+            </button>
+          </div>
+
+          <div className="ptm-card">
             {complaints.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '32px', color: '#6B7280' }}>No pending complaints in your queue.</div>
             ) : (
@@ -60,7 +92,7 @@ export default function StaffPortal({ user, apiUrl }) {
                     <div className="ptm-avatar-pastel">🛠️</div>
                     <div className="ptm-list-main">
                       <div className="ptm-list-title">{c.summary}</div>
-                      <div className="ptm-list-sub">📍 {c.hostel_block} • Room {c.room} ({c.student_name})</div>
+                      <div className="ptm-list-sub">📍 {c.hostel_block} • {c.wing || 'Wing not assigned'} • Room {c.room} ({c.student_name})</div>
                       <span className="ptm-tag-pill">{c.created_at}</span>
                     </div>
                     <span className="ptm-status-badge" style={{ background: '#FEF3C7', color: '#B45309' }}>{c.status} ›</span>
