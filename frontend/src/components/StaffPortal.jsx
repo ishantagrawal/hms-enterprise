@@ -44,7 +44,7 @@ export default function StaffPortal({ user, apiUrl }) {
 
   const handleDownloadRegister = async () => {
     try {
-      await downloadComplaintRegister({ title: `${user.full_name} Complaint Register`, hostel: hostelScope, complaints });
+      await downloadComplaintRegister({ title: `${user.full_name} Complaint Register`, hostel: hostelScope, wing: wingFilter || 'All Wings', category: categoryFilter || 'All Categories', complaints });
     } catch (error) {
       setMsg(`❌ ${error.message || 'Could not generate the complaint register PDF.'}`);
     }
@@ -115,8 +115,8 @@ export default function StaffPortal({ user, apiUrl }) {
           <div className="ptm-card">
             <p>{selectedTicket.description}</p>
             <div className="ptm-list" style={{ marginBottom: '16px' }}>
-              <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Location</div><div className="ptm-list-sub">{selectedTicket.hostel_block}, Room {selectedTicket.room}</div></div></div>
-              <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Resident</div><div className="ptm-list-sub">{selectedTicket.student_name} ({selectedTicket.student_id})</div></div></div>
+              <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Location</div><div className="ptm-list-sub">{selectedTicket.hostel_block}, {selectedTicket.wing ? `${selectedTicket.wing}, ` : ''}Room {selectedTicket.room}</div></div></div>
+              <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Resident</div><div className="ptm-list-sub">{selectedTicket.student_name} ({selectedTicket.student_id}){selectedTicket.phone ? ` • 📞 ${selectedTicket.phone}` : ''}</div></div></div>
             </div>
 
             {selectedTicket.status !== 'Completed' && (

@@ -314,7 +314,7 @@ export default function ClubPortal({ user, apiUrl }) {
                   {myClub.members.map((m, idx) => (
                     <div key={idx} className="ptm-list-row">
                       <div className="ptm-avatar-pastel" style={{ background: '#E0F2FE', color: '#002970' }}>
-                        {m.name.slice(0, 2).toUpperCase()}
+                        {(m.name || 'MB').slice(0, 2).toUpperCase()}
                       </div>
                       <div className="ptm-list-main">
                         <div className="ptm-list-title">{m.name} ({m.roll})</div>
@@ -329,13 +329,12 @@ export default function ClubPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* EVENT PROPOSAL: IMPORTANT DESCRIPTION FIRST, THEN IMAGE/DRIVE LINK BELOW */}
         {page === 'propose_event' && (
           <div>
             <div className="ptm-drill-header">
               <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
               <h1 className="ptm-page-title">Request Event Permission from Dean</h1>
-              <p className="ptm-page-sub">Write the important event details above and attach your Google Drive poster / registration links below.</p>
+              <p className="ptm-page-sub">Write important event details above and attach your Google Drive poster / registration links below.</p>
             </div>
 
             <div className="ptm-card">
@@ -447,7 +446,6 @@ export default function ClubPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* NOTICE PROPOSAL: IMPORTANT MESSAGE ABOVE, GOOGLE DRIVE/IMAGE LINK BELOW */}
         {page === 'propose_notice' && (
           <div>
             <div className="ptm-drill-header">

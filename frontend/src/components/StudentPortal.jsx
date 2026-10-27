@@ -149,7 +149,6 @@ export default function StudentPortal({ user, apiUrl }) {
 
         {page === 'home' && (
           <div>
-            {/* Top Summary Mini Cards */}
             <div className="ptm-mini-grid">
               <div className="ptm-mini-card" onClick={() => setPage('profile')}>
                 <div className="ptm-row-between">
@@ -172,7 +171,6 @@ export default function StudentPortal({ user, apiUrl }) {
               </div>
             </div>
 
-            {/* PAYTM IPO-STYLE PROMOTIONAL AD BANNER CAROUSEL */}
             {activeAd && (
               <div className="ptm-promo-banner" style={{ background: activeAd.bg_gradient || 'linear-gradient(135deg, #002970 0%, #0284C7 100%)' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -383,7 +381,10 @@ export default function StudentPortal({ user, apiUrl }) {
                   {visibleEvents.filter((e) => e.club_id.toUpperCase() === selectedClub.club_id.toUpperCase()).map((ev) => (
                     <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
                       <div className="ptm-avatar-pastel">🎪</div>
-                      <div className="ptm-list-main"><div className="ptm-list-title">{ev.title}</div><div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date}</div></div>
+                      <div className="ptm-list-main">
+                        <div className="ptm-list-title">{ev.title}</div>
+                        <div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date}</div>
+                      </div>
                       <span>›</span>
                     </div>
                   ))}
@@ -397,7 +398,7 @@ export default function StudentPortal({ user, apiUrl }) {
                 <div className="ptm-list">
                   {selectedClub.members?.map((m, i) => (
                     <div key={i} className="ptm-list-row">
-                      <div className="ptm-avatar-pastel">{m.name.slice(0, 2)}</div>
+                      <div className="ptm-avatar-pastel">{(m.name || 'MB').slice(0, 2)}</div>
                       <div className="ptm-list-main"><div className="ptm-list-title">{m.name}</div><div className="ptm-list-sub">{m.roll}</div></div>
                       <span className="ptm-tag-pill">{m.position}</span>
                     </div>
@@ -463,7 +464,6 @@ export default function StudentPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* EVENT DETAIL: WRITTEN DESCRIPTION FIRST, THEN POSTER/DRIVE LINK BELOW */}
         {page === 'event_detail' && selectedEvent && (
           <div>
             <div className="ptm-drill-header">
@@ -479,7 +479,6 @@ export default function StudentPortal({ user, apiUrl }) {
                 <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">👥 Confirmed Student Attendance</div><div className="ptm-list-sub">{selectedEvent.rsvps?.length || 0} Students Attending</div></div></div>
               </div>
 
-              {/* Poster / Drive Link & Google Form Links Placed Cleanly Below Info */}
               <div className="ptm-form-stack" style={{ marginTop: '14px' }}>
                 {selectedEvent.image_url && (
                   <a href={selectedEvent.image_url} target="_blank" rel="noreferrer" className="ptm-btn-secondary" style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}>
@@ -513,7 +512,6 @@ export default function StudentPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* NOTICE BOARD: WRITTEN DESCRIPTION FIRST, THEN DRIVE/IMAGE LINK BELOW */}
         {page === 'notices' && (
           <div>
             <div className="ptm-drill-header">

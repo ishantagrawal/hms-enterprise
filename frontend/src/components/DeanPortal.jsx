@@ -14,7 +14,6 @@ const SVNIT_HOSTELS = [
 ];
 
 export default function DeanPortal({ apiUrl }) {
-  // Multi-page navigation state (No pop-up modals!)
   const [page, setPage] = useState('home');
   const [clubs, setClubs] = useState([]);
   const [events, setEvents] = useState([]);
@@ -24,24 +23,20 @@ export default function DeanPortal({ apiUrl }) {
   const [studentsCount, setStudentsCount] = useState(0);
   const [msg, setMsg] = useState(null);
 
-  // Drill-down selected items
   const [selectedClub, setSelectedClub] = useState(null);
-  const [clubSubView, setClubSubView] = useState('hub'); // 'hub', 'info', 'members', 'upcoming', 'completed', 'calendar'
+  const [clubSubView, setClubSubView] = useState('hub');
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [selectedNotice, setSelectedNotice] = useState(null);
   const [previousPage, setPreviousPage] = useState('home');
 
-  // Forms
   const [clubForm, setClubForm] = useState({ club_id: '', name: '', email: '' });
   const [deptForm, setDeptForm] = useState({ dept_id: '', name: '', email: '', icon: '⚡' });
   const [wardenForm, setWardenForm] = useState({ user_id: 'CW_GAJJAR', hostel_block: 'Gajjar Bhawan', email: '', phone: '0261-2201659' });
 
-  // Calendar State
   const [calYear, setCalYear] = useState(2026);
-  const [calMonth, setCalMonth] = useState(9); // October
+  const [calMonth, setCalMonth] = useState(9);
   const [selectedDateStr, setSelectedDateStr] = useState('2026-10-25');
 
-  // Reports State
   const [reportYear, setReportYear] = useState('2026');
   const [reportClub, setReportClub] = useState('All');
   const [pdfScope, setPdfScope] = useState('All');
@@ -185,7 +180,6 @@ export default function DeanPortal({ apiUrl }) {
 
   return (
     <div className="ptm-shell-layout">
-      {/* LEFT SIDEBAR FOR LAPTOP / DESKTOP */}
       <aside className="ptm-sidebar-desktop">
         <button className={`ptm-side-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}>
           <span>🏠 Dashboard Home</span>
@@ -219,16 +213,11 @@ export default function DeanPortal({ apiUrl }) {
         </button>
       </aside>
 
-      {/* MAIN CONTENT AREA */}
       <div className="ptm-page-wrap">
         {msg && <div className="ptm-toast" onClick={() => setMsg(null)}>{msg}</div>}
 
-        {/* =====================================================
-            PAGE 1: PAYTM-STYLE HOME DASHBOARD
-        ===================================================== */}
         {page === 'home' && (
           <div>
-            {/* Top Summary Cards (Like Paytm Balance & History Cards) */}
             <div className="ptm-mini-grid">
               <div className="ptm-mini-card" onClick={() => setPage('clubs_list')}>
                 <div className="ptm-row-between">
@@ -260,7 +249,6 @@ export default function DeanPortal({ apiUrl }) {
               </div>
             </div>
 
-            {/* Quick Actions Grid (Paytm Circular Icon Style) */}
             <div className="ptm-card">
               <div className="ptm-section-title">Clubs & Campus Events</div>
               <div className="ptm-icon-grid">
@@ -313,9 +301,6 @@ export default function DeanPortal({ apiUrl }) {
           </div>
         )}
 
-        {/* =====================================================
-            PAGE 2: CLUBS DIRECTORY
-        ===================================================== */}
         {page === 'clubs_list' && (
           <div>
             <div className="ptm-drill-header">
@@ -364,9 +349,6 @@ export default function DeanPortal({ apiUrl }) {
           </div>
         )}
 
-        {/* =====================================================
-            PAGE 3: INSIDE A SPECIFIC CLUB (Full Page Experience!)
-        ===================================================== */}
         {page === 'club_detail' && selectedClub && (
           <div>
             <div className="ptm-drill-header">
@@ -384,7 +366,6 @@ export default function DeanPortal({ apiUrl }) {
               <p className="ptm-page-sub">{selectedClub.mission}</p>
             </div>
 
-            {/* Club Sub-Navigation Hub */}
             {clubSubView === 'hub' && (
               <>
                 <div className="ptm-card">
@@ -409,7 +390,6 @@ export default function DeanPortal({ apiUrl }) {
                   </div>
                 </div>
 
-                {/* Club Pending Approvals if any */}
                 <div className="ptm-card">
                   <div className="ptm-section-title">All Events by {selectedClub.club_id}</div>
                   <div className="ptm-list">
@@ -437,7 +417,6 @@ export default function DeanPortal({ apiUrl }) {
               </>
             )}
 
-            {/* Sub-View: Club Info */}
             {clubSubView === 'info' && (
               <div className="ptm-card">
                 <div className="ptm-section-title">Club Information & Dean Notes</div>
@@ -464,7 +443,6 @@ export default function DeanPortal({ apiUrl }) {
               </div>
             )}
 
-            {/* Sub-View: Committee Members (Custom Positions) */}
             {clubSubView === 'members' && (
               <div className="ptm-card">
                 <div className="ptm-section-title">Committee Members ({selectedClub.members?.length || 0})</div>
@@ -475,7 +453,7 @@ export default function DeanPortal({ apiUrl }) {
                     {selectedClub.members.map((m, idx) => (
                       <div key={idx} className="ptm-list-row">
                         <div className="ptm-avatar-pastel" style={{ background: '#EDE9FE', color: '#6D28D9' }}>
-                          {m.name.slice(0, 2).toUpperCase()}
+                          {(m.name || 'MB').slice(0, 2).toUpperCase()}
                         </div>
                         <div className="ptm-list-main">
                           <div className="ptm-list-title">{m.name}</div>
@@ -491,7 +469,6 @@ export default function DeanPortal({ apiUrl }) {
               </div>
             )}
 
-            {/* Sub-View: Upcoming Events */}
             {clubSubView === 'upcoming' && (
               <div className="ptm-card">
                 <div className="ptm-section-title">Upcoming Events</div>
@@ -512,7 +489,6 @@ export default function DeanPortal({ apiUrl }) {
               </div>
             )}
 
-            {/* Sub-View: Completed Events */}
             {clubSubView === 'completed' && (
               <div className="ptm-card">
                 <div className="ptm-section-title">Completed Events & Student Feedback</div>
@@ -535,9 +511,6 @@ export default function DeanPortal({ apiUrl }) {
           </div>
         )}
 
-        {/* =====================================================
-            PAGE 4: FULL EVENT PROPOSAL & DETAILS PAGE
-        ===================================================== */}
         {page === 'event_detail' && selectedEvent && (
           <div>
             <div className="ptm-drill-header">
@@ -559,7 +532,6 @@ export default function DeanPortal({ apiUrl }) {
               <div className="ptm-section-title">Event Requisition Dossier</div>
               <p style={{ color: '#374151', marginBottom: '16px' }}>{selectedEvent.description}</p>
 
-              {/* Time Clash Banner */}
               {(() => {
                 const clashInfo = checkTimeClash(selectedEvent);
                 return (
@@ -593,7 +565,6 @@ export default function DeanPortal({ apiUrl }) {
                   <div className="ptm-list-main"><div className="ptm-list-title">🛠️ Logistics & Permissions Needed</div><div className="ptm-list-sub">{selectedEvent.logistics_needs || 'Standard'}</div></div>
                 </div>
 
-                {/* Custom Dynamic Fields Submitted by Club */}
                 {selectedEvent.custom_fields && selectedEvent.custom_fields.map((cf, i) => (
                   <div key={i} className="ptm-list-row">
                     <div className="ptm-list-main">
@@ -616,7 +587,6 @@ export default function DeanPortal({ apiUrl }) {
               )}
             </div>
 
-            {/* Post-Event Student Reviews */}
             {selectedEvent.feedbacks && selectedEvent.feedbacks.length > 0 && (
               <div className="ptm-card">
                 <div className="ptm-section-title">Student Feedback & Ratings ({selectedEvent.feedbacks.length})</div>
@@ -637,9 +607,6 @@ export default function DeanPortal({ apiUrl }) {
           </div>
         )}
 
-        {/* =====================================================
-            PAGE 5: PENDING EVENT APPROVALS LIST
-        ===================================================== */}
         {page === 'event_approvals' && (
           <div>
             <div className="ptm-drill-header">
@@ -669,9 +636,6 @@ export default function DeanPortal({ apiUrl }) {
           </div>
         )}
 
-        {/* =====================================================
-            PAGE 6: PENDING NOTICE APPROVALS
-        ===================================================== */}
         {page === 'notice_approvals' && (
           <div>
             <div className="ptm-drill-header">
@@ -706,9 +670,6 @@ export default function DeanPortal({ apiUrl }) {
           </div>
         )}
 
-        {/* =====================================================
-            PAGE 7: UNIFORM FIXED-HEIGHT EVENT CALENDAR
-        ===================================================== */}
         {page === 'calendar' && (
           <div>
             <div className="ptm-drill-header">
@@ -753,7 +714,6 @@ export default function DeanPortal({ apiUrl }) {
               </div>
             </div>
 
-            {/* Events on Selected Date */}
             <div className="ptm-card">
               <div className="ptm-section-title">Events on {selectedDateStr}</div>
               {events.filter((e) => e.date === selectedDateStr).length === 0 ? (
@@ -776,9 +736,6 @@ export default function DeanPortal({ apiUrl }) {
           </div>
         )}
 
-        {/* =====================================================
-            PAGE 8: CREATE NEW CLUB
-        ===================================================== */}
         {page === 'create_club' && (
           <div>
             <div className="ptm-drill-header">
@@ -806,9 +763,6 @@ export default function DeanPortal({ apiUrl }) {
           </div>
         )}
 
-        {/* =====================================================
-            PAGE 9: CENTRAL DEPARTMENTS
-        ===================================================== */}
         {page === 'central_depts' && (
           <div>
             <div className="ptm-drill-header">
@@ -861,9 +815,6 @@ export default function DeanPortal({ apiUrl }) {
           </div>
         )}
 
-        {/* =====================================================
-            PAGE 10: HOSTEL WARDEN GOOGLE ACCESS
-        ===================================================== */}
         {page === 'wardens' && (
           <div>
             <div className="ptm-drill-header">
@@ -907,9 +858,6 @@ export default function DeanPortal({ apiUrl }) {
           </div>
         )}
 
-        {/* =====================================================
-            PAGE 11: ANNUAL REPORTS & PDF EXPORT
-        ===================================================== */}
         {page === 'reports' && (
           <div>
             <div className="ptm-drill-header">
@@ -969,7 +917,6 @@ export default function DeanPortal({ apiUrl }) {
         )}
       </div>
 
-      {/* MOBILE BOTTOM NAVIGATION */}
       <nav className="ptm-bottom-nav">
         <button className={`ptm-bnav-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}>
           <span>🏠</span><span>Home</span>

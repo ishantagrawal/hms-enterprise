@@ -15,7 +15,6 @@ export default function WardenPortal({ user, apiUrl }) {
 
   const hostelName = user.hostel_block && user.hostel_block !== 'All' ? user.hostel_block : 'Gajjar Bhawan';
 
-  // Student import data is limited to the fields needed for hostel operations.
   const [studentForm, setStudentForm] = useState({
     user_id: '',
     full_name: '',
@@ -81,7 +80,6 @@ export default function WardenPortal({ user, apiUrl }) {
     const parsed = [];
     for (let line of lines) {
       const p = line.split(',').map((x) => x.trim());
-      // Five fields: roll number, name, room, department, and academic year.
       if (p.length >= 5) {
         parsed.push({
           user_id: p[0],
@@ -108,7 +106,9 @@ export default function WardenPortal({ user, apiUrl }) {
       setBulkCsvText('');
       loadWardenData();
       setPage('directory');
-    } else setMsg(`❌ ${data.detail || 'Could not upload the student list.'}`);
+    } else {
+      setMsg(`❌ ${data.detail || 'Could not upload the student list.'}`);
+    }
   };
 
   const handleCreateHostelDept = async (e) => {
@@ -123,12 +123,20 @@ export default function WardenPortal({ user, apiUrl }) {
       setMsg(`✅ ${data.message}`);
       setDeptForm({ dept_id: '', name: '', email: '', icon: '🧹' });
       loadWardenData();
-    } else setMsg(`❌ ${data.detail || 'Could not save department.'}`);
+    } else {
+      setMsg(`❌ ${data.detail || 'Could not save department.'}`);
+    }
   };
 
   const handleDownloadRegister = async () => {
     try {
-      await downloadComplaintRegister({ title: 'Hostel Complaint Register', hostel: hostelName, complaints });
+      await downloadComplaintRegister({
+        title: 'Hostel Complaint Register',
+        hostel: hostelName,
+        wing: wingFilter || 'All Wings',
+        category: categoryFilter || 'All Categories',
+        complaints
+      });
     } catch (error) {
       setMsg(`❌ ${error.message || 'Could not generate the complaint register PDF.'}`);
     }
@@ -136,9 +144,9 @@ export default function WardenPortal({ user, apiUrl }) {
 
   const filteredStudents = students.filter(
     (s) =>
-      s.full_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.user_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.room.toLowerCase().includes(searchQuery.toLowerCase())
+      (s.full_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (s.user_id || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (s.room || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const openComplaints = complaints.filter((c) => c.status !== 'Completed');
@@ -188,16 +196,15 @@ export default function WardenPortal({ user, apiUrl }) {
                   <div className="ptm-icon-circle">🛠️</div>
                   <span className="ptm-icon-label">Hostel Staff Wings</span>
                 </button>
-                <button className="ptm-icon-tile" onClick={() => setPage('complaints')}>
-                  <div className="ptm-icon-circle">💬</div>
-                  <span className="ptm-icon-label">All Grievances</span>
+                <button className="ptm-icon-tile" onClick={() => setPage('register')}>
+                  <div className="ptm-icon-circle">📋</div>
+                  <span className="ptm-icon-label">Complaint Register</span>
                 </button>
               </div>
             </div>
           </div>
         )}
 
-        {/* 6-FIELD STUDENT ONBOARDING PAGE */}
         {page === 'onboard' && (
           <div>
             <div className="ptm-drill-header">
@@ -207,7 +214,7 @@ export default function WardenPortal({ user, apiUrl }) {
             </div>
 
             <div className="ptm-card">
-              <div className="ptm-section-title">1. Bulk Paste Student List (6 Columns)</div>
+              <div className="ptm-section-title">1. Bulk Paste Student List (5 Columns)</div>
               <p className="ptm-list-sub" style={{ marginBottom: '12px' }}>
                 Format per line: <strong>RollNo, Name, RoomNo, Department, Year</strong>
               </p>
@@ -215,12 +222,12 @@ export default function WardenPortal({ user, apiUrl }) {
                 <textarea
                   rows="5"
                   className="ptm-input"
-                  placeholder="U26CE011, Ishant Agrawal, B-204, Civil Engineering, 1st Year, 10072007"
+                  placeholder="U26CE011, Ishant Agrawal, D-315, Civil Engineering, 1st Year"
                   value={bulkCsvText}
                   onChange={(e) => setBulkCsvText(e.target.value)}
                   required
                 />
-                <button type="submit" className="ptm-btn-primary">📤 Upload & Create Student Logins</button>
+                <button type="submit" className="ptm-btn-primary">📤 Upload & Save Students</button>
               </form>
             </div>
 
@@ -239,7 +246,7 @@ export default function WardenPortal({ user, apiUrl }) {
                 </div>
                 <div>
                   <label className="ptm-label">Room Number</label>
-                  <input type="text" className="ptm-input" placeholder="e.g. B-204" value={studentForm.room} onChange={(e) => setStudentForm({ ...studentForm, room: e.target.value })} required />
+                  <input type="text" className="ptm-input" placeholder="e.g. D-315" value={studentForm.room} onChange={(e) => setStudentForm({ ...studentForm, room: e.target.value })} required />
                 </div>
                 <div className="ptm-grid-2">
                   <div>
@@ -262,7 +269,6 @@ export default function WardenPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* STUDENT DIRECTORY */}
         {page === 'directory' && (
           <div>
             <div className="ptm-drill-header">
@@ -281,11 +287,14 @@ export default function WardenPortal({ user, apiUrl }) {
                   {filteredStudents.map((st) => (
                     <div key={st.user_id} className="ptm-list-row">
                       <div className="ptm-avatar-pastel" style={{ background: '#E0F2FE', color: '#002970' }}>
-                        {st.full_name.slice(0, 2).toUpperCase()}
+                        {(st.full_name || 'ST').slice(0, 2).toUpperCase()}
                       </div>
                       <div className="ptm-list-main">
                         <div className="ptm-list-title">{st.full_name} ({st.user_id})</div>
-                        <div className="ptm-list-sub">🚪 Room {st.room} • {st.year} • {st.department}</div>
+                        <div className="ptm-list-sub">
+                          🚪 {st.wing ? `${st.wing} • ` : ''}Room {st.room || '—'} • {st.year} • {st.department}
+                          {st.phone ? ` • 📞 ${st.phone}` : ''}
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -295,7 +304,6 @@ export default function WardenPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* HOSTEL MAINTENANCE WINGS */}
         {page === 'departments' && (
           <div>
             <div className="ptm-drill-header">
@@ -316,8 +324,14 @@ export default function WardenPortal({ user, apiUrl }) {
                   </div>
                 </div>
                 <div className="ptm-grid-2">
-                  <div><label className="ptm-label">Staff official Google email</label><input type="email" className="ptm-input" placeholder="staff@svnit.ac.in" value={deptForm.email} onChange={(e) => setDeptForm({ ...deptForm, email: e.target.value })} required /></div>
-                  <div><label className="ptm-label">Icon</label><input type="text" className="ptm-input" value={deptForm.icon} onChange={(e) => setDeptForm({ ...deptForm, icon: e.target.value })} required /></div>
+                  <div>
+                    <label className="ptm-label">Staff official Google email</label>
+                    <input type="email" className="ptm-input" placeholder="staff@svnit.ac.in" value={deptForm.email} onChange={(e) => setDeptForm({ ...deptForm, email: e.target.value })} required />
+                  </div>
+                  <div>
+                    <label className="ptm-label">Icon</label>
+                    <input type="text" className="ptm-input" value={deptForm.icon} onChange={(e) => setDeptForm({ ...deptForm, icon: e.target.value })} required />
+                  </div>
                 </div>
                 <button type="submit" className="ptm-btn-primary">+ Create Department and Google Access</button>
               </form>
@@ -330,7 +344,9 @@ export default function WardenPortal({ user, apiUrl }) {
                     <div className="ptm-avatar-pastel">{d.icon}</div>
                     <div className="ptm-list-main">
                       <div className="ptm-list-title">{d.title}</div>
-                      <div className="ptm-list-sub">Department ID: <strong>{d.id}</strong> • Google account: {d.login_email || 'Not configured'}</div>
+                      <div className="ptm-list-sub">
+                        Department ID: <strong>{d.id}</strong> • Google account: {d.login_email || 'Not configured'}
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -339,7 +355,6 @@ export default function WardenPortal({ user, apiUrl }) {
           </div>
         )}
 
-        {/* COMPLAINTS LIST & FULL-PAGE TICKET DETAIL */}
         {page === 'complaints' && (
           <div>
             <div className="ptm-drill-header">
@@ -356,7 +371,9 @@ export default function WardenPortal({ user, apiUrl }) {
                       <div className="ptm-avatar-pastel">🛠️</div>
                       <div className="ptm-list-main">
                         <div className="ptm-list-title">{c.summary}</div>
-                        <div className="ptm-list-sub">Room {c.room} • {c.student_name} ({c.student_id})</div>
+                        <div className="ptm-list-sub">
+                          {c.wing ? `${c.wing} • ` : ''}Room {c.room} • {c.student_name} ({c.student_id})
+                        </div>
                         <span className="ptm-tag-pill">{c.routed_to}</span>
                       </div>
                       <span className="ptm-status-badge" style={{ background: '#F3F4F6', color: '#111827' }}>{c.status} ›</span>
@@ -391,24 +408,35 @@ export default function WardenPortal({ user, apiUrl }) {
                 </label>
               </div>
               <button type="button" className="ptm-btn-primary" style={{ marginTop: '12px' }} onClick={handleDownloadRegister}>
-                Download Register PDF ({complaints.length})
+                📥 Download Register PDF ({complaints.length})
               </button>
             </div>
             <div className="ptm-card" style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '760px', textAlign: 'left' }}>
-                <thead><tr>{['Ticket / Date', 'Wing / Room', 'Student', 'Category', 'Complaint / Action', 'Status'].map((heading) => <th key={heading} style={{ padding: '9px', borderBottom: '2px solid #CBD5E1' }}>{heading}</th>)}</tr></thead>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '820px', textAlign: 'left' }}>
+                <thead>
+                  <tr>
+                    {['Ticket / Date', 'Wing / Room', 'Student', 'Mobile', 'Category', 'Complaint / Action', 'Status'].map((heading) => (
+                      <th key={heading} style={{ padding: '9px', borderBottom: '2px solid #CBD5E1' }}>{heading}</th>
+                    ))}
+                  </tr>
+                </thead>
                 <tbody>
                   {complaints.map((complaint) => (
                     <tr key={complaint.ticket_id}>
                       <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.ticket_id}<br />{complaint.created_at}</td>
                       <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.wing || 'Unassigned'}<br />{complaint.room}</td>
                       <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.student_name}<br />{complaint.student_id}</td>
+                      <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.phone || '—'}</td>
                       <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.routed_to}</td>
                       <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.summary}<br />{complaint.staff_remark || complaint.description}</td>
                       <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.status}</td>
                     </tr>
                   ))}
-                  {complaints.length === 0 && <tr><td colSpan="6" style={{ padding: '20px', textAlign: 'center' }}>No complaints match these filters.</td></tr>}
+                  {complaints.length === 0 && (
+                    <tr>
+                      <td colSpan="7" style={{ padding: '20px', textAlign: 'center' }}>No complaints match these filters.</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -425,9 +453,27 @@ export default function WardenPortal({ user, apiUrl }) {
             <div className="ptm-card">
               <p style={{ color: '#374151', marginBottom: '16px' }}>{selectedTicket.description}</p>
               <div className="ptm-list">
-                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">1️⃣ Lodged by Resident</div><div className="ptm-list-sub">{selectedTicket.student_name} ({selectedTicket.student_id}) • Room {selectedTicket.room} • {selectedTicket.created_at}</div></div></div>
-                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">2️⃣ Department Resolution</div><div className="ptm-list-sub">{selectedTicket.staff_remark || 'Pending inspection'}</div></div></div>
-                <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">3️⃣ Student Verification</div><div className="ptm-list-sub">{selectedTicket.status}</div></div></div>
+                <div className="ptm-list-row">
+                  <div className="ptm-list-main">
+                    <div className="ptm-list-title">1️⃣ Lodged by Resident</div>
+                    <div className="ptm-list-sub">
+                      {selectedTicket.student_name} ({selectedTicket.student_id}) • {selectedTicket.wing ? `${selectedTicket.wing}, ` : ''}Room {selectedTicket.room}
+                      {selectedTicket.phone ? ` • 📞 ${selectedTicket.phone}` : ''} • {selectedTicket.created_at}
+                    </div>
+                  </div>
+                </div>
+                <div className="ptm-list-row">
+                  <div className="ptm-list-main">
+                    <div className="ptm-list-title">2️⃣ Department Resolution</div>
+                    <div className="ptm-list-sub">{selectedTicket.staff_remark || 'Pending inspection'}</div>
+                  </div>
+                </div>
+                <div className="ptm-list-row">
+                  <div className="ptm-list-main">
+                    <div className="ptm-list-title">3️⃣ Student Verification</div>
+                    <div className="ptm-list-sub">{selectedTicket.status}</div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

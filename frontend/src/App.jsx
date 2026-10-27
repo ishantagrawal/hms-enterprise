@@ -9,7 +9,7 @@ import { apiFetch } from './api';
 
 window.GLOBAL_SILICON_VALLEY_CSS = '';
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://hms-enterprise-mqvx.onrender.com';
+const API_URL = 'https://api.svnitcampus.in';
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '312566505039-bvh0tfh4gao8bi6jqs65fkgni7pbn5bn.apps.googleusercontent.com';
 
 function ProfileRow({ label, value }) {
@@ -30,134 +30,6 @@ function profileDraftFromUser(user) {
     room: user.room || '',
     phone: user.phone || ''
   };
-}
-
-// Built-in Founder Ad Manager Component (Login ID: FOUNDER | Pass: ishant123)
-function FounderAdPortal({ apiUrl }) {
-  const [ads, setAds] = useState([]);
-  const [msg, setMsg] = useState(null);
-  const [form, setForm] = useState({
-    sponsor_tag: 'SVNIT CAMPUS PARTNER',
-    title: '',
-    subtitle: '',
-    badge_text: 'LIMITED TIME OFFER',
-    cta_text: 'Apply Now →',
-    target_url: '',
-    image_url: '',
-    bg_gradient: 'linear-gradient(135deg, #002970 0%, #0284C7 100%)',
-    days_valid: 15
-  });
-
-  const loadAds = async () => {
-    try {
-      const res = await apiFetch(`${apiUrl}/api/ads`);
-      if (res.ok) setAds(await res.json());
-    } catch {}
-  };
-
-  useEffect(() => { loadAds(); }, []);
-
-  const handleCreate = async (e) => {
-    e.preventDefault();
-    const res = await apiFetch(`${apiUrl}/api/ads/create`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(form)
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setMsg(`✅ ${data.message}`);
-      setForm({ ...form, title: '', subtitle: '', target_url: '', image_url: '' });
-      loadAds();
-    }
-  };
-
-  const handleDelete = async (id) => {
-    await apiFetch(`${apiUrl}/api/ads/delete?ad_id=${id}`, { method: 'POST' });
-    loadAds();
-  };
-
-  return (
-    <div className="ptm-page-wrap">
-      {msg && <div className="ptm-toast" onClick={() => setMsg(null)}>{msg}</div>}
-      <div className="ptm-drill-header">
-        <span className="ptm-tag-pill">FOUNDER SPONSORSHIP STUDIO</span>
-        <h1 className="ptm-page-title">Paytm-Style Campus Ad Manager</h1>
-        <p className="ptm-page-sub">Publish 15-day promotional banners directly to all Student & Warden Home screens.</p>
-      </div>
-
-      <div className="ptm-card">
-        <div className="ptm-section-title">Create New Promotional Ad Banner</div>
-        <form onSubmit={handleCreate} className="ptm-form-stack">
-          <div className="ptm-grid-2">
-            <div>
-              <label className="ptm-label">Top Brand / Sponsor Tag</label>
-              <input type="text" className="ptm-input" placeholder="e.g. UNACADEMY • CAMPUS SPONSOR" value={form.sponsor_tag} onChange={(e) => setForm({ ...form, sponsor_tag: e.target.value })} required />
-            </div>
-            <div>
-              <label className="ptm-label">Duration (Auto-Expires After Days)</label>
-              <input type="number" className="ptm-input" value={form.days_valid} onChange={(e) => setForm({ ...form, days_valid: Number(e.target.value) })} required />
-            </div>
-          </div>
-          <div>
-            <label className="ptm-label">Main Headline (Paytm IPO Style)</label>
-            <input type="text" className="ptm-input" placeholder="e.g. GATE & CAT 2027 Batch is Open!" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required />
-          </div>
-          <div className="ptm-grid-2">
-            <div>
-              <label className="ptm-label">Subtitle / Offer Date</label>
-              <input type="text" className="ptm-input" placeholder="e.g. Flat 40% Off for SVNIT Students" value={form.subtitle} onChange={(e) => setForm({ ...form, subtitle: e.target.value })} required />
-            </div>
-            <div>
-              <label className="ptm-label">Right Highlight Text (Optional)</label>
-              <input type="text" className="ptm-input" placeholder="e.g. Special ₹999 Pass" value={form.badge_text} onChange={(e) => setForm({ ...form, badge_text: e.target.value })} />
-            </div>
-          </div>
-          <div className="ptm-grid-2">
-            <div>
-              <label className="ptm-label">Click Destination Link (Website / WhatsApp / Form)</label>
-              <input type="url" className="ptm-input" placeholder="https://..." value={form.target_url} onChange={(e) => setForm({ ...form, target_url: e.target.value })} required />
-            </div>
-            <div>
-              <label className="ptm-label">Button Label</label>
-              <input type="text" className="ptm-input" placeholder="Apply Now →" value={form.cta_text} onChange={(e) => setForm({ ...form, cta_text: e.target.value })} required />
-            </div>
-          </div>
-          <div>
-            <label className="ptm-label">Banner Theme Color</label>
-            <select className="ptm-input" value={form.bg_gradient} onChange={(e) => setForm({ ...form, bg_gradient: e.target.value })}>
-              <option value="linear-gradient(135deg, #002970 0%, #0284C7 100%)">Paytm Royal Blue (Default)</option>
-              <option value="linear-gradient(135deg, #0F172A 0%, #1E40AF 100%)">Midnight Tech Navy</option>
-              <option value="linear-gradient(135deg, #065F46 0%, #059669 100%)">Emerald Cashback Green</option>
-              <option value="linear-gradient(135deg, #7C2D12 0%, #EA580C 100%)">Sunset Fest Orange</option>
-            </select>
-          </div>
-          <button type="submit" className="ptm-btn-primary">🚀 Publish Live Sponsor Banner</button>
-        </form>
-      </div>
-
-      <div className="ptm-card">
-        <div className="ptm-section-title">Active Live Banners ({ads.length})</div>
-        {ads.length === 0 ? (
-          <div className="ptm-list-sub">No active ads running right now.</div>
-        ) : (
-          <div className="ptm-list">
-            {ads.map((ad) => (
-              <div key={ad.ad_id} className="ptm-list-row">
-                <div className="ptm-list-main">
-                  <div className="ptm-list-title">{ad.title} ({ad.sponsor_tag})</div>
-                  <div className="ptm-list-sub">{ad.subtitle} • Expires: {ad.expires_at}</div>
-                </div>
-                <button className="ptm-btn-danger" style={{ width: 'auto', padding: '7px 14px' }} onClick={() => handleDelete(ad.ad_id)}>
-                  Remove
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
 }
 
 export default function App() {
@@ -590,8 +462,6 @@ const PAYTM_APPLE_CSS = `
     font-size: 28px;
     cursor: pointer;
   }
-
-  /* FIXED MOBILE-SAFE HEADER (Never clips or overflows!) */
   .ptm-header {
     position: sticky;
     top: 0;
@@ -677,8 +547,6 @@ const PAYTM_APPLE_CSS = `
     cursor: pointer;
     white-space: nowrap;
   }
-
-  /* PAYTM IPO-STYLE PROMO AD BANNER CAROUSEL */
   .ptm-promo-banner {
     border-radius: 18px;
     padding: 18px;
@@ -734,8 +602,6 @@ const PAYTM_APPLE_CSS = `
     text-decoration: none;
     white-space: nowrap;
   }
-
-  /* LOGIN SCREEN */
   .ptm-login-screen {
     min-height: 100vh;
     display: flex;
@@ -807,8 +673,6 @@ const PAYTM_APPLE_CSS = `
     background: #002970;
     transition: width 0.3s ease;
   }
-
-  /* ADAPTIVE DESKTOP VS MOBILE SHELL */
   .ptm-main-container {
     flex: 1;
     width: 100%;
@@ -859,8 +723,6 @@ const PAYTM_APPLE_CSS = `
     color: #FFFFFF;
     font-weight: 700;
   }
-
-  /* PAYTM DRILL-DOWN PAGE HEADER (Strictly Left-Aligned!) */
   .ptm-page-wrap {
     max-width: 880px;
     margin: 0 auto;
@@ -903,8 +765,6 @@ const PAYTM_APPLE_CSS = `
     color: #6B7280;
     text-align: left;
   }
-
-  /* WHITE CARDS & SURFACES */
   .ptm-card {
     background: #FFFFFF;
     border: 1px solid #E5E7EB;
@@ -921,8 +781,6 @@ const PAYTM_APPLE_CSS = `
     margin: 0 0 12px 0;
     text-align: left;
   }
-
-  /* PAYTM 4-COLUMN CIRCULAR ICON GRID */
   .ptm-icon-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -977,8 +835,6 @@ const PAYTM_APPLE_CSS = `
     color: #1F2937;
     line-height: 1.25;
   }
-
-  /* PAYTM SUMMARY MINI-CARDS */
   .ptm-mini-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1009,8 +865,6 @@ const PAYTM_APPLE_CSS = `
     overflow: hidden;
     text-overflow: ellipsis;
   }
-
-  /* PAYTM LIST ROWS */
   .ptm-list {
     display: flex;
     flex-direction: column;
@@ -1075,8 +929,6 @@ const PAYTM_APPLE_CSS = `
     white-space: nowrap;
     flex-shrink: 0;
   }
-
-  /* FORMS & INPUTS */
   .ptm-form-stack {
     display: flex;
     flex-direction: column;
@@ -1126,8 +978,6 @@ const PAYTM_APPLE_CSS = `
     color: #111827;
     background: transparent;
   }
-
-  /* BUTTONS */
   .ptm-btn-primary {
     width: 100%;
     background: #002970;
@@ -1161,8 +1011,6 @@ const PAYTM_APPLE_CSS = `
     font-weight: 700;
     cursor: pointer;
   }
-
-  /* UNIFORM CALENDAR GRID */
   .ptm-cal-grid {
     display: grid;
     grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -1212,7 +1060,6 @@ const PAYTM_APPLE_CSS = `
     overflow: hidden;
     text-overflow: ellipsis;
   }
-
   .ptm-row-between {
     display: flex;
     justify-content: space-between;
@@ -1230,8 +1077,6 @@ const PAYTM_APPLE_CSS = `
     margin-bottom: 14px;
     cursor: pointer;
   }
-
-  /* MOBILE BOTTOM BAR */
   .ptm-bottom-nav {
     display: none;
     position: fixed;
