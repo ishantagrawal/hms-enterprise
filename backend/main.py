@@ -1,13 +1,20 @@
 import os
 import json
 import random
+import re
 import sqlite3
+import threading
+import time
+from html import escape as html_escape
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
+import google.auth.exceptions
+from google.auth.transport.requests import Request as GoogleAuthRequest
+from google.oauth2 import id_token
 
 try:
     import psycopg2
@@ -16,11 +23,18 @@ except ImportError:
     psycopg2 = None
 
 app = FastAPI(title="SVNIT HMS - Cloud Persistent Production Backend")
+GOOGLE_CLIENT_ID = os.getenv(
+    "GOOGLE_CLIENT_ID",
+    "312566505039-bvh0tfh4gao8bi6jqs65fkgni7pbn5bn.apps.googleusercontent.com",
+)
+_GOOGLE_TOKEN_CACHE: Dict[str, tuple] = {}
+_GOOGLE_TOKEN_CACHE_LOCK = threading.Lock()
+CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "*").split(",") if origin.strip()]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -65,7 +79,8 @@ def init_db():
             phone TEXT,
             email TEXT,
             department TEXT,
-            dob TEXT
+            dob TEXT,
+            wing TEXT
         )
     ''')
     db_exec(conn, '''
@@ -132,7 +147,8 @@ def init_db():
             routed_to TEXT,
             staff_remark TEXT,
             created_at TEXT,
-            resolved_at TEXT
+            resolved_at TEXT,
+            wing TEXT
         )
     ''')
     db_exec(conn, '''
@@ -165,6 +181,12 @@ def init_db():
             expires_at TEXT
         )
     ''')
+    user_columns = {column[0] for column in db_exec(conn, "SELECT * FROM users LIMIT 0").description}
+    if "wing" not in user_columns:
+        db_exec(conn, "ALTER TABLE users ADD COLUMN wing TEXT")
+    complaint_columns = {column[0] for column in db_exec(conn, "SELECT * FROM complaints LIMIT 0").description}
+    if "wing" not in complaint_columns:
+        db_exec(conn, "ALTER TABLE complaints ADD COLUMN wing TEXT")
 
     default_users = [
         ("FOUNDER", "ishant123", "Founder & Ad Admin", "Founder", "Platform Creator & Sponsor Manager", "SVNIT", "All", "-", "Admin", "+91", "founder@svnit.ac.in", "Platform Admin", "10072007"),
@@ -183,9 +205,17 @@ def init_db():
     ]
     for u in default_users:
         if USE_POSTGRES:
-            db_exec(conn, "INSERT INTO users VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (user_id) DO NOTHING", u)
+            db_exec(conn, "INSERT INTO users (user_id, password, full_name, role, authority_title, institute_id, hostel_block, year, room, phone, email, department, dob) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (user_id) DO NOTHING", u)
         else:
-            db_exec(conn, "INSERT OR IGNORE INTO users VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", u)
+            db_exec(conn, "INSERT OR IGNORE INTO users (user_id, password, full_name, role, authority_title, institute_id, hostel_block, year, room, phone, email, department, dob) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", u)
+
+    for user_id in ["FOUNDER", "DEAN", "CW_GAJJAR", "CW_BHABHA", "CW_MTB", "CW_SVB", "CW_NEHRU", "CW_TAGORE", "CW_SARABHAI", "CW_RAMAN", "CW_ABVB"]:
+        configured_email = os.getenv(f"{user_id}_EMAIL", "").strip().lower()
+        if not configured_email:
+            continue
+        db_exec(conn, "UPDATE users SET email = ? WHERE UPPER(user_id) = ?", (configured_email, user_id))
+
+    db_exec(conn, "UPDATE users SET password = '', dob = ''")
 
     default_depts = [
         ("ELECTRICITY", "Electrical Maintenance (Central)", "Central", "All", "⚡"),
@@ -204,26 +234,19 @@ def init_db():
 init_db()
 
 
-# =========================================================
-# PYDANTIC MODELS
-# =========================================================
-class LoginReq(BaseModel):
-    user_id: str
-    password: str
-
 class CreateDepartmentReq(BaseModel):
     dept_id: Optional[str] = None
     name: Optional[str] = None
     title: Optional[str] = None
-    password: Optional[str] = "123"
     dept_type: str = "Central"
     hostel_block: Optional[str] = "All"
     icon: Optional[str] = "🛠️"
+    email: Optional[str] = None
 
 class ClubCreateReq(BaseModel):
     club_id: str
     name: str
-    password: Optional[str] = "123"
+    email: Optional[str] = None
     mission: Optional[str] = ""
     faculty_advisor: Optional[str] = ""
     head_coordinator: Optional[str] = ""
@@ -231,17 +254,8 @@ class ClubCreateReq(BaseModel):
 class WardenCreateReq(BaseModel):
     user_id: str
     hostel_block: str
-    password: str
+    email: Optional[str] = None
     phone: Optional[str] = "0261-2201600"
-
-class PasswordResetReq(BaseModel):
-    target_user_id: str
-    new_password: str
-
-class StudentChangePassReq(BaseModel):
-    student_id: str
-    old_password: str
-    new_password: str
 
 class StudentManualAddReq(BaseModel):
     user_id: str
@@ -250,7 +264,7 @@ class StudentManualAddReq(BaseModel):
     room: str
     department: str
     year: Optional[str] = "1st Year"
-    dob: str
+    dob: Optional[str] = ""
     phone: Optional[str] = ""
     email: Optional[str] = ""
 
@@ -345,31 +359,205 @@ class AdCreateReq(BaseModel):
     bg_gradient: Optional[str] = "linear-gradient(135deg, #002970 0%, #0284C7 100%)"
     days_valid: int = 15
 
+class GoogleLoginReq(BaseModel):
+    credential: str
 
-# =========================================================
-# API ENDPOINTS
-# =========================================================
+class StudentProfileReq(BaseModel):
+    hostel_block: str
+    wing: str
+    room: str
+    phone: str
+
+
+def verify_google_credential(credential: str) -> dict:
+    now = time.time()
+    with _GOOGLE_TOKEN_CACHE_LOCK:
+        cached = _GOOGLE_TOKEN_CACHE.get(credential)
+        if cached and cached[0] > now:
+            return cached[1]
+        try:
+            claims = id_token.verify_oauth2_token(
+                credential, GoogleAuthRequest(), GOOGLE_CLIENT_ID
+            )
+        except google.auth.exceptions.TransportError as exc:
+            raise HTTPException(status_code=503, detail="Google sign-in verification is temporarily unavailable.") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=401, detail="Google sign-in token is invalid or expired.") from exc
+        if len(_GOOGLE_TOKEN_CACHE) > 500:
+            expired = [token for token, (expiry, _) in _GOOGLE_TOKEN_CACHE.items() if expiry <= now]
+            for token in expired:
+                _GOOGLE_TOKEN_CACHE.pop(token, None)
+        _GOOGLE_TOKEN_CACHE[credential] = (float(claims.get("exp", 0)), claims)
+        return claims
+
+
+def is_svnit_email(email: str) -> bool:
+    if email.count("@") != 1:
+        return False
+    local_part, domain = email.rsplit("@", 1)
+    if not local_part or any(character.isspace() for character in local_part):
+        return False
+    return domain.lower() == "svnit.ac.in" or domain.lower().endswith(".svnit.ac.in")
+
+
+def require_svnit_email(email: Optional[str]) -> str:
+    normalized = (email or "").strip().lower()
+    if not is_svnit_email(normalized):
+        raise HTTPException(status_code=400, detail="Enter an official @svnit.ac.in email address.")
+    return normalized
+
+
+def get_account_by_email(email: str):
+    conn = get_conn()
+    row = db_exec(conn, "SELECT * FROM users WHERE LOWER(email) = LOWER(?)", (email,)).fetchone()
+    conn.close()
+    return row
+
+
+def get_account_for_google_claims(claims: dict):
+    email = str(claims.get("email", "")).strip().lower()
+    if claims.get("email_verified") is not True:
+        raise HTTPException(status_code=403, detail="Use a verified SVNIT Google email address.")
+    if not is_svnit_email(email):
+        raise HTTPException(status_code=403, detail="Only verified @svnit.ac.in accounts are allowed.")
+
+    account = get_account_by_email(email)
+    if account:
+        return account
+
+    local_part = email.split("@", 1)[0].upper()
+    match = re.fullmatch(r"U(?P<admission_year>\d{2})(?P<branch>[A-Z]{2,3})(?P<sequence>\d{3})", local_part)
+    if not match:
+        raise HTTPException(status_code=403, detail="This official account is not preconfigured for staff access, and its email does not contain a valid student roll number.")
+
+    branch_code = match.group("branch")
+    departments = {
+        "CE": "Civil Engineering",
+        "CED": "Civil Engineering",
+        "CH": "Chemical Engineering",
+        "CS": "Computer Science and Engineering",
+        "CSE": "Computer Science and Engineering",
+        "EC": "Electronics and Communication Engineering",
+        "EE": "Electrical Engineering",
+        "IT": "Information Technology",
+        "ME": "Mechanical Engineering",
+        "MA": "Applied Mathematics",
+        "PH": "Applied Physics",
+        "CY": "Applied Chemistry",
+    }
+    if branch_code not in departments:
+        raise HTTPException(status_code=403, detail=f"Student branch code '{branch_code}' is not configured.")
+
+    admission_year = 2000 + int(match.group("admission_year"))
+    academic_year = max(1, datetime.now().year - admission_year + 1)
+    year_suffix = "st" if academic_year % 10 == 1 and academic_year % 100 != 11 else "nd" if academic_year % 10 == 2 and academic_year % 100 != 12 else "rd" if academic_year % 10 == 3 and academic_year % 100 != 13 else "th"
+    year = f"{academic_year}{year_suffix} Year"
+    conn = get_conn()
+    existing = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (local_part,)).fetchone()
+    if existing and existing["role"] != "Student":
+        conn.close()
+        raise HTTPException(status_code=403, detail="This roll number is already assigned to a non-student account.")
+    if existing:
+        db_exec(conn, "UPDATE users SET email = ? WHERE UPPER(user_id) = ?", (email, local_part))
+        account = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (local_part,)).fetchone()
+    else:
+        full_name = str(claims.get("name") or local_part).strip()
+        db_exec(
+            conn,
+            "INSERT INTO users (user_id, password, full_name, role, authority_title, institute_id, hostel_block, year, room, phone, email, department, dob, wing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (local_part, "", full_name, "Student", "Verified Resident", "SVNIT", "", year, "", "", email, departments[branch_code], "", ""),
+        )
+        account = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (local_part,)).fetchone()
+    conn.commit()
+    conn.close()
+    return account
+
+
+def account_from_bearer(request: Request):
+    authorization = request.headers.get("authorization", "")
+    scheme, _, credential = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not credential:
+        raise HTTPException(status_code=401, detail="Sign in with your SVNIT Google account.")
+    claims = verify_google_credential(credential)
+    email = str(claims.get("email", "")).strip().lower()
+    if claims.get("email_verified") is not True or not is_svnit_email(email):
+        raise HTTPException(status_code=403, detail="Only verified SVNIT Google accounts are allowed.")
+    account = get_account_by_email(email)
+    if not account:
+        raise HTTPException(status_code=401, detail="Google account is not registered.")
+    return account
+
+
+@app.middleware("http")
+async def require_google_authentication(request: Request, call_next):
+    if not request.url.path.startswith("/api/") or request.url.path == "/api/auth/google" or request.method == "OPTIONS":
+        return await call_next(request)
+    try:
+        account = account_from_bearer(request)
+    except HTTPException as exc:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    request.state.user = account
+    return await call_next(request)
+
+
 @app.get("/")
 def root():
     return {
         "status": "online",
-        "database_mode": "Cloud PostgreSQL (Permanent)" if USE_POSTGRES else "Local SQLite (Set DATABASE_URL on Render for Cloud Persistence)"
+        "database_mode": "Cloud PostgreSQL (Permanent)" if USE_POSTGRES else "Local SQLite"
     }
 
-@app.post("/api/auth/login")
-def login(req: LoginReq):
-    uid = req.user_id.strip().upper()
-    pwd = req.password.strip()
-    conn = get_conn()
-    row = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (uid,)).fetchone()
-    conn.close()
-    if row and (row["password"] == pwd or row["dob"] == pwd):
-        u = dict(row)
-        u.pop("password", None)
-        return {"success": True, "user": u}
-    raise HTTPException(status_code=401, detail="Invalid Roll No / Login ID or Password")
+@app.post("/api/auth/google")
+def google_login(req: GoogleLoginReq):
+    claims = verify_google_credential(req.credential)
+    account = get_account_for_google_claims(claims)
+    user = dict(account)
+    user.pop("password", None)
+    user.pop("dob", None)
+    return {"success": True, "user": user}
 
-# --- PROMOTIONAL AD BANNERS (PAYTM IPO STYLE) ---
+@app.get("/api/auth/me")
+def get_current_account(request: Request):
+    user = dict(request.state.user)
+    user.pop("password", None)
+    user.pop("dob", None)
+    return {"success": True, "user": user}
+
+@app.get("/api/hostels")
+def get_hostels():
+    conn = get_conn()
+    rows = db_exec(conn, "SELECT DISTINCT hostel_block FROM users WHERE role = 'Warden' AND hostel_block IS NOT NULL AND hostel_block != '' ORDER BY hostel_block").fetchall()
+    conn.close()
+    return [row["hostel_block"] for row in rows]
+
+@app.put("/api/profile")
+def update_student_profile(req: StudentProfileReq, request: Request):
+    account = request.state.user
+    if account["role"] != "Student":
+        raise HTTPException(status_code=403, detail="Only student profiles can be updated here.")
+    hostel = req.hostel_block.strip()
+    wing = req.wing.strip()
+    room = req.room.strip()
+    phone = req.phone.strip()
+    if wing not in {f"Wing {letter}" for letter in "ABCDEFGH"}:
+        raise HTTPException(status_code=400, detail="Select a valid hostel wing.")
+    if not room or len(room) > 20:
+        raise HTTPException(status_code=400, detail="Enter a valid room number.")
+    conn = get_conn()
+    hostel_row = db_exec(conn, "SELECT 1 FROM users WHERE role = 'Warden' AND LOWER(hostel_block) = LOWER(?)", (hostel,)).fetchone()
+    if not hostel_row:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Select a valid SVNIT hostel.")
+    db_exec(conn, "UPDATE users SET hostel_block = ?, wing = ?, room = ?, phone = ? WHERE UPPER(user_id) = ? AND role = 'Student'",
+            (hostel, wing, room, phone, account["user_id"].upper()))
+    updated = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (account["user_id"].upper(),)).fetchone()
+    conn.commit()
+    conn.close()
+    user = dict(updated)
+    user.pop("password", None)
+    user.pop("dob", None)
+    return {"success": True, "user": user}
+
 @app.get("/api/ads")
 def get_ads():
     conn = get_conn()
@@ -400,7 +588,7 @@ def create_ad(req: AdCreateReq):
     )
     conn.commit()
     conn.close()
-    return {"success": True, "message": f"Sponsor Ad '{req.title}' published until {expires_at}!"}
+    return {"success": True, "message": f"Sponsor Ad '{req.title}' published!"}
 
 @app.post("/api/ads/delete")
 def delete_ad(ad_id: str = Query(...)):
@@ -410,241 +598,159 @@ def delete_ad(ad_id: str = Query(...)):
     conn.close()
     return {"success": True, "message": "Ad removed."}
 
-# --- DEPARTMENTS (Upsert / Edit Support) ---
 @app.get("/api/departments")
-def get_departments(hostel_block: str = "All"):
+def get_departments(request: Request, hostel_block: str = "All"):
+    account = request.state.user
+    if account["role"] in {"Student", "Warden", "Staff"}:
+        hostel_block = account["hostel_block"] or "All"
+    return list_departments(hostel_block)
+
+def list_departments(hostel_block: str = "All"):
     conn = get_conn()
     if hostel_block and hostel_block != "All":
-        rows = db_exec(conn, "SELECT * FROM departments WHERE type = 'Central' OR LOWER(hostel_block) = LOWER(?)", (hostel_block,)).fetchall()
+        rows = db_exec(conn, "SELECT departments.*, users.email AS login_email FROM departments LEFT JOIN users ON UPPER(users.user_id) = UPPER(departments.id) WHERE departments.type = 'Central' OR LOWER(departments.hostel_block) = LOWER(?)", (hostel_block,)).fetchall()
     else:
-        rows = db_exec(conn, "SELECT * FROM departments").fetchall()
+        rows = db_exec(conn, "SELECT departments.*, users.email AS login_email FROM departments LEFT JOIN users ON UPPER(users.user_id) = UPPER(departments.id)").fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    return [dict(row) for row in rows]
 
 @app.post("/api/departments/create")
-def create_department(req: CreateDepartmentReq):
+def create_department(req: CreateDepartmentReq, request: Request):
+    account = request.state.user
     raw_name = (req.name or req.title or "").strip()
-    if not raw_name:
-        raise HTTPException(status_code=400, detail="Department name is required.")
     did = (req.dept_id or raw_name).strip().upper().replace(" ", "_").replace("/", "")
-    pwd = (req.password or "123").strip()
-    h_block = req.hostel_block if req.dept_type == "Hostel" else "All"
-
+    dept_type = "Hostel" if account["role"] == "Warden" else req.dept_type
+    h_block = account["hostel_block"] if account["role"] == "Warden" else req.hostel_block if dept_type == "Hostel" else "All"
+    email = require_svnit_email(req.email)
     display_title = raw_name
-    if req.dept_type == "Hostel" and h_block != "All" and h_block.lower() not in raw_name.lower():
-        display_title = f"{raw_name} ({h_block})"
-    elif req.dept_type == "Central" and "central" not in raw_name.lower():
-        display_title = f"{raw_name} (Central)"
 
     conn = get_conn()
     existing = db_exec(conn, "SELECT * FROM departments WHERE UPPER(id) = ?", (did,)).fetchone()
     if existing:
         db_exec(conn, "UPDATE departments SET title = ?, type = ?, hostel_block = ?, icon = ? WHERE UPPER(id) = ?",
-                (display_title, req.dept_type, h_block, req.icon or "🛠️", did))
+                (display_title, dept_type, h_block, req.icon or "🛠️", did))
     else:
         db_exec(conn, "INSERT INTO departments VALUES (?, ?, ?, ?, ?)",
-                (did, display_title, req.dept_type, h_block, req.icon or "🛠️"))
-
-    existing_u = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (did,)).fetchone()
-    if existing_u:
-        db_exec(conn, "UPDATE users SET password = ?, full_name = ?, hostel_block = ?, department = ? WHERE UPPER(user_id) = ?",
-                (pwd, display_title, h_block, did, did))
-    else:
-        db_exec(conn, "INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (did, pwd, display_title, "Staff", f"Department Portal ({h_block})", "SVNIT", h_block, "-", "Maintenance Wing", "0261-2201500", f"{did.lower()}@svnit.ac.in", did, "01011990"))
+                (did, display_title, dept_type, h_block, req.icon or "🛠️"))
     conn.commit()
     conn.close()
-    return {
-        "success": True,
-        "message": f"Department '{display_title}' saved! Login ID: {did} | Password: {pwd}",
-        "departments": get_departments()
-    }
+    return {"success": True, "message": f"Department '{display_title}' saved.", "departments": list_departments()}
 
-# --- WARDENS & DEAN CONTROLS ---
-@app.get("/api/dean/wardens")
-def get_wardens():
-    conn = get_conn()
-    rows = db_exec(conn, "SELECT * FROM users WHERE role = 'Warden'").fetchall()
-    conn.close()
-    return [{k: v for k, v in dict(r).items() if k != "password"} for r in rows]
-
-@app.post("/api/dean/create-warden")
-def create_or_update_warden(req: WardenCreateReq):
-    uid = req.user_id.strip().upper().replace(" ", "_")
-    full_name = f"{req.hostel_block.strip()} Warden Office"
-    conn = get_conn()
-    if db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (uid,)).fetchone():
-        db_exec(conn, "UPDATE users SET password = ?, hostel_block = ?, full_name = ? WHERE UPPER(user_id) = ?",
-                (req.password.strip(), req.hostel_block.strip(), full_name, uid))
-    else:
-        db_exec(conn, "INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (uid, req.password.strip(), full_name, "Warden", "Chief Warden / Warden", "SVNIT", req.hostel_block.strip(), "-", "Warden Office", req.phone.strip(), f"{uid.lower()}@svnit.ac.in", "Hostel Office", "01011980"))
-    conn.commit()
-    conn.close()
-    return {"success": True, "message": f"Warden Portal '{uid}' saved for {req.hostel_block}!"}
-
-@app.post("/api/founder/create-club")
-@app.post("/api/dean/create-club")
-def create_club(req: ClubCreateReq):
-    cid = req.club_id.strip().upper().replace(" ", "_")
-    pwd = (req.password or "123").strip()
-    conn = get_conn()
-    if db_exec(conn, "SELECT * FROM clubs WHERE UPPER(club_id) = ?", (cid,)).fetchone():
-        conn.close()
-        raise HTTPException(status_code=400, detail=f"Club ID '{cid}' already exists.")
-    db_exec(conn, "INSERT INTO clubs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (cid, req.name.strip(), (req.mission or "").strip() or "Official Student Chapter of SVNIT Surat.",
-             (req.faculty_advisor or "").strip() or "To be updated by club", (req.head_coordinator or "").strip() or "To be updated by club",
-             "", "", "", json.dumps([]), json.dumps([])))
-    if db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (cid,)).fetchone():
-        db_exec(conn, "UPDATE users SET password = ? WHERE UPPER(user_id) = ?", (pwd, cid))
-    else:
-        db_exec(conn, "INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (cid, pwd, req.name.strip(), "ClubOrganizer", f"Club Portal ({cid})", "SVNIT", "All", "-", "SAC Office", "", f"{cid.lower()}@svnit.ac.in", "Student Society", "01012000"))
-    conn.commit()
-    conn.close()
-    return {"success": True, "message": f"Club '{req.name}' created! Login ID: {cid} | Password: {pwd}"}
-
-@app.post("/api/dean/reset-password")
-def reset_password(req: PasswordResetReq, admin_id: str = Query("DEAN")):
-    target_id = req.target_user_id.strip().upper()
-    conn = get_conn()
-    target = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (target_id,)).fetchone()
-    if not target:
-        conn.close()
-        raise HTTPException(status_code=404, detail=f"Account ID '{target_id}' not found.")
-    db_exec(conn, "UPDATE users SET password = ? WHERE UPPER(user_id) = ?", (req.new_password.strip(), target_id))
-    conn.commit()
-    conn.close()
-    return {"success": True, "message": f"Password updated for {target['full_name']} ({target['user_id']})"}
-
-# --- 6-FIELD STUDENT ONBOARDING ---
 @app.get("/api/warden/students")
-def get_hostel_students(hostel_block: str = "All"):
+def get_hostel_students(request: Request, hostel_block: str = "All"):
+    account = request.state.user
+    if account["role"] == "Warden":
+        hostel_block = account["hostel_block"]
     conn = get_conn()
     if hostel_block == "All":
         rows = db_exec(conn, "SELECT * FROM users WHERE role = 'Student'").fetchall()
     else:
         rows = db_exec(conn, "SELECT * FROM users WHERE role = 'Student' AND LOWER(hostel_block) = LOWER(?)", (hostel_block,)).fetchall()
     conn.close()
-    return [{k: v for k, v in dict(r).items() if k != "password"} for r in rows]
+    return [{k: v for k, v in dict(r).items() if k not in {"password", "dob"}} for r in rows]
 
 @app.post("/api/warden/add-student")
-def add_student_manual(req: StudentManualAddReq):
+def add_student_manual(req: StudentManualAddReq, request: Request):
     uid = req.user_id.strip().upper()
-    clean_dob = req.dob.strip().replace("-", "").replace("/", "")
+    hostel_block = request.state.user["hostel_block"]
+    email = f"{uid.lower()}@svnit.ac.in"
     conn = get_conn()
-    if db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (uid,)).fetchone():
-        db_exec(conn, "UPDATE users SET full_name = ?, hostel_block = ?, room = ?, department = ?, year = ?, dob = ?, password = ? WHERE UPPER(user_id) = ?",
-                (req.full_name.strip(), req.hostel_block.strip(), req.room.strip(), req.department.strip(), (req.year or "1st Year").strip(), clean_dob, clean_dob, uid))
+    existing = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (uid,)).fetchone()
+    if existing:
+        db_exec(conn, "UPDATE users SET full_name = ?, room = ?, department = ?, year = ?, email = ? WHERE UPPER(user_id) = ?",
+                (req.full_name.strip(), req.room.strip(), req.department.strip(), (req.year or "1st Year").strip(), email, uid))
     else:
-        db_exec(conn, "INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (uid, clean_dob, req.full_name.strip(), "Student", "Verified Resident", "SVNIT", req.hostel_block.strip(), (req.year or "1st Year").strip(), req.room.strip(), (req.phone or "").strip(), (req.email or f"{uid.lower()}@svnit.ac.in").strip(), req.department.strip(), clean_dob))
+        db_exec(conn, "INSERT INTO users (user_id, password, full_name, role, authority_title, institute_id, hostel_block, year, room, phone, email, department, dob) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (uid, "", req.full_name.strip(), "Student", "Verified Resident", "SVNIT", hostel_block, (req.year or "1st Year").strip(), req.room.strip(), "", email, req.department.strip(), ""))
     conn.commit()
     conn.close()
-    return {"success": True, "message": f"Student {req.full_name} ({uid}) saved! Password = DOB ({clean_dob})."}
+    return {"success": True, "message": f"Student {req.full_name} ({uid}) saved."}
 
 @app.post("/api/warden/upload-students")
-@app.post("/api/founder/upload-students")
-def upload_students_bulk(students: List[StudentManualAddReq]):
+def upload_students_bulk(students: List[StudentManualAddReq], request: Request):
+    account = request.state.user
     added, updated = 0, 0
     conn = get_conn()
     for s in students:
         uid = s.user_id.strip().upper()
         if not uid:
             continue
-        clean_dob = s.dob.strip().replace("-", "").replace("/", "")
-        if db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (uid,)).fetchone():
-            db_exec(conn, "UPDATE users SET full_name = ?, hostel_block = ?, room = ?, department = ?, year = ?, dob = ?, password = ? WHERE UPPER(user_id) = ?",
-                    (s.full_name.strip(), s.hostel_block.strip(), s.room.strip(), s.department.strip(), (s.year or "1st Year").strip(), clean_dob, clean_dob, uid))
+        hostel_block = account["hostel_block"] if account["role"] == "Warden" else s.hostel_block
+        email = f"{uid.lower()}@svnit.ac.in"
+        existing = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (uid,)).fetchone()
+        if existing:
+            db_exec(conn, "UPDATE users SET full_name = ?, hostel_block = ?, room = ?, department = ?, year = ?, email = ? WHERE UPPER(user_id) = ?",
+                    (s.full_name.strip(), hostel_block, s.room.strip(), s.department.strip(), (s.year or "1st Year").strip(), email, uid))
             updated += 1
         else:
-            db_exec(conn, "INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (uid, clean_dob, s.full_name.strip(), "Student", "Verified Resident", "SVNIT", s.hostel_block.strip(), (s.year or "1st Year").strip(), s.room.strip(), (s.phone or "").strip(), (s.email or f"{uid.lower()}@svnit.ac.in").strip(), s.department.strip(), clean_dob))
+            db_exec(conn, "INSERT INTO users (user_id, password, full_name, role, authority_title, institute_id, hostel_block, year, room, phone, email, department, dob) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (uid, "", s.full_name.strip(), "Student", "Verified Resident", "SVNIT", hostel_block, (s.year or "1st Year").strip(), s.room.strip(), "", email, s.department.strip(), ""))
             added += 1
     conn.commit()
     conn.close()
-    return {"success": True, "message": f"Bulk Upload Complete: {added} new students added, {updated} updated!"}
+    return {"success": True, "message": f"Bulk Upload Complete: {added} added, {updated} updated!"}
 
-@app.post("/api/warden/reset-student-password")
-def warden_reset_student(req: PasswordResetReq, warden_id: str = Query("CW_GAJJAR")):
-    conn = get_conn()
-    target = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (req.target_user_id.strip().upper(),)).fetchone()
-    if not target:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Student Roll No not found.")
-    default_dob = target["dob"]
-    db_exec(conn, "UPDATE users SET password = ? WHERE UPPER(user_id) = ?", (default_dob, target["user_id"]))
-    conn.commit()
-    conn.close()
-    return {"success": True, "message": f"Password for {target['full_name']} reset to DOB ({default_dob})!"}
-
-@app.post("/api/student/change-password")
-def student_change_password(req: StudentChangePassReq):
-    conn = get_conn()
-    student = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (req.student_id.strip().upper(),)).fetchone()
-    if not student:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Student not found.")
-    old_p = req.old_password.strip()
-    if student["password"] != old_p and student["dob"] != old_p:
-        conn.close()
-        raise HTTPException(status_code=400, detail="Current password or DOB is incorrect.")
-    db_exec(conn, "UPDATE users SET password = ? WHERE UPPER(user_id) = ?", (req.new_password.strip(), student["user_id"]))
-    conn.commit()
-    conn.close()
-    return {"success": True, "message": "Custom password saved successfully!"}
-
-# --- COMPLAINTS (Strictly Scoped to Hostel Block for Hostel Wings) ---
 @app.get("/api/complaints")
-def get_complaints(role: str = "Dean", user_id: str = "", hostel_block: str = "All", department: str = ""):
+def get_complaints(request: Request, wing: str = "", category: str = ""):
+    account = request.state.user
+    role = account["role"]
     conn = get_conn()
+    base_query = """
+        SELECT complaints.*,
+               COALESCE(NULLIF(complaints.wing, ''), users.wing, '') AS resolved_wing,
+               COALESCE(users.phone, '') AS student_phone
+        FROM complaints
+        LEFT JOIN users ON UPPER(users.user_id) = UPPER(complaints.student_id)
+    """
     if role == "Student":
-        rows = db_exec(conn, "SELECT * FROM complaints WHERE UPPER(student_id) = ? ORDER BY created_at DESC", (user_id.upper(),)).fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
-    if role == "Warden" and hostel_block != "All":
-        rows = db_exec(conn, "SELECT * FROM complaints WHERE LOWER(hostel_block) = LOWER(?) ORDER BY created_at DESC", (hostel_block,)).fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
-    if role == "Staff":
-        dept_key = (department or user_id).strip().upper()
+        rows = db_exec(conn, f"{base_query} WHERE UPPER(complaints.student_id) = ? ORDER BY complaints.created_at DESC", (account["user_id"].upper(),)).fetchall()
+    elif role == "Staff":
+        dept_key = (account["department"] or account["user_id"]).strip().upper()
         dept_row = db_exec(conn, "SELECT * FROM departments WHERE UPPER(id) = ?", (dept_key,)).fetchone()
-        dept_scope = dept_row["hostel_block"] if dept_row else hostel_block
-        rows = db_exec(conn, "SELECT * FROM complaints WHERE UPPER(category) LIKE ? OR UPPER(routed_to) LIKE ? ORDER BY created_at DESC", (f"%{dept_key}%", f"%{dept_key}%")).fetchall()
-        conn.close()
-        matched = [dict(r) for r in rows]
-        if dept_scope and dept_scope != "All":
-            matched = [c for c in matched if c["hostel_block"].lower() == dept_scope.lower()]
-        elif hostel_block and hostel_block != "All":
-            matched = [c for c in matched if c["hostel_block"].lower() == hostel_block.lower()]
-        return matched
-
-    rows = db_exec(conn, "SELECT * FROM complaints ORDER BY created_at DESC").fetchall()
+        if dept_row:
+            rows = db_exec(conn, f"{base_query} WHERE UPPER(complaints.category) = ? OR LOWER(complaints.routed_to) = LOWER(?) ORDER BY complaints.created_at DESC", (dept_key, dept_row["title"])).fetchall()
+        else:
+            rows = db_exec(conn, f"{base_query} WHERE UPPER(complaints.category) = ? ORDER BY complaints.created_at DESC", (dept_key,)).fetchall()
+    elif role == "Warden":
+        rows = db_exec(conn, f"{base_query} WHERE LOWER(complaints.hostel_block) = LOWER(?) ORDER BY complaints.created_at DESC", (account["hostel_block"],)).fetchall()
+    else:
+        rows = db_exec(conn, f"{base_query} ORDER BY complaints.created_at DESC").fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+
+    matched = [dict(r) for r in rows]
+    for item in matched:
+        item["wing"] = item.pop("resolved_wing", item.get("wing") or "")
+        item["phone"] = item.pop("student_phone", item.get("phone") or "")
+
+    if wing:
+        matched = [c for c in matched if c.get("wing") == wing]
+    if category:
+        cat_key = category.strip().casefold()
+        matched = [c for c in matched if (c.get("category") or "").casefold() == cat_key or (c.get("routed_to") or "").casefold() == cat_key]
+    return matched
 
 @app.post("/api/complaints")
-def create_complaint(req: ComplaintCreateReq):
+def create_complaint(req: ComplaintCreateReq, request: Request):
     conn = get_conn()
-    student = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (req.student_id.upper(),)).fetchone()
+    account = request.state.user
+    student = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ? AND role = 'Student'", (account["user_id"].upper(),)).fetchone()
     if not student:
         conn.close()
         raise HTTPException(status_code=404, detail="Student not found")
-    dept_obj = db_exec(conn, "SELECT * FROM departments WHERE UPPER(id) = ? OR LOWER(title) = LOWER(?)", (req.category.upper(), req.category)).fetchone()
-    routed_title = dept_obj["title"] if dept_obj else f"{req.category} Department"
-    cat_id = dept_obj["id"] if dept_obj else req.category
-
+    dept_obj = db_exec(conn, "SELECT * FROM departments WHERE (UPPER(id) = ? OR LOWER(title) = LOWER(?))", (req.category.upper(), req.category)).fetchone()
+    if not dept_obj:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Select a valid maintenance category.")
     ticket_id = f"TKT-{random.randint(100, 999)}"
     created_at = datetime.now().strftime("%Y-%m-%d, %I:%M %p")
-    db_exec(conn, "INSERT INTO complaints VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ticket_id, student["user_id"], student["full_name"], student["hostel_block"], student["room"], student["year"], student["department"], cat_id, req.summary, req.description, "Pending", routed_title, "", created_at, ""))
+    db_exec(conn, "INSERT INTO complaints VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ticket_id, student["user_id"], student["full_name"], student["hostel_block"], student["room"], student["year"], student["department"], dept_obj["id"], req.summary, req.description, "Pending", dept_obj["title"], "", created_at, "", student["wing"] or ""))
     conn.commit()
     conn.close()
-    return {"success": True, "ticket": {"ticket_id": ticket_id, "student_id": student["user_id"], "student_name": student["full_name"], "hostel_block": student["hostel_block"], "room": student["room"], "category": cat_id, "summary": req.summary, "description": req.description, "status": "Pending", "routed_to": routed_title, "staff_remark": "", "created_at": created_at, "resolved_at": ""}}
+    return {"success": True, "ticket": {"ticket_id": ticket_id, "summary": req.summary, "status": "Pending"}}
 
 @app.post("/api/complaints/staff-resolve")
-def staff_resolve(req: StaffResolveReq):
+def staff_resolve(req: StaffResolveReq, request: Request):
     resolved_at = datetime.now().strftime("%Y-%m-%d, %I:%M %p")
     conn = get_conn()
     db_exec(conn, "UPDATE complaints SET status = 'Awaiting Confirmation', staff_remark = ?, resolved_at = ? WHERE ticket_id = ?",
@@ -652,77 +758,18 @@ def staff_resolve(req: StaffResolveReq):
     conn.commit()
     row = db_exec(conn, "SELECT * FROM complaints WHERE ticket_id = ?", (req.ticket_id,)).fetchone()
     conn.close()
-    if not row:
-        raise HTTPException(status_code=404, detail="Ticket not found")
     return {"success": True, "ticket": dict(row)}
 
 @app.post("/api/complaints/student-verify")
-def student_verify(req: StudentVerifyReq):
+def student_verify(req: StudentVerifyReq, request: Request):
     new_status = "Completed" if req.satisfied else "Reopened"
     conn = get_conn()
     db_exec(conn, "UPDATE complaints SET status = ? WHERE ticket_id = ?", (new_status, req.ticket_id))
     conn.commit()
     row = db_exec(conn, "SELECT * FROM complaints WHERE ticket_id = ?", (req.ticket_id,)).fetchone()
     conn.close()
-    if not row:
-        raise HTTPException(status_code=404, detail="Ticket not found")
     return {"success": True, "ticket": dict(row)}
 
-@app.get("/api/complaints/export-pdf", response_class=HTMLResponse)
-def export_pdf(hostel_block: str = "All", from_date: str = "", to_date: str = ""):
-    conn = get_conn()
-    if hostel_block != "All":
-        rows = db_exec(conn, "SELECT * FROM complaints WHERE hostel_block = ?", (hostel_block,)).fetchall()
-    else:
-        rows = db_exec(conn, "SELECT * FROM complaints").fetchall()
-    conn.close()
-    tr_html = "".join([
-        f"<tr><td>{c['ticket_id']}</td><td>{c['student_name']} ({c['student_id']})</td><td>{c['hostel_block']} ({c['room']})</td><td>{c['routed_to']}</td><td>{c['summary']}</td><td>{c['status']}</td><td>{c['created_at']}</td></tr>"
-        for c in rows
-    ])
-    html = f"""
-    <html><head><title>SVNIT Grievance Report</title>
-    <style>body{{font-family:'Inter',Arial,sans-serif;padding:30px;color:#111827;}} table{{width:100%;border-collapse:collapse;margin-top:20px;}} th,td{{border:1px solid #d1d5db;padding:10px;text-align:left;font-size:13px;}} th{{background:#f3f4f6;}}</style>
-    </head><body onload="window.print()">
-    <h2>Sardar Vallabhbhai National Institute of Technology, Surat</h2>
-    <h3>Official Hostel Grievance Audit Report</h3>
-    <p><strong>Hostel Scope:</strong> {hostel_block} | <strong>Total Tickets:</strong> {len(rows)} | <strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
-    <table><thead><tr><th>Ticket ID</th><th>Resident</th><th>Hostel & Room</th><th>Department</th><th>Summary</th><th>Status</th><th>Timestamp</th></tr></thead>
-    <tbody>{tr_html}</tbody></table></body></html>
-    """
-    return HTMLResponse(content=html)
-
-@app.get("/api/unicore/events/export-pdf", response_class=HTMLResponse)
-def export_events_pdf(year: str = "2026", club_id: str = "All"):
-    conn = get_conn()
-    rows = db_exec(conn, "SELECT * FROM events WHERE date LIKE ? AND (status = 'Approved' OR status = 'Completed')", (f"{year}%",)).fetchall()
-    conn.close()
-    if club_id != "All":
-        rows = [e for e in rows if e["club_id"].upper() == club_id.upper()]
-    club_counts = {}
-    for e in rows:
-        club_counts[e["club_id"]] = club_counts.get(e["club_id"], 0) + 1
-    summary_rows = "".join([f"<tr><td><strong>{cid}</strong></td><td>{cnt} Events Conducted</td></tr>" for cid, cnt in club_counts.items()])
-    event_rows = "".join([
-        f"<tr><td>{e['event_id']}</td><td>{e['club_id']}</td><td>{e['title']}</td><td>{e['date']} ({e['start_time']}-{e['end_time']})</td><td>{e['venue']}</td><td>{len(json.loads(e['rsvps'] or '[]'))}</td><td>{e['status']}</td></tr>"
-        for e in rows
-    ])
-    html = f"""
-    <html><head><title>SVNIT Annual Club Events Report - {year}</title>
-    <style>body{{font-family:'Inter',Arial,sans-serif;padding:30px;color:#111827;}} table{{width:100%;border-collapse:collapse;margin-top:16px;margin-bottom:28px;}} th,td{{border:1px solid #d1d5db;padding:10px;text-align:left;font-size:13px;}} th{{background:#f3f4f6;}}</style>
-    </head><body onload="window.print()">
-    <h2>Sardar Vallabhbhai National Institute of Technology, Surat</h2>
-    <h3>Office of the Dean Student Welfare — Annual Events Report ({year})</h3>
-    <p><strong>Total Approved / Completed Events in {year}:</strong> {len(rows)} Events | <strong>Club Filter:</strong> {club_id}</p>
-    <h4>1. Club-Wise Event Breakdown</h4>
-    <table><thead><tr><th>Club Chapter</th><th>Total Events Conducted</th></tr></thead><tbody>{summary_rows}</tbody></table>
-    <h4>2. Complete Event Ledger</h4>
-    <table><thead><tr><th>Event ID</th><th>Club</th><th>Event Title</th><th>Date & Time</th><th>Venue</th><th>Student RSVPs</th><th>Status</th></tr></thead>
-    <tbody>{event_rows}</tbody></table></body></html>
-    """
-    return HTMLResponse(content=html)
-
-# --- CLUBS, EVENTS & NOTICES (Link-Based Zero-DB-Bloat Architecture) ---
 @app.get("/api/unicore/clubs")
 def get_clubs():
     conn = get_conn()
@@ -735,93 +782,6 @@ def get_clubs():
         d["gallery"] = json.loads(d["gallery"] or "[]")
         result.append(d)
     return result
-
-@app.post("/api/unicore/clubs/update-info")
-def update_club_info(req: ClubUpdateInfoReq):
-    conn = get_conn()
-    if not db_exec(conn, "SELECT * FROM clubs WHERE UPPER(club_id) = ?", (req.club_id.upper(),)).fetchone():
-        conn.close()
-        raise HTTPException(status_code=404, detail="Club not found")
-    db_exec(conn, "UPDATE clubs SET mission = ?, extra_dean_info = ? WHERE UPPER(club_id) = ?",
-            (req.mission, req.extra_dean_info, req.club_id.upper()))
-    if req.faculty_advisor is not None:
-        db_exec(conn, "UPDATE clubs SET faculty_advisor = ? WHERE UPPER(club_id) = ?", (req.faculty_advisor, req.club_id.upper()))
-    if req.head_coordinator is not None:
-        db_exec(conn, "UPDATE clubs SET head_coordinator = ? WHERE UPPER(club_id) = ?", (req.head_coordinator, req.club_id.upper()))
-    conn.commit()
-    row = db_exec(conn, "SELECT * FROM clubs WHERE UPPER(club_id) = ?", (req.club_id.upper(),)).fetchone()
-    conn.close()
-    res = dict(row)
-    res["members"] = json.loads(res["members"] or "[]")
-    res["gallery"] = json.loads(res["gallery"] or "[]")
-    return {"success": True, "club": res}
-
-@app.post("/api/unicore/clubs/add-member")
-def add_club_member(req: ClubMemberAddReq):
-    conn = get_conn()
-    row = db_exec(conn, "SELECT * FROM clubs WHERE UPPER(club_id) = ?", (req.club_id.upper(),)).fetchone()
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Club not found")
-    members = json.loads(row["members"] or "[]")
-    members.append({
-        "name": req.name.strip(),
-        "roll": req.roll.strip().upper(),
-        "position": req.position.strip(),
-        "phone": (req.phone or "").strip(),
-        "year": (req.year or "").strip(),
-        "department": (req.department or "").strip()
-    })
-    db_exec(conn, "UPDATE clubs SET members = ? WHERE UPPER(club_id) = ?", (json.dumps(members), req.club_id.upper()))
-    conn.commit()
-    row = db_exec(conn, "SELECT * FROM clubs WHERE UPPER(club_id) = ?", (req.club_id.upper(),)).fetchone()
-    conn.close()
-    res = dict(row)
-    res["members"] = json.loads(res["members"] or "[]")
-    res["gallery"] = json.loads(res["gallery"] or "[]")
-    return {"success": True, "club": res}
-
-@app.post("/api/unicore/clubs/remove-member")
-def remove_club_member(req: ClubMemberRemoveReq):
-    conn = get_conn()
-    row = db_exec(conn, "SELECT * FROM clubs WHERE UPPER(club_id) = ?", (req.club_id.upper(),)).fetchone()
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Club not found")
-    members = json.loads(row["members"] or "[]")
-    if 0 <= req.index < len(members):
-        members.pop(req.index)
-    db_exec(conn, "UPDATE clubs SET members = ? WHERE UPPER(club_id) = ?", (json.dumps(members), req.club_id.upper()))
-    conn.commit()
-    row = db_exec(conn, "SELECT * FROM clubs WHERE UPPER(club_id) = ?", (req.club_id.upper(),)).fetchone()
-    conn.close()
-    res = dict(row)
-    res["members"] = json.loads(res["members"] or "[]")
-    res["gallery"] = json.loads(res["gallery"] or "[]")
-    return {"success": True, "club": res}
-
-@app.post("/api/unicore/clubs/add-gallery")
-def add_club_gallery(req: ClubGalleryAddReq):
-    conn = get_conn()
-    row = db_exec(conn, "SELECT * FROM clubs WHERE UPPER(club_id) = ?", (req.club_id.upper(),)).fetchone()
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Club not found")
-    gallery = json.loads(row["gallery"] or "[]")
-    gallery.insert(0, {
-        "media_type": req.media_type,
-        "media_url": req.media_url.strip(),
-        "caption": req.caption.strip(),
-        "timestamp": datetime.now().strftime("%Y-%m-%d")
-    })
-    db_exec(conn, "UPDATE clubs SET gallery = ? WHERE UPPER(club_id) = ?", (json.dumps(gallery), req.club_id.upper()))
-    conn.commit()
-    row = db_exec(conn, "SELECT * FROM clubs WHERE UPPER(club_id) = ?", (req.club_id.upper(),)).fetchone()
-    conn.close()
-    res = dict(row)
-    res["members"] = json.loads(res["members"] or "[]")
-    res["gallery"] = json.loads(res["gallery"] or "[]")
-    return {"success": True, "club": res}
 
 @app.get("/api/unicore/events")
 def get_events():
@@ -838,107 +798,10 @@ def get_events():
         result.append(d)
     return result
 
-@app.post("/api/unicore/events/propose")
-def propose_event(req: EventRequisitionReq):
-    conn = get_conn()
-    app_events = db_exec(conn, "SELECT * FROM events WHERE date = ? AND status = 'Approved'", (req.date,)).fetchall()
-    clash = None
-    for ev in app_events:
-        if not (req.end_time <= ev["start_time"] or req.start_time >= ev["end_time"]):
-            clash = f"Note: Another event ({ev['club_id']}'s '{ev['title']}' at {ev['venue']}) is scheduled on {req.date} during {ev['start_time']}-{ev['end_time']}."
-            break
-    event_id = f"EVT-{random.randint(100, 999)}"
-    db_exec(conn, "INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (event_id, req.club_id.upper(), req.title, req.date, req.start_time, req.end_time, req.venue,
-             "Pending Dean Approval", req.submitted_by, req.description or "", req.budget or "Not Specified",
-             req.funding_source or "Institute / Self", req.chief_guest or "None", req.expected_attendance or "100+",
-             req.logistics_needs or "Standard Venue Setup", (req.image_url or "").strip(), (req.registration_link or "").strip(),
-             json.dumps(req.custom_fields or []), json.dumps([]), json.dumps([]), json.dumps({})))
-    conn.commit()
-    row = db_exec(conn, "SELECT * FROM events WHERE event_id = ?", (event_id,)).fetchone()
-    conn.close()
-    res = dict(row)
-    res["custom_fields"] = json.loads(res["custom_fields"] or "[]")
-    res["rsvps"] = json.loads(res["rsvps"] or "[]")
-    res["feedbacks"] = json.loads(res["feedbacks"] or "[]")
-    return {"success": True, "message": clash or "Event proposal submitted to Dean for approval!", "event": res}
-
-@app.post("/api/unicore/events/approve")
-def approve_event(event_id: str = Query(...), action: str = Query(...)):
-    conn = get_conn()
-    db_exec(conn, "UPDATE events SET status = ? WHERE event_id = ?", (action, event_id))
-    conn.commit()
-    row = db_exec(conn, "SELECT * FROM events WHERE event_id = ?", (event_id,)).fetchone()
-    conn.close()
-    if not row:
-        raise HTTPException(status_code=404, detail="Event not found")
-    res = dict(row)
-    res["custom_fields"] = json.loads(res["custom_fields"] or "[]")
-    res["rsvps"] = json.loads(res["rsvps"] or "[]")
-    res["feedbacks"] = json.loads(res["feedbacks"] or "[]")
-    return {"success": True, "event": res}
-
-@app.post("/api/unicore/events/rsvp")
-def rsvp_event(req: EventRsvpReq):
-    uid = req.student_id.strip().upper()
-    conn = get_conn()
-    row = db_exec(conn, "SELECT * FROM events WHERE event_id = ?", (req.event_id,)).fetchone()
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Event not found")
-    rsvps = json.loads(row["rsvps"] or "[]")
-    if uid in [x.upper() for x in rsvps]:
-        rsvps = [x for x in rsvps if x.upper() != uid]
-        attending = False
-    else:
-        rsvps.append(uid)
-        attending = True
-    db_exec(conn, "UPDATE events SET rsvps = ? WHERE event_id = ?", (json.dumps(rsvps), req.event_id))
-    conn.commit()
-    conn.close()
-    return {
-        "success": True,
-        "attending": attending,
-        "rsvps": rsvps,
-        "message": "RSVP Confirmed! You are marked as attending." if attending else "RSVP Cancelled."
-    }
-
-@app.post("/api/unicore/events/feedback")
-def submit_event_feedback(req: EventFeedbackReq):
-    conn = get_conn()
-    row = db_exec(conn, "SELECT * FROM events WHERE event_id = ?", (req.event_id,)).fetchone()
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Event not found")
-    feedbacks = json.loads(row["feedbacks"] or "[]")
-    feedbacks.append({"student_id": req.student_id.upper(), "rating": req.rating, "review": req.review})
-    all_r = [f["rating"] for f in feedbacks]
-    avg_r = round(sum(all_r) / len(all_r), 1)
-    rsvps = json.loads(row["rsvps"] or "[]")
-    ai_audit = {
-        "total_attendees": len(rsvps),
-        "average_rating": avg_r,
-        "sentiment": "Positive" if avg_r >= 4 else "Constructive"
-    }
-    db_exec(conn, "UPDATE events SET feedbacks = ?, ai_audit = ? WHERE event_id = ?",
-            (json.dumps(feedbacks), json.dumps(ai_audit), req.event_id))
-    conn.commit()
-    row = db_exec(conn, "SELECT * FROM events WHERE event_id = ?", (req.event_id,)).fetchone()
-    conn.close()
-    res = dict(row)
-    res["custom_fields"] = json.loads(res["custom_fields"] or "[]")
-    res["rsvps"] = json.loads(res["rsvps"] or "[]")
-    res["feedbacks"] = json.loads(res["feedbacks"] or "[]")
-    res["ai_audit"] = json.loads(res["ai_audit"] or "{}")
-    return {"success": True, "event": res}
-
 @app.get("/api/notices")
-def get_notices(role: str = "Dean"):
+def get_notices(request: Request):
     conn = get_conn()
-    if role == "Student":
-        rows = db_exec(conn, "SELECT * FROM notices WHERE status = 'Approved' ORDER BY created_at DESC").fetchall()
-    else:
-        rows = db_exec(conn, "SELECT * FROM notices ORDER BY created_at DESC").fetchall()
+    rows = db_exec(conn, "SELECT * FROM notices ORDER BY created_at DESC").fetchall()
     conn.close()
     result = []
     for r in rows:
@@ -946,32 +809,3 @@ def get_notices(role: str = "Dean"):
         d["custom_fields"] = json.loads(d["custom_fields"] or "[]")
         result.append(d)
     return result
-
-@app.post("/api/notices/propose")
-def propose_notice(req: NoticeCreateReq):
-    notice_id = f"NOT-{random.randint(500, 999)}"
-    created_at = datetime.now().strftime("%Y-%m-%d")
-    conn = get_conn()
-    db_exec(conn, "INSERT INTO notices VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (notice_id, req.club_id.upper(), req.title, req.message, req.target_branch, req.target_year,
-             (req.image_url or "").strip(), (req.registration_link or "").strip(), json.dumps(req.custom_fields or []),
-             "Pending Dean Approval", created_at))
-    conn.commit()
-    row = db_exec(conn, "SELECT * FROM notices WHERE notice_id = ?", (notice_id,)).fetchone()
-    conn.close()
-    res = dict(row)
-    res["custom_fields"] = json.loads(res["custom_fields"] or "[]")
-    return {"success": True, "notice": res, "message": "Notice submitted to Dean for approval!"}
-
-@app.post("/api/notices/approve")
-def approve_notice(notice_id: str = Query(...), action: str = Query(...)):
-    conn = get_conn()
-    db_exec(conn, "UPDATE notices SET status = ? WHERE notice_id = ?", (action, notice_id))
-    conn.commit()
-    row = db_exec(conn, "SELECT * FROM notices WHERE notice_id = ?", (notice_id,)).fetchone()
-    conn.close()
-    if not row:
-        raise HTTPException(status_code=404, detail="Notice not found")
-    res = dict(row)
-    res["custom_fields"] = json.loads(res["custom_fields"] or "[]")
-    return {"success": True, "notice": res}
