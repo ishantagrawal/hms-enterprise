@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../api';
+import { getCached, setCached, clearCache } from '../cache';
 
 export default function StudentPortal({ user, apiUrl }) {
   const [page, setPage] = useState('home');
-  const [dataLoading, setDataLoading] = useState(true);
-  const [complaints, setComplaints] = useState([]);
-  const [departments, setDepartments] = useState([]);
-  const [events, setEvents] = useState([]);
-  const [clubs, setClubs] = useState([]);
-  const [notices, setNotices] = useState([]);
-  const [ads, setAds] = useState([]);
+  const [dataLoading, setDataLoading] = useState(false);
+  const [complaints, setComplaints] = useState(getCached(`complaints_${user.user_id}`) || []);
+  const [departments, setDepartments] = useState(getCached(`departments_${user.hostel_block}`) || []);
+  const [events, setEvents] = useState(getCached('events') || []);
+  const [clubs, setClubs] = useState(getCached('clubs') || []);
+  const [notices, setNotices] = useState(getCached('notices') || []);
+  const [ads, setAds] = useState(getCached('ads') || []);
   const [adIdx, setAdIdx] = useState(0);
   const [msg, setMsg] = useState(null);
 
@@ -33,7 +34,22 @@ export default function StudentPortal({ user, apiUrl }) {
 
   const isDayScholar = (user?.hostel_block || '').toLowerCase() === 'day scholar';
 
-  const loadStudentData = useCallback(async () => {
+  const loadStudentData = useCallback(async (force = false) => {
+    const cKey = `complaints_${user.user_id}`;
+    const dKey = `departments_${user.hostel_block}`;
+    
+    if (!force && getCached('events') && getCached(cKey)) {
+      setComplaints(getCached(cKey));
+      setDepartments(getCached(dKey));
+      setEvents(getCached('events'));
+      setClubs(getCached('clubs'));
+      setNotices(getCached('notices'));
+      setAds(getCached('ads'));
+      return;
+    }
+
+    if (!force && events.length === 0) setDataLoading(true);
+
     try {
       const [cRes, dRes, eRes, clRes, nRes, adRes] = await Promise.all([
         apiFetch(`${apiUrl}/api/complaints?role=Student&user_id=${user.user_id}`),
@@ -43,22 +59,44 @@ export default function StudentPortal({ user, apiUrl }) {
         apiFetch(`${apiUrl}/api/notices?role=Student`),
         apiFetch(`${apiUrl}/api/ads`)
       ]);
-      if (cRes.ok) setComplaints(await cRes.json());
-      if (dRes.ok) {
-        const dList = await dRes.json();
-        setDepartments(dList);
-        if (dList.length > 0) setCategory(dList[0].id);
+
+      if (cRes.ok) {
+        const d = await cRes.json();
+        setComplaints(d);
+        setCached(cKey, d);
       }
-      if (eRes.ok) setEvents(await eRes.json());
-      if (clRes.ok) setClubs(await clRes.json());
-      if (nRes.ok) setNotices(await nRes.json());
-      if (adRes.ok) setAds(await adRes.json());
+      if (dRes.ok) {
+        const d = await dRes.json();
+        setDepartments(d);
+        setCached(dKey, d);
+        if (d.length > 0 && !category) setCategory(d[0].id);
+      }
+      if (eRes.ok) {
+        const d = await eRes.json();
+        setEvents(d);
+        setCached('events', d);
+      }
+      if (clRes.ok) {
+        const d = await clRes.json();
+        setClubs(d);
+        setCached('clubs', d);
+      }
+      if (nRes.ok) {
+        const d = await nRes.json();
+        setNotices(d);
+        setCached('notices', d);
+      }
+      if (adRes.ok) {
+        const d = await adRes.json();
+        setAds(d);
+        setCached('ads', d);
+      }
     } catch (e) {
       console.error(e);
     } finally {
       setDataLoading(false);
     }
-  }, [apiUrl, user.user_id, user.hostel_block]);
+  }, [apiUrl, user.user_id, user.hostel_block, events.length, category]);
 
   useEffect(() => { loadStudentData(); }, [loadStudentData]);
 
@@ -72,26 +110,37 @@ export default function StudentPortal({ user, apiUrl }) {
 
   const handleCreateComplaint = async (e) => {
     e.preventDefault();
-    if (submitting) return; // Prevent spam double-clicks
+    if (submitting) return;
     setSubmitting(true);
+    
+    // OPTIMISTIC UI: Instantly add ticket to state & navigate
+    const tempTicket = {
+      ticket_id: `TKT-${Math.floor(Math.random() * 900 + 100)}`,
+      summary,
+      description,
+      status: 'Pending',
+      routed_to: category,
+      created_at: 'Just now',
+      wing: user.wing || '',
+      room: user.room || ''
+    };
+    
+    setComplaints([tempTicket, ...complaints]);
+    setSummary('');
+    setDescription('');
+    setMsg(`✅ Grievance submitted successfully!`);
+    setPage('my_complaints');
+    clearCache();
+
     try {
-      const res = await apiFetch(`${apiUrl}/api/complaints`, {
+      await apiFetch(`${apiUrl}/api/complaints`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ student_id: user.user_id, category, summary, description })
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setMsg(`✅ Grievance ${data.ticket.ticket_id} submitted successfully!`);
-        setSummary('');
-        setDescription('');
-        await loadStudentData();
-        setPage('my_complaints');
-      } else {
-        setMsg(`❌ ${data.detail || 'Could not submit grievance.'}`);
-      }
+      loadStudentData(true);
     } catch (err) {
-      setMsg('❌ Network error. Please try again.');
+      setMsg('❌ Network error syncing complaint.');
     } finally {
       setSubmitting(false);
     }
@@ -106,7 +155,8 @@ export default function StudentPortal({ user, apiUrl }) {
       });
       if (res.ok) {
         setMsg('🗑️ Complaint deleted successfully.');
-        loadStudentData();
+        clearCache();
+        loadStudentData(true);
       }
     } catch (err) {
       setMsg('❌ Could not delete complaint.');
@@ -121,7 +171,8 @@ export default function StudentPortal({ user, apiUrl }) {
     });
     if (res.ok) {
       setMsg(satisfied ? '✅ Marked Resolved & Closed!' : '🔄 Reopened for maintenance!');
-      loadStudentData();
+      clearCache();
+      loadStudentData(true);
       setPage('my_complaints');
     }
   };
@@ -137,6 +188,7 @@ export default function StudentPortal({ user, apiUrl }) {
       setMsg(data.message);
       setEvents(events.map((ev) => (ev.event_id === eventId ? { ...ev, rsvps: data.rsvps } : ev)));
       setSelectedEvent((prev) => (prev ? { ...prev, rsvps: data.rsvps } : null));
+      clearCache();
     }
   };
 
@@ -152,7 +204,8 @@ export default function StudentPortal({ user, apiUrl }) {
       setMsg('⭐ Review submitted!');
       setFeedbackReview('');
       setSelectedEvent(data.event);
-      loadStudentData();
+      clearCache();
+      loadStudentData(true);
     }
   };
 
@@ -189,9 +242,6 @@ export default function StudentPortal({ user, apiUrl }) {
             <div className="ptm-spinner-wheel" />
             <div style={{ fontWeight: 700, color: '#002970', fontSize: '14px', marginTop: '12px' }}>
               Loading your student portal...
-            </div>
-            <div style={{ fontSize: '12px', color: '#6B7280', marginTop: '4px' }}>
-              Fetching campus events, clubs, and notices...
             </div>
           </div>
         ) : (
