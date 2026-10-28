@@ -5,12 +5,56 @@ import ClubPortal from './components/ClubPortal';
 import StudentPortal from './components/StudentPortal';
 import StaffPortal from './components/StaffPortal';
 import FounderPortal from './components/FounderPortal';
-import { apiFetch } from './api';
+import { apiFetch, API_URL } from './api';
 
 window.GLOBAL_SILICON_VALLEY_CSS = '';
 
-const API_URL = 'https://api.svnitcampus.in';
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '312566505039-bvh0tfh4gao8bi6jqs65fkgni7pbn5bn.apps.googleusercontent.com';
+
+const DEFAULT_SVNIT_HOSTELS = [
+  'Atal Bihari Vajpayee Bhawan',
+  'Bhabha Bhawan',
+  'Gajjar Bhawan',
+  'Mother Teresa Bhawan',
+  'Nehru Bhawan',
+  'Raman Bhawan',
+  'Sarabhai Bhawan',
+  'Swami Vivekananda Bhawan',
+  'Tagore Bhawan'
+];
+
+const QUICK_AUTHORITY_ACCOUNTS = [
+  { group: 'Institute Administration', id: 'DEAN', label: 'DEAN — Dean Student Welfare' },
+  { group: 'Institute Administration', id: 'FOUNDER', label: 'FOUNDER — Platform & Sponsor Admin' },
+  { group: 'Hostel Chief Wardens (9 Bhawans)', id: 'CW_GAJJAR', label: 'CW_GAJJAR — Gajjar Bhawan Warden' },
+  { group: 'Hostel Chief Wardens (9 Bhawans)', id: 'CW_BHABHA', label: 'CW_BHABHA — Bhabha Bhawan Warden' },
+  { group: 'Hostel Chief Wardens (9 Bhawans)', id: 'CW_SVB', label: 'CW_SVB — Swami Vivekananda Bhawan Warden' },
+  { group: 'Hostel Chief Wardens (9 Bhawans)', id: 'CW_ABVB', label: 'CW_ABVB — Atal Bihari Vajpayee Bhawan Warden' },
+  { group: 'Hostel Chief Wardens (9 Bhawans)', id: 'CW_MTB', label: 'CW_MTB — Mother Teresa Bhawan Warden' },
+  { group: 'Hostel Chief Wardens (9 Bhawans)', id: 'CW_NEHRU', label: 'CW_NEHRU — Nehru Bhawan Warden' },
+  { group: 'Hostel Chief Wardens (9 Bhawans)', id: 'CW_TAGORE', label: 'CW_TAGORE — Tagore Bhawan Warden' },
+  { group: 'Hostel Chief Wardens (9 Bhawans)', id: 'CW_SARABHAI', label: 'CW_SARABHAI — Sarabhai Bhawan Warden' },
+  { group: 'Hostel Chief Wardens (9 Bhawans)', id: 'CW_RAMAN', label: 'CW_RAMAN — Raman Bhawan Warden' },
+  { group: 'Official SVNIT Clubs & Chapters', id: 'ACM', label: 'ACM — ACM Student Chapter SVNIT' },
+  { group: 'Official SVNIT Clubs & Chapters', id: 'DRISHTI', label: 'DRISHTI — Robotics & Innovation Club' },
+  { group: 'Official SVNIT Clubs & Chapters', id: 'GDSC', label: 'GDSC — Google Developer Student Club' },
+  { group: 'Official SVNIT Clubs & Chapters', id: 'CHRD', label: 'CHRD — Cultural, Music, Dance & Arts' },
+  { group: 'Official SVNIT Clubs & Chapters', id: 'LAC', label: 'LAC — Literary & Debating Club' },
+  { group: 'Official SVNIT Clubs & Chapters', id: 'SCOSH', label: 'SCOSH — Science & Humanities Society' },
+  { group: 'Official SVNIT Clubs & Chapters', id: 'SAE', label: 'SAE — SAE Collegiate Motorsports Club' },
+  { group: 'Official SVNIT Clubs & Chapters', id: 'CES', label: 'CES — Civil Engineering Society (Kaizen)' },
+  { group: 'Official SVNIT Clubs & Chapters', id: 'EES', label: 'EES — Electrical Engineering Society' },
+  { group: 'Official SVNIT Clubs & Chapters', id: 'ISF', label: 'ISF — IETE Students Forum (ECE)' },
+  { group: 'Official SVNIT Clubs & Chapters', id: 'CHES', label: 'CHES — Chemical Engineering Society (AIChE)' },
+  { group: 'Official SVNIT Clubs & Chapters', id: 'CEV', label: 'CEV — Cutting Edge Visionaries' },
+  { group: 'Official SVNIT Clubs & Chapters', id: 'RENESA', label: 'RENESA — Official Campus Media & Magazine' },
+  { group: 'Official SVNIT Clubs & Chapters', id: 'MALANG', label: 'MALANG — Dramatics & Street Play Club' },
+  { group: 'Official SVNIT Clubs & Chapters', id: 'NSS', label: 'NSS — National Service Scheme SVNIT' },
+  { group: 'Central Maintenance Wings', id: 'ELECTRICITY', label: 'ELECTRICITY — Central Electrical Maintenance' },
+  { group: 'Central Maintenance Wings', id: 'CCC_LAN', label: 'CCC_LAN — Central Internet / LAN Wing' },
+  { group: 'Central Maintenance Wings', id: 'WATER_PLUMBING', label: 'WATER_PLUMBING — Central Water & Plumbing' },
+  { group: 'Central Maintenance Wings', id: 'CARPENTRY', label: 'CARPENTRY — Central Carpentry Wing' }
+];
 
 function ProfileRow({ label, value }) {
   return (
@@ -25,20 +69,23 @@ function ProfileRow({ label, value }) {
 
 function profileDraftFromUser(user) {
   return {
-    hostel_block: user.hostel_block || '',
-    wing: user.wing || '',
-    room: user.room || '',
-    phone: user.phone || ''
+    hostel_block: user?.hostel_block || '',
+    wing: user?.wing || '',
+    room: user?.room || '',
+    phone: user?.phone || ''
   };
 }
 
 export default function App() {
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
+  const [loginMode, setLoginMode] = useState('student'); // 'student' | 'authority'
+  const [loginId, setLoginId] = useState('DEAN');
+  const [loginPass, setLoginPass] = useState('');
   const [loginError, setLoginError] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [serverProgress, setServerProgress] = useState(0);
-  const [hostels, setHostels] = useState([]);
+  const [loadingText, setLoadingText] = useState('Connecting to SVNIT server...');
+  const [hostels, setHostels] = useState(DEFAULT_SVNIT_HOSTELS);
   const [profileDraft, setProfileDraft] = useState({ hostel_block: '', wing: '', room: '', phone: '' });
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileError, setProfileError] = useState('');
@@ -47,8 +94,22 @@ export default function App() {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
 
+  // Pre-warm the Render backend immediately when the app loads
+  useEffect(() => {
+    fetch(`${API_URL}/`).catch(() => {});
+    fetch(`${API_URL}/api/hostels`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((list) => {
+        if (Array.isArray(list) && list.length > 0) {
+          setHostels(list);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   const handleGoogleCredential = useCallback(async (credential) => {
     setLoginError(null);
+    setLoadingText('Verifying your SVNIT Google account...');
     setLoading(true);
     try {
       const res = await fetch(`${API_URL}/api/auth/google`, {
@@ -60,7 +121,7 @@ export default function App() {
       if (!res.ok || !data.success) {
         throw new Error(data.detail || 'Google sign-in failed.');
       }
-      localStorage.setItem('hms_google_credential', credential);
+      localStorage.setItem('hms_google_credential', data.token || credential);
       localStorage.setItem('hms_user', JSON.stringify(data.user));
       setProfileDraft(profileDraftFromUser(data.user));
       setUser(data.user);
@@ -71,43 +132,79 @@ export default function App() {
     }
   }, []);
 
+  const handlePasswordLogin = async (e) => {
+    e.preventDefault();
+    setLoginError(null);
+    setLoadingText('Signing in to authority portal...');
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: loginId.trim().toUpperCase(), password: loginPass })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.detail || 'Invalid User ID or Password.');
+      }
+      localStorage.setItem('hms_google_credential', data.token);
+      localStorage.setItem('hms_user', JSON.stringify(data.user));
+      setProfileDraft(profileDraftFromUser(data.user));
+      setUser(data.user);
+      setLoginPass('');
+    } catch (error) {
+      setLoginError(error.message || 'Could not sign in. Please check your credentials.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     const restoreSession = async () => {
       const credential = localStorage.getItem('hms_google_credential');
-      if (credential) {
+      const cachedUser = localStorage.getItem('hms_user');
+      if (credential && cachedUser) {
         try {
-          const res = await apiFetch(`${API_URL}/api/auth/me`);
-          if (!res.ok) throw new Error('Google session expired.');
-          const data = await res.json();
-          localStorage.setItem('hms_user', JSON.stringify(data.user));
-          setProfileDraft(profileDraftFromUser(data.user));
-          setUser(data.user);
+          const parsed = JSON.parse(cachedUser);
+          setProfileDraft(profileDraftFromUser(parsed));
+          setUser(parsed);
         } catch {
-          localStorage.removeItem('hms_google_credential');
           localStorage.removeItem('hms_user');
         }
-      } else {
-        localStorage.removeItem('hms_user');
+        // Validate in background so UI opens immediately
+        apiFetch(`${API_URL}/api/auth/me`)
+          .then(async (res) => {
+            if (!res.ok) throw new Error('Session expired');
+            const data = await res.json();
+            localStorage.setItem('hms_user', JSON.stringify(data.user));
+            setProfileDraft(profileDraftFromUser(data.user));
+            setUser(data.user);
+          })
+          .catch(() => {
+            localStorage.removeItem('hms_google_credential');
+            localStorage.removeItem('hms_user');
+            setUser(null);
+          });
       }
       setAuthReady(true);
     };
     restoreSession();
+
     const handleBeforeInstallPrompt = (e) => {
       e.preventDefault();
       setDeferredPrompt(e);
     };
     const handleGoogleScriptError = () => {
-      setLoginError('Google Sign-In could not load. Check your connection and refresh the page.');
+      setLoginError('Google Sign-In could not load. Check your internet connection and refresh.');
     };
     const handleAuthExpired = () => {
       setUser(null);
       setShowProfile(false);
-      setLoginError('Your Google session expired. Please sign in again.');
+      setLoginError('Your session expired. Please sign in again.');
     };
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     window.addEventListener('google-identity-error', handleGoogleScriptError);
     window.addEventListener('hms-auth-expired', handleAuthExpired);
-    if (window.googleIdentityLoadFailed) handleGoogleScriptError();
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('google-identity-error', handleGoogleScriptError);
@@ -116,7 +213,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!authReady || user || loading) return undefined;
+    if (!authReady || user || loading || loginMode !== 'student') return undefined;
     const renderGoogleButton = () => {
       if (!window.google?.accounts?.id) return false;
       window.google.accounts.id.initialize({
@@ -131,7 +228,7 @@ export default function App() {
           size: 'large',
           shape: 'pill',
           text: 'signin_with',
-          width: 320
+          width: 300
         });
       }
       return true;
@@ -142,29 +239,7 @@ export default function App() {
       return () => script?.removeEventListener('load', renderGoogleButton);
     }
     return undefined;
-  }, [authReady, user, loading, handleGoogleCredential]);
-
-  useEffect(() => {
-    if (user?.role !== 'Student') return;
-    const incomplete = !user.hostel_block || !user.wing || !user.room || !user.phone;
-    if (!incomplete) return;
-    apiFetch(`${API_URL}/api/hostels`)
-      .then(async (res) => {
-        if (!res.ok) throw new Error('Could not load the SVNIT hostel list.');
-        setHostels(await res.json());
-        setProfileError('');
-      })
-      .catch((error) => setProfileError(error.message));
-  }, [user]);
-
-  useEffect(() => {
-    let t;
-    if (loading) {
-      setServerProgress(15);
-      t = setInterval(() => setServerProgress((p) => (p >= 92 ? p : p + 14)), 350);
-    } else setServerProgress(0);
-    return () => clearInterval(t);
-  }, [loading]);
+  }, [authReady, user, loading, loginMode, handleGoogleCredential]);
 
   const handleInstallClick = async () => {
     if (deferredPrompt) {
@@ -207,7 +282,19 @@ export default function App() {
     setShowProfile(false);
   };
 
-  if (!authReady) return null;
+  if (!authReady) {
+    return (
+      <div className="ptm-root">
+        <style>{PAYTM_APPLE_CSS}</style>
+        <div className="ptm-login-screen">
+          <div className="ptm-wheel-box">
+            <div className="ptm-spinner-wheel" />
+            <div style={{ fontWeight: 700, color: '#002970', marginTop: '12px' }}>Loading svnitcampus...</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const isFounder = user?.role === 'Founder' || user?.user_id === 'FOUNDER';
   const studentProfileIncomplete = user?.role === 'Student' && (!user.hostel_block || !user.wing || !user.room || !user.phone);
@@ -224,7 +311,7 @@ export default function App() {
           <div className="ptm-page-wrap">
             <div className="ptm-drill-header">
               <button className="ptm-back-btn" onClick={() => setShowInstallHelp(false)}>←</button>
-              <h1 className="ptm-page-title">Install SVNIT HMS App</h1>
+              <h1 className="ptm-page-title">Install svnitcampus App</h1>
             </div>
             <div className="ptm-card">
               <div className="ptm-section-title">Download on Your Phone</div>
@@ -232,7 +319,7 @@ export default function App() {
                 <div className="ptm-list-row">
                   <div className="ptm-avatar-pastel" style={{ background: '#E0F2FE', color: '#0369A1' }}>🤖</div>
                   <div className="ptm-list-main">
-                    <div className="ptm-list-title">Android (Chrome)</div>
+                    <div className="ptm-list-title">Android (Chrome / Brave)</div>
                     <div className="ptm-list-sub">Tap the 3-dots menu (⋮) at the top-right and select "Install App" or "Add to Home Screen".</div>
                   </div>
                 </div>
@@ -254,33 +341,116 @@ export default function App() {
         <div className="ptm-login-screen">
           <div className="ptm-login-box">
             <div className="ptm-login-top-row">
-              <span className="ptm-brand-pill">SVNIT SURAT</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <img
+                  src="https://upload.wikimedia.org/wikipedia/en/1/1b/NIT_Surat_Logo.svg"
+                  alt="SVNIT"
+                  style={{ width: '32px', height: '32px', objectFit: 'contain' }}
+                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                />
+                <span className="ptm-brand-pill">SVNIT SURAT</span>
+              </div>
               <button type="button" className="ptm-install-chip" onClick={handleInstallClick}>
                 📲 Install App
               </button>
             </div>
-            <h1 className="ptm-login-heading">Campus & Hostel Portal</h1>
-            <p className="ptm-login-sub">Sign in with your official SVNIT Google account (@svnit.ac.in)</p>
+
+            <h1 className="ptm-login-heading">svnitcampus Portal</h1>
+            <p className="ptm-login-sub">Official Campus, Club & Hostel Management System</p>
+
+            {/* Login Mode Tabs */}
+            <div className="ptm-login-tabs">
+              <button
+                type="button"
+                className={`ptm-login-tab ${loginMode === 'student' ? 'active' : ''}`}
+                onClick={() => { setLoginMode('student'); setLoginError(null); }}
+                disabled={loading}
+              >
+                🎓 Student Login
+              </button>
+              <button
+                type="button"
+                className={`ptm-login-tab ${loginMode === 'authority' ? 'active' : ''}`}
+                onClick={() => { setLoginMode('authority'); setLoginError(null); }}
+                disabled={loading}
+              >
+                🔐 Admin / Club / Staff
+              </button>
+            </div>
 
             {loginError && <div className="ptm-alert-error">{loginError}</div>}
 
-            {loading ? (
-              <div className="ptm-loader-card">
-                <div className="ptm-row-between" style={{ marginBottom: '8px' }}>
-                  <span style={{ fontWeight: 600, color: '#374151', fontSize: '13px' }}>Connecting to server...</span>
-                  <span style={{ fontWeight: 800, color: '#002970', fontSize: '13px' }}>{serverProgress}%</span>
+            {/* Rotating Buffering Wheel Loader (Prevents any button overlap!) */}
+            {loading && (
+              <div className="ptm-wheel-box">
+                <div className="ptm-spinner-wheel" />
+                <div style={{ fontWeight: 700, color: '#002970', fontSize: '14px', marginTop: '12px' }}>
+                  {loadingText}
                 </div>
-                <div className="ptm-progress-bar">
-                  <div className="ptm-progress-fill" style={{ width: `${serverProgress}%` }} />
+                <div style={{ fontSize: '12px', color: '#6B7280', marginTop: '4px' }}>
+                  Please wait a moment while we prepare your dashboard...
                 </div>
               </div>
-            ) : (
-              <div className="ptm-form-stack">
+            )}
+
+            {/* STUDENT GOOGLE LOGIN */}
+            <div style={{ display: !loading && loginMode === 'student' ? 'block' : 'none' }}>
+              <div className="ptm-form-stack" style={{ alignItems: 'center', padding: '10px 0 4px 0' }}>
                 <div id="google-signin-button" style={{ minHeight: '44px', display: 'flex', justifyContent: 'center' }} />
-                <p className="ptm-list-sub" style={{ textAlign: 'center' }}>
-                  Use your institute Google account to continue.
+                <p className="ptm-list-sub" style={{ textAlign: 'center', marginTop: '6px' }}>
+                  Sign in with your institute Google account (<strong>@svnit.ac.in</strong> or <strong>@*.svnit.ac.in</strong>)
                 </p>
               </div>
+            </div>
+
+            {/* DEAN / WARDEN / CLUB / STAFF PASSWORD LOGIN */}
+            {!loading && loginMode === 'authority' && (
+              <form onSubmit={handlePasswordLogin} className="ptm-form-stack">
+                <div>
+                  <label className="ptm-label">Quick Select Official Portal Role / Club</label>
+                  <select
+                    className="ptm-input"
+                    value={loginId}
+                    onChange={(e) => setLoginId(e.target.value)}
+                  >
+                    {['Institute Administration', 'Hostel Chief Wardens (9 Bhawans)', 'Official SVNIT Clubs & Chapters', 'Central Maintenance Wings'].map((grp) => (
+                      <optgroup key={grp} label={grp}>
+                        {QUICK_AUTHORITY_ACCOUNTS.filter((x) => x.group === grp).map((item) => (
+                          <option key={item.id} value={item.id}>{item.label}</option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="ptm-label">Or Type Login ID Manually</label>
+                  <input
+                    type="text"
+                    className="ptm-input"
+                    placeholder="e.g. DEAN, CW_GAJJAR, ACM, DRISHTI"
+                    value={loginId}
+                    onChange={(e) => setLoginId(e.target.value.toUpperCase())}
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="ptm-label">Password</label>
+                  <input
+                    type="password"
+                    className="ptm-input"
+                    placeholder="Enter authority password"
+                    value={loginPass}
+                    onChange={(e) => setLoginPass(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <button type="submit" className="ptm-btn-primary">
+                  Sign In to Official Portal →
+                </button>
+              </form>
             )}
           </div>
         </div>
@@ -292,7 +462,7 @@ export default function App() {
                 <div className="ptm-user-avatar">{initials}</div>
                 <div className="ptm-header-text">
                   <div className="ptm-header-title">
-                    SVNIT <span style={{ color: '#00BAF2' }}>HMS</span>
+                    svnit<span style={{ color: '#00BAF2' }}>campus</span>
                   </div>
                   <div className="ptm-header-sub">
                     {user.full_name}
@@ -320,6 +490,7 @@ export default function App() {
             {user.role === 'ClubOrganizer' && <ClubPortal user={user} apiUrl={API_URL} />}
             {user.role === 'Staff' && <StaffPortal user={user} apiUrl={API_URL} />}
           </main>
+
           {showProfile && !studentProfileIncomplete && (
             <div className="ptm-modal-backdrop" onClick={() => setShowProfile(false)}>
               <section className="ptm-modal-card" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title" onClick={(event) => event.stopPropagation()}>
@@ -331,17 +502,17 @@ export default function App() {
                   {user.role === 'Student' ? (
                     <>
                       <ProfileRow label="Academic Year" value={user.year || 'Not provided'} />
-                      <ProfileRow label="Branch" value={user.department || 'Not provided'} />
-                      <ProfileRow label="Hostel" value={user.hostel_block || 'Not set'} />
+                      <ProfileRow label="Department / Branch" value={user.department || 'Not provided'} />
+                      <ProfileRow label="Hostel Bhawan" value={user.hostel_block || 'Not set'} />
                       <ProfileRow label="Wing" value={user.wing || 'Not set'} />
-                      <ProfileRow label="Room" value={user.room || 'Not set'} />
-                      <ProfileRow label="Mobile" value={user.phone || 'Not set'} />
+                      <ProfileRow label="Room Number" value={user.room || 'Not set'} />
+                      <ProfileRow label="Mobile Number" value={user.phone || 'Not set'} />
                     </>
                   ) : (
                     <>
                       <ProfileRow label="Role" value={user.role} />
-                      <ProfileRow label="Department" value={user.department || '—'} />
-                      <ProfileRow label="Hostel" value={user.hostel_block || '—'} />
+                      <ProfileRow label="Department / Office" value={user.department || '—'} />
+                      <ProfileRow label="Hostel Scope" value={user.hostel_block || '—'} />
                     </>
                   )}
                   <ProfileRow label="Official Email" value={user.email} />
@@ -349,37 +520,66 @@ export default function App() {
               </section>
             </div>
           )}
+
           {studentProfileIncomplete && (
             <div className="ptm-modal-backdrop">
               <section className="ptm-modal-card" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
-                <span className="ptm-tag-pill">FIRST-TIME SETUP</span>
+                <span className="ptm-tag-pill">FIRST-TIME RESIDENT SETUP</span>
                 <h2 id="onboarding-title" className="ptm-page-title">Complete Your Hostel Profile</h2>
                 <p className="ptm-page-sub" style={{ marginBottom: '14px' }}>
-                  Roll number, academic year, and branch are read from your SVNIT email. Enter your current hostel details to enable complaints and registers.
+                  Welcome, <strong>{user.full_name} ({user.user_id})</strong>! Select your current SVNIT Hostel Bhawan, Wing, and Room to activate hostel services.
                 </p>
                 {profileError && <div className="ptm-alert-error">{profileError}</div>}
-                {!profileError && hostels.length === 0 && <div className="ptm-list-sub">No hostels are configured yet. Please contact the Dean's office.</div>}
                 <form onSubmit={handleProfileSave} className="ptm-form-stack">
-                  <label className="ptm-label">Hostel
-                    <select className="ptm-input" value={profileDraft.hostel_block} onChange={(event) => setProfileDraft({ ...profileDraft, hostel_block: event.target.value })} required>
-                      <option value="">Select hostel</option>
-                      {hostels.map((hostel) => <option key={hostel} value={hostel}>{hostel}</option>)}
+                  <label className="ptm-label">Select SVNIT Hostel Bhawan
+                    <select
+                      className="ptm-input"
+                      value={profileDraft.hostel_block}
+                      onChange={(event) => setProfileDraft({ ...profileDraft, hostel_block: event.target.value })}
+                      required
+                    >
+                      <option value="">-- Choose Your Hostel Bhawan --</option>
+                      {hostels.map((hostel) => (
+                        <option key={hostel} value={hostel}>{hostel}</option>
+                      ))}
                     </select>
                   </label>
-                  <label className="ptm-label">Wing
-                    <select className="ptm-input" value={profileDraft.wing} onChange={(event) => setProfileDraft({ ...profileDraft, wing: event.target.value })} required>
-                      <option value="">Select wing</option>
-                      {'ABCDEFGH'.split('').map((letter) => <option key={letter} value={`Wing ${letter}`}>Wing {letter}</option>)}
+                  <label className="ptm-label">Select Hostel Wing
+                    <select
+                      className="ptm-input"
+                      value={profileDraft.wing}
+                      onChange={(event) => setProfileDraft({ ...profileDraft, wing: event.target.value })}
+                      required
+                    >
+                      <option value="">-- Choose Your Wing --</option>
+                      {'ABCDEFGH'.split('').map((letter) => (
+                        <option key={letter} value={`Wing ${letter}`}>Wing {letter}</option>
+                      ))}
                     </select>
                   </label>
                   <label className="ptm-label">Room Number
-                    <input className="ptm-input" value={profileDraft.room} onChange={(event) => setProfileDraft({ ...profileDraft, room: event.target.value })} maxLength={20} required />
+                    <input
+                      className="ptm-input"
+                      placeholder="e.g. B-204 or 315"
+                      value={profileDraft.room}
+                      onChange={(event) => setProfileDraft({ ...profileDraft, room: event.target.value })}
+                      maxLength={20}
+                      required
+                    />
                   </label>
-                  <label className="ptm-label">Mobile Number
-                    <input className="ptm-input" type="tel" value={profileDraft.phone} onChange={(event) => setProfileDraft({ ...profileDraft, phone: event.target.value })} autoComplete="tel" required />
+                  <label className="ptm-label">10-Digit Mobile Number
+                    <input
+                      className="ptm-input"
+                      type="tel"
+                      placeholder="e.g. 9876543210"
+                      value={profileDraft.phone}
+                      onChange={(event) => setProfileDraft({ ...profileDraft, phone: event.target.value })}
+                      autoComplete="tel"
+                      required
+                    />
                   </label>
-                  <button type="submit" className="ptm-btn-primary" disabled={profileSaving || hostels.length === 0}>
-                    {profileSaving ? 'Saving…' : 'Save Hostel Profile'}
+                  <button type="submit" className="ptm-btn-primary" disabled={profileSaving}>
+                    {profileSaving ? 'Saving Your Profile…' : 'Save & Enter svnitcampus Portal →'}
                   </button>
                 </form>
               </section>
@@ -415,6 +615,60 @@ const PAYTM_APPLE_CSS = `
     font-family: 'Plus Jakarta Sans', 'Inter', sans-serif !important;
     letter-spacing: -0.02em;
     color: #111827;
+  }
+
+  /* ROTATING BUFFERING WHEEL SPINNER */
+  @keyframes ptmSpin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+  .ptm-wheel-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 28px 16px;
+    background: #F8FAFC;
+    border: 1px solid #E2E8F0;
+    border-radius: 16px;
+    text-align: center;
+    margin: 8px 0;
+  }
+  .ptm-spinner-wheel {
+    width: 42px;
+    height: 42px;
+    border: 4px solid #DBEAFE;
+    border-top: 4px solid #002970;
+    border-right: 4px solid #00BAF2;
+    border-radius: 50%;
+    animation: ptmSpin 0.75s linear infinite;
+  }
+
+  /* LOGIN TABS */
+  .ptm-login-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    background: #F1F5F9;
+    padding: 5px;
+    border-radius: 14px;
+    margin-bottom: 18px;
+  }
+  .ptm-login-tab {
+    border: none;
+    background: transparent;
+    padding: 9px 10px;
+    border-radius: 10px;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: #475569;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .ptm-login-tab.active {
+    background: #002970;
+    color: #FFFFFF;
+    box-shadow: 0 2px 8px rgba(0, 41, 112, 0.18);
   }
 
   .ptm-root {
@@ -612,11 +866,11 @@ const PAYTM_APPLE_CSS = `
   }
   .ptm-login-box {
     width: 100%;
-    max-width: 420px;
+    max-width: 430px;
     background: #FFFFFF;
     border: 1px solid #E5E7EB;
     border-radius: 22px;
-    padding: 28px 22px;
+    padding: 26px 22px;
     box-shadow: 0 12px 32px rgba(0, 41, 112, 0.08);
   }
   .ptm-login-top-row {
@@ -635,13 +889,13 @@ const PAYTM_APPLE_CSS = `
     letter-spacing: 0.04em;
   }
   .ptm-login-heading {
-    margin: 0 0 6px 0;
+    margin: 0 0 4px 0;
     font-size: 22px;
     font-weight: 800;
     color: #111827;
   }
   .ptm-login-sub {
-    margin: 0 0 20px 0;
+    margin: 0 0 16px 0;
     font-size: 13px;
     color: #6B7280;
   }
@@ -654,24 +908,6 @@ const PAYTM_APPLE_CSS = `
     font-size: 13px;
     font-weight: 600;
     margin-bottom: 16px;
-  }
-  .ptm-loader-card {
-    background: #F8FAFC;
-    border: 1px solid #E2E8F0;
-    border-radius: 14px;
-    padding: 18px;
-  }
-  .ptm-progress-bar {
-    width: 100%;
-    height: 8px;
-    background: #E2E8F0;
-    border-radius: 999px;
-    overflow: hidden;
-  }
-  .ptm-progress-fill {
-    height: 100%;
-    background: #002970;
-    transition: width 0.3s ease;
   }
   .ptm-main-container {
     flex: 1;
