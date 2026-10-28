@@ -1450,3 +1450,18 @@ def delete_notice(request: Request, notice_id: str = Query(...)):
     conn.commit()
     conn.close()
     return {"success": True, "message": "Notice permanently deleted from everywhere."}
+@app.post("/api/complaints/delete")
+def delete_complaint(ticket_id: str = Query(...), request: Request = None):
+    conn = get_conn()
+    row = db_exec(conn, "SELECT * FROM complaints WHERE ticket_id = ?", (ticket_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Complaint not found.")
+    user = request.state.user
+    if user["role"] == "Student" and row["student_id"].upper() != user["user_id"].upper():
+        conn.close()
+        raise HTTPException(status_code=403, detail="You can only delete your own complaints.")
+    db_exec(conn, "DELETE FROM complaints WHERE ticket_id = ?", (ticket_id,))
+    conn.commit()
+    conn.close()
+    return {"success": True, "message": "Complaint deleted."}

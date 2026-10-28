@@ -2,8 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../api';
 
 export default function StudentPortal({ user, apiUrl }) {
-  const isDayScholar = (user.hostel_block || '').toLowerCase() === 'day scholar';
-
   const [page, setPage] = useState('home');
   const [dataLoading, setDataLoading] = useState(true);
   const [complaints, setComplaints] = useState([]);
@@ -24,12 +22,16 @@ export default function StudentPortal({ user, apiUrl }) {
   const [category, setCategory] = useState('ELECTRICITY');
   const [summary, setSummary] = useState('');
   const [description, setDescription] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
   const [feedbackRating, setFeedbackRating] = useState(5);
   const [feedbackReview, setFeedbackReview] = useState('');
 
   const [calYear, setCalYear] = useState(2026);
   const [calMonth, setCalMonth] = useState(9);
   const [selectedDateStr, setSelectedDateStr] = useState('2026-10-28');
+
+  const isDayScholar = (user?.hostel_block || '').toLowerCase() === 'day scholar';
 
   const loadStudentData = useCallback(async () => {
     try {
@@ -70,20 +72,44 @@ export default function StudentPortal({ user, apiUrl }) {
 
   const handleCreateComplaint = async (e) => {
     e.preventDefault();
-    const res = await apiFetch(`${apiUrl}/api/complaints`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ student_id: user.user_id, category, summary, description })
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setMsg(`✅ Grievance ${data.ticket.ticket_id} submitted!`);
-      setSummary('');
-      setDescription('');
-      loadStudentData();
-      setPage('my_complaints');
-    } else {
-      setMsg(`❌ ${data.detail || 'Could not submit grievance.'}`);
+    if (submitting) return; // Prevent spam double-clicks
+    setSubmitting(true);
+    try {
+      const res = await apiFetch(`${apiUrl}/api/complaints`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ student_id: user.user_id, category, summary, description })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setMsg(`✅ Grievance ${data.ticket.ticket_id} submitted successfully!`);
+        setSummary('');
+        setDescription('');
+        await loadStudentData();
+        setPage('my_complaints');
+      } else {
+        setMsg(`❌ ${data.detail || 'Could not submit grievance.'}`);
+      }
+    } catch (err) {
+      setMsg('❌ Network error. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDeleteComplaint = async (ticketId, e) => {
+    e.stopPropagation();
+    if (!window.confirm("Do you want to delete this duplicate or accidental complaint?")) return;
+    try {
+      const res = await apiFetch(`${apiUrl}/api/complaints/delete?ticket_id=${encodeURIComponent(ticketId)}`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        setMsg('🗑️ Complaint deleted successfully.');
+        loadStudentData();
+      }
+    } catch (err) {
+      setMsg('❌ Could not delete complaint.');
     }
   };
 
@@ -165,7 +191,7 @@ export default function StudentPortal({ user, apiUrl }) {
               Loading your student portal...
             </div>
             <div style={{ fontSize: '12px', color: '#6B7280', marginTop: '4px' }}>
-              Fetching campus events, clubs, and live updates...
+              Fetching campus events, clubs, and notices...
             </div>
           </div>
         ) : (
@@ -173,47 +199,30 @@ export default function StudentPortal({ user, apiUrl }) {
             {page === 'home' && (
               <div>
                 <div className="ptm-mini-grid">
-                  {isDayScholar ? (
-                    <>
-                      <div className="ptm-mini-card" onClick={() => setPage('profile')}>
-                        <div className="ptm-row-between">
-                          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>STUDENT STATUS</span>
-                          <span>🏡</span>
-                        </div>
-                        <div style={{ fontSize: '19px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>Day Scholar</div>
-                        <button className="ptm-mini-btn">{user.year || 'Student'} • {user.user_id}</button>
-                      </div>
-                      <div className="ptm-mini-card" onClick={() => setPage('calendar')}>
-                        <div className="ptm-row-between">
-                          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>CAMPUS EVENTS</span>
-                          <span>🗓️</span>
-                        </div>
-                        <div style={{ fontSize: '19px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>{visibleEvents.length} Live Events</div>
-                        <button className="ptm-mini-btn">Open Event Calendar →</button>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="ptm-mini-card" onClick={() => setPage('profile')}>
-                        <div className="ptm-row-between">
-                          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>{user.hostel_block}</span>
-                          <span>🏠</span>
-                        </div>
-                        <div style={{ fontSize: '19px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>Room {user.room}</div>
-                        <button className="ptm-mini-btn">{user.year || 'Resident'} • {user.user_id}</button>
-                      </div>
+                  <div className="ptm-mini-card" onClick={() => setPage('profile')}>
+                    <div className="ptm-row-between">
+                      <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>
+                        {isDayScholar ? 'Day Scholar' : user.hostel_block}
+                      </span>
+                      <span>{isDayScholar ? '🎒' : '🏠'}</span>
+                    </div>
+                    <div style={{ fontSize: '19px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>
+                      {isDayScholar ? 'Non-Hosteller' : `Room ${user.room}`}
+                    </div>
+                    <button className="ptm-mini-btn">{user.year || 'Resident'} • {user.user_id}</button>
+                  </div>
 
-                      <div className="ptm-mini-card" onClick={() => setPage('my_complaints')}>
-                        <div className="ptm-row-between">
-                          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>My Grievances</span>
-                          <span>🛠️</span>
-                        </div>
-                        <div style={{ fontSize: '19px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>{complaints.length} Tickets</div>
-                        <button className="ptm-mini-btn">
-                          {actionNeeded > 0 ? `⚡ ${actionNeeded} Verify Now` : 'Check Status →'}
-                        </button>
+                  {!isDayScholar && (
+                    <div className="ptm-mini-card" onClick={() => setPage('my_complaints')}>
+                      <div className="ptm-row-between">
+                        <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>My Grievances</span>
+                        <span>🛠️</span>
                       </div>
-                    </>
+                      <div style={{ fontSize: '19px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>{complaints.length} Tickets</div>
+                      <button className="ptm-mini-btn">
+                        {actionNeeded > 0 ? `⚡ ${actionNeeded} Verify Now` : 'Check Status →'}
+                      </button>
+                    </div>
                   )}
                 </div>
 
@@ -312,7 +321,9 @@ export default function StudentPortal({ user, apiUrl }) {
                       <label className="ptm-label">Detailed Description</label>
                       <textarea rows="3" className="ptm-input" placeholder="Describe the issue and preferred time..." value={description} onChange={(e) => setDescription(e.target.value)} required />
                     </div>
-                    <button type="submit" className="ptm-btn-primary">Submit Grievance</button>
+                    <button type="submit" className="ptm-btn-primary" disabled={submitting}>
+                      {submitting ? 'Submitting Grievance (Please Wait)...' : 'Submit Grievance'}
+                    </button>
                   </form>
                 </div>
               </div>
@@ -340,6 +351,16 @@ export default function StudentPortal({ user, apiUrl }) {
                             <div className="ptm-list-sub">{c.ticket_id} • {c.routed_to}</div>
                             <span className="ptm-tag-pill">{c.created_at}</span>
                           </div>
+                          {c.status === 'Pending' && (
+                            <button
+                              type="button"
+                              className="ptm-btn-danger"
+                              style={{ width: 'auto', padding: '6px 12px', fontSize: '11px', marginRight: '6px' }}
+                              onClick={(e) => handleDeleteComplaint(c.ticket_id, e)}
+                            >
+                              🗑️ Delete
+                            </button>
+                          )}
                           <span className="ptm-status-badge" style={{ background: c.status === 'Completed' ? '#DCFCE7' : '#FEF3C7', color: c.status === 'Completed' ? '#15803D' : '#B45309' }}>
                             {c.status} ›
                           </span>
@@ -351,7 +372,7 @@ export default function StudentPortal({ user, apiUrl }) {
               </div>
             )}
 
-            {!isDayScholar && page === 'ticket_detail' && selectedTicket && (
+            {page === 'ticket_detail' && selectedTicket && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('my_complaints')}>←</button>
@@ -427,16 +448,20 @@ export default function StudentPortal({ user, apiUrl }) {
                   <div className="ptm-card">
                     <div className="ptm-section-title">Events by {selectedClub.club_id}</div>
                     <div className="ptm-list">
-                      {visibleEvents.filter((e) => e.club_id.toUpperCase() === selectedClub.club_id.toUpperCase()).map((ev) => (
-                        <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
-                          <div className="ptm-avatar-pastel">🎪</div>
-                          <div className="ptm-list-main">
-                            <div className="ptm-list-title">{ev.title}</div>
-                            <div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date}</div>
+                      {visibleEvents.filter((e) => e.club_id.toUpperCase() === selectedClub.club_id.toUpperCase()).length === 0 ? (
+                        <div className="ptm-list-sub">No events published by this club yet.</div>
+                      ) : (
+                        visibleEvents.filter((e) => e.club_id.toUpperCase() === selectedClub.club_id.toUpperCase()).map((ev) => (
+                          <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
+                            <div className="ptm-avatar-pastel">🎪</div>
+                            <div className="ptm-list-main">
+                              <div className="ptm-list-title">{ev.title}</div>
+                              <div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date}</div>
+                            </div>
+                            <span>›</span>
                           </div>
-                          <span>›</span>
-                        </div>
-                      ))}
+                        ))
+                      )}
                     </div>
                   </div>
                 )}
@@ -534,7 +559,7 @@ export default function StudentPortal({ user, apiUrl }) {
                   <div className="ptm-form-stack" style={{ marginTop: '14px' }}>
                     {selectedEvent.image_url && (
                       <a href={selectedEvent.image_url} target="_blank" rel="noreferrer" className="ptm-btn-secondary" style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}>
-                        🖼️ View Event Poster / Brochure ↗
+                        🖼️ View Event Poster / Google Drive Attachment ↗
                       </a>
                     )}
                     {selectedEvent.registration_link && (
@@ -604,6 +629,7 @@ export default function StudentPortal({ user, apiUrl }) {
                   <div className="ptm-list-sub" style={{ marginBottom: '16px' }}>
                     🎯 <strong>Target Audience:</strong> {selectedNotice.target_year} • {selectedNotice.target_branch}
                   </div>
+
                   <div className="ptm-form-stack">
                     {selectedNotice.image_url && (
                       <a href={selectedNotice.image_url} target="_blank" rel="noreferrer" className="ptm-btn-secondary" style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}>
@@ -650,13 +676,17 @@ export default function StudentPortal({ user, apiUrl }) {
                 </div>
                 <div className="ptm-card">
                   <div className="ptm-section-title">Events on {selectedDateStr}</div>
-                  {visibleEvents.filter((e) => e.date === selectedDateStr).map((ev) => (
-                    <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
-                      <div className="ptm-avatar-pastel">🎪</div>
-                      <div className="ptm-list-main"><div className="ptm-list-title">{ev.title}</div><div className="ptm-list-sub">📍 {ev.venue}</div></div>
-                      <span>›</span>
-                    </div>
-                  ))}
+                  {visibleEvents.filter((e) => e.date === selectedDateStr).length === 0 ? (
+                    <div className="ptm-list-sub">No events on this date.</div>
+                  ) : (
+                    visibleEvents.filter((e) => e.date === selectedDateStr).map((ev) => (
+                      <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
+                        <div className="ptm-avatar-pastel">🎪</div>
+                        <div className="ptm-list-main"><div className="ptm-list-title">{ev.title}</div><div className="ptm-list-sub">📍 {ev.venue}</div></div>
+                        <span>›</span>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             )}
@@ -665,13 +695,13 @@ export default function StudentPortal({ user, apiUrl }) {
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">My Student Profile</h1>
+                  <h1 className="ptm-page-title">My Resident Profile</h1>
                 </div>
                 <div className="ptm-card">
                   <div className="ptm-list">
                     <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Full Name & Roll No</div><div className="ptm-list-sub">{user.full_name} ({user.user_id})</div></div></div>
-                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Residence Status</div><div className="ptm-list-sub">{isDayScholar ? 'Day Scholar (Non-Hosteller)' : `${user.hostel_block}, ${user.wing}, Room ${user.room}`}</div></div></div>
-                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Department & Year</div><div className="ptm-list-sub">{user.department} • {user.year || 'Student'}</div></div></div>
+                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Resident Status</div><div className="ptm-list-sub">{isDayScholar ? 'Day Scholar (Non-Hosteller)' : `${user.hostel_block}, ${user.wing}, Room ${user.room}`}</div></div></div>
+                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Department & Year</div><div className="ptm-list-sub">{user.department} • {user.year || 'Resident'}</div></div></div>
                     <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Mobile</div><div className="ptm-list-sub">{user.phone || 'Not provided'}</div></div></div>
                   </div>
                 </div>
@@ -696,11 +726,7 @@ export default function StudentPortal({ user, apiUrl }) {
 
       <nav className="ptm-bottom-nav">
         <button className={`ptm-bnav-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}><span>🏠</span><span>Home</span></button>
-        {!isDayScholar ? (
-          <button className={`ptm-bnav-btn ${page === 'my_complaints' ? 'active' : ''}`} onClick={() => setPage('my_complaints')}><span>💬</span><span>Grievances</span></button>
-        ) : (
-          <button className={`ptm-bnav-btn ${page === 'clubs_list' ? 'active' : ''}`} onClick={() => setPage('clubs_list')}><span>🎭</span><span>Clubs</span></button>
-        )}
+        {!isDayScholar && <button className={`ptm-bnav-btn ${page === 'my_complaints' ? 'active' : ''}`} onClick={() => setPage('my_complaints')}><span>💬</span><span>Grievances</span></button>}
         <button className={`ptm-bnav-btn ${page === 'events_list' ? 'active' : ''}`} onClick={() => setPage('events_list')}><span>🎪</span><span>Events</span></button>
         <button className={`ptm-bnav-btn ${page === 'notices' ? 'active' : ''}`} onClick={() => setPage('notices')}><span>📢</span><span>Notices</span></button>
         <button className={`ptm-bnav-btn ${page === 'profile' ? 'active' : ''}`} onClick={() => setPage('profile')}><span>👤</span><span>Profile</span></button>
