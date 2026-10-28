@@ -1,16 +1,26 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../api';
-import { getCached, setCached, clearCache } from '../cache';
+
+// Built-in safe memory cache to prevent any missing file crashes
+const memoryCache = new Map();
+function getLocalCache(key) {
+  const item = memoryCache.get(key);
+  if (item && Date.now() - item.time < 30000) return item.data;
+  return null;
+}
+function setLocalCache(key, data) {
+  memoryCache.set(key, { data, time: Date.now() });
+}
 
 export default function StudentPortal({ user, apiUrl }) {
   const [page, setPage] = useState('home');
   const [dataLoading, setDataLoading] = useState(false);
-  const [complaints, setComplaints] = useState(getCached(`complaints_${user.user_id}`) || []);
-  const [departments, setDepartments] = useState(getCached(`departments_${user.hostel_block}`) || []);
-  const [events, setEvents] = useState(getCached('events') || []);
-  const [clubs, setClubs] = useState(getCached('clubs') || []);
-  const [notices, setNotices] = useState(getCached('notices') || []);
-  const [ads, setAds] = useState(getCached('ads') || []);
+  const [complaints, setComplaints] = useState(getLocalCache(`complaints_${user?.user_id}`) || []);
+  const [departments, setDepartments] = useState(getLocalCache(`departments_${user?.hostel_block}`) || []);
+  const [events, setEvents] = useState(getLocalCache('events') || []);
+  const [clubs, setClubs] = useState(getLocalCache('clubs') || []);
+  const [notices, setNotices] = useState(getLocalCache('notices') || []);
+  const [ads, setAds] = useState(getLocalCache('ads') || []);
   const [adIdx, setAdIdx] = useState(0);
   const [msg, setMsg] = useState(null);
 
@@ -32,19 +42,20 @@ export default function StudentPortal({ user, apiUrl }) {
   const [calMonth, setCalMonth] = useState(9);
   const [selectedDateStr, setSelectedDateStr] = useState('2026-10-28');
 
-  const isDayScholar = (user?.hostel_block || '').toLowerCase() === 'day scholar';
+  const safeUser = user || {};
+  const isDayScholar = (safeUser.hostel_block || '').toLowerCase() === 'day scholar';
 
   const loadStudentData = useCallback(async (force = false) => {
-    const cKey = `complaints_${user.user_id}`;
-    const dKey = `departments_${user.hostel_block}`;
+    const cKey = `complaints_${safeUser.user_id}`;
+    const dKey = `departments_${safeUser.hostel_block}`;
     
-    if (!force && getCached('events') && getCached(cKey)) {
-      setComplaints(getCached(cKey));
-      setDepartments(getCached(dKey));
-      setEvents(getCached('events'));
-      setClubs(getCached('clubs'));
-      setNotices(getCached('notices'));
-      setAds(getCached('ads'));
+    if (!force && getLocalCache('events') && getLocalCache(cKey)) {
+      setComplaints(getLocalCache(cKey));
+      setDepartments(getLocalCache(dKey));
+      setEvents(getLocalCache('events'));
+      setClubs(getLocalCache('clubs'));
+      setNotices(getLocalCache('notices'));
+      setAds(getLocalCache('ads'));
       return;
     }
 
@@ -52,8 +63,8 @@ export default function StudentPortal({ user, apiUrl }) {
 
     try {
       const [cRes, dRes, eRes, clRes, nRes, adRes] = await Promise.all([
-        apiFetch(`${apiUrl}/api/complaints?role=Student&user_id=${user.user_id}`),
-        apiFetch(`${apiUrl}/api/departments?hostel_block=${encodeURIComponent(user.hostel_block || 'All')}`),
+        apiFetch(`${apiUrl}/api/complaints?role=Student&user_id=${safeUser.user_id}`),
+        apiFetch(`${apiUrl}/api/departments?hostel_block=${encodeURIComponent(safeUser.hostel_block || 'All')}`),
         apiFetch(`${apiUrl}/api/unicore/events`),
         apiFetch(`${apiUrl}/api/unicore/clubs`),
         apiFetch(`${apiUrl}/api/notices?role=Student`),
@@ -63,40 +74,40 @@ export default function StudentPortal({ user, apiUrl }) {
       if (cRes.ok) {
         const d = await cRes.json();
         setComplaints(d);
-        setCached(cKey, d);
+        setLocalCache(cKey, d);
       }
       if (dRes.ok) {
         const d = await dRes.json();
         setDepartments(d);
-        setCached(dKey, d);
+        setLocalCache(dKey, d);
         if (d.length > 0 && !category) setCategory(d[0].id);
       }
       if (eRes.ok) {
         const d = await eRes.json();
         setEvents(d);
-        setCached('events', d);
+        setLocalCache('events', d);
       }
       if (clRes.ok) {
         const d = await clRes.json();
         setClubs(d);
-        setCached('clubs', d);
+        setLocalCache('clubs', d);
       }
       if (nRes.ok) {
         const d = await nRes.json();
         setNotices(d);
-        setCached('notices', d);
+        setLocalCache('notices', d);
       }
       if (adRes.ok) {
         const d = await adRes.json();
         setAds(d);
-        setCached('ads', d);
+        setLocalCache('ads', d);
       }
     } catch (e) {
       console.error(e);
     } finally {
       setDataLoading(false);
     }
-  }, [apiUrl, user.user_id, user.hostel_block, events.length, category]);
+  }, [apiUrl, safeUser.user_id, safeUser.hostel_block, events.length, category]);
 
   useEffect(() => { loadStudentData(); }, [loadStudentData]);
 
@@ -113,7 +124,6 @@ export default function StudentPortal({ user, apiUrl }) {
     if (submitting) return;
     setSubmitting(true);
     
-    // OPTIMISTIC UI: Instantly add ticket to state & navigate
     const tempTicket = {
       ticket_id: `TKT-${Math.floor(Math.random() * 900 + 100)}`,
       summary,
@@ -121,8 +131,8 @@ export default function StudentPortal({ user, apiUrl }) {
       status: 'Pending',
       routed_to: category,
       created_at: 'Just now',
-      wing: user.wing || '',
-      room: user.room || ''
+      wing: safeUser.wing || '',
+      room: safeUser.room || ''
     };
     
     setComplaints([tempTicket, ...complaints]);
@@ -130,13 +140,13 @@ export default function StudentPortal({ user, apiUrl }) {
     setDescription('');
     setMsg(`✅ Grievance submitted successfully!`);
     setPage('my_complaints');
-    clearCache();
+    memoryCache.clear();
 
     try {
       await apiFetch(`${apiUrl}/api/complaints`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: user.user_id, category, summary, description })
+        body: JSON.stringify({ student_id: safeUser.user_id, category, summary, description })
       });
       loadStudentData(true);
     } catch (err) {
@@ -155,7 +165,7 @@ export default function StudentPortal({ user, apiUrl }) {
       });
       if (res.ok) {
         setMsg('🗑️ Complaint deleted successfully.');
-        clearCache();
+        memoryCache.clear();
         loadStudentData(true);
       }
     } catch (err) {
@@ -171,7 +181,7 @@ export default function StudentPortal({ user, apiUrl }) {
     });
     if (res.ok) {
       setMsg(satisfied ? '✅ Marked Resolved & Closed!' : '🔄 Reopened for maintenance!');
-      clearCache();
+      memoryCache.clear();
       loadStudentData(true);
       setPage('my_complaints');
     }
@@ -181,14 +191,14 @@ export default function StudentPortal({ user, apiUrl }) {
     const res = await apiFetch(`${apiUrl}/api/unicore/events/rsvp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ event_id: eventId, student_id: user.user_id })
+      body: JSON.stringify({ event_id: eventId, student_id: safeUser.user_id })
     });
     const data = await res.json();
     if (res.ok && data.success) {
       setMsg(data.message);
       setEvents(events.map((ev) => (ev.event_id === eventId ? { ...ev, rsvps: data.rsvps } : ev)));
       setSelectedEvent((prev) => (prev ? { ...prev, rsvps: data.rsvps } : null));
-      clearCache();
+      memoryCache.clear();
     }
   };
 
@@ -197,14 +207,14 @@ export default function StudentPortal({ user, apiUrl }) {
     const res = await apiFetch(`${apiUrl}/api/unicore/events/feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ event_id: eventId, student_id: user.user_id, rating: feedbackRating, review: feedbackReview })
+      body: JSON.stringify({ event_id: eventId, student_id: safeUser.user_id, rating: feedbackRating, review: feedbackReview })
     });
     const data = await res.json();
     if (res.ok && data.success) {
       setMsg('⭐ Review submitted!');
       setFeedbackReview('');
       setSelectedEvent(data.event);
-      clearCache();
+      memoryCache.clear();
       loadStudentData(true);
     }
   };
@@ -252,14 +262,14 @@ export default function StudentPortal({ user, apiUrl }) {
                   <div className="ptm-mini-card" onClick={() => setPage('profile')}>
                     <div className="ptm-row-between">
                       <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>
-                        {isDayScholar ? 'Day Scholar' : user.hostel_block}
+                        {isDayScholar ? 'Day Scholar' : safeUser.hostel_block}
                       </span>
                       <span>{isDayScholar ? '🎒' : '🏠'}</span>
                     </div>
                     <div style={{ fontSize: '19px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>
-                      {isDayScholar ? 'Non-Hosteller' : `Room ${user.room}`}
+                      {isDayScholar ? 'Non-Hosteller' : `Room ${safeUser.room}`}
                     </div>
-                    <button className="ptm-mini-btn">{user.year || 'Resident'} • {user.user_id}</button>
+                    <button className="ptm-mini-btn">{safeUser.year || 'Resident'} • {safeUser.user_id}</button>
                   </div>
 
                   {!isDayScholar && (
@@ -353,7 +363,7 @@ export default function StudentPortal({ user, apiUrl }) {
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
                   <h1 className="ptm-page-title">Lodge Hostel Grievance</h1>
-                  <p className="ptm-page-sub">{user.hostel_block} • {user.wing} • Room {user.room}</p>
+                  <p className="ptm-page-sub">{safeUser.hostel_block} • {safeUser.wing} • Room {safeUser.room}</p>
                 </div>
                 <div className="ptm-card">
                   <form onSubmit={handleCreateComplaint} className="ptm-form-stack">
@@ -621,7 +631,7 @@ export default function StudentPortal({ user, apiUrl }) {
 
                   {selectedEvent.status !== 'Completed' ? (
                     <button className="ptm-btn-primary" style={{ marginTop: '14px' }} onClick={() => handleRsvp(selectedEvent.event_id)}>
-                      {selectedEvent.rsvps?.includes(user.user_id) ? '✅ You Are Attending (Tap to Cancel)' : '🎟️ Yes, I Am Attending (RSVP)'}
+                      {selectedEvent.rsvps?.includes(safeUser.user_id) ? '✅ You Are Attending (Tap to Cancel)' : '🎟️ Yes, I Am Attending (RSVP)'}
                     </button>
                   ) : (
                     <form onSubmit={(e) => handleFeedback(e, selectedEvent.event_id)} className="ptm-form-stack" style={{ marginTop: '16px' }}>
@@ -749,10 +759,10 @@ export default function StudentPortal({ user, apiUrl }) {
                 </div>
                 <div className="ptm-card">
                   <div className="ptm-list">
-                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Full Name & Roll No</div><div className="ptm-list-sub">{user.full_name} ({user.user_id})</div></div></div>
-                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Resident Status</div><div className="ptm-list-sub">{isDayScholar ? 'Day Scholar (Non-Hosteller)' : `${user.hostel_block}, ${user.wing}, Room ${user.room}`}</div></div></div>
-                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Department & Year</div><div className="ptm-list-sub">{user.department} • {user.year || 'Resident'}</div></div></div>
-                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Mobile</div><div className="ptm-list-sub">{user.phone || 'Not provided'}</div></div></div>
+                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Full Name & Roll No</div><div className="ptm-list-sub">{safeUser.full_name} ({safeUser.user_id})</div></div></div>
+                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Resident Status</div><div className="ptm-list-sub">{isDayScholar ? 'Day Scholar (Non-Hosteller)' : `${safeUser.hostel_block}, ${safeUser.wing}, Room ${safeUser.room}`}</div></div></div>
+                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Department & Year</div><div className="ptm-list-sub">{safeUser.department} • {safeUser.year || 'Resident'}</div></div></div>
+                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Mobile</div><div className="ptm-list-sub">{safeUser.phone || 'Not provided'}</div></div></div>
                   </div>
                 </div>
               </div>

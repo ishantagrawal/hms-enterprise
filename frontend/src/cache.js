@@ -1,6 +1,6 @@
 // frontend/src/cache.js
 const cache = new Map();
-const CACHE_TTL = 30000; // 30 seconds cache validity
+const CACHE_TTL = 30000; // 30 seconds memory cache
 
 export function getCached(key) {
   const item = cache.get(key);
