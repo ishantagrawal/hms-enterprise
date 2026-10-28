@@ -6,6 +6,7 @@ export default function ClubPortal({ user, apiUrl }) {
   const [dataLoading, setDataLoading] = useState(true);
   const [clubs, setClubs] = useState([]);
   const [events, setEvents] = useState([]);
+  const [notices, setNotices] = useState([]);
   const [msg, setMsg] = useState(null);
   const [selectedEvent, setSelectedEvent] = useState(null);
 
@@ -48,9 +49,10 @@ export default function ClubPortal({ user, apiUrl }) {
 
   const loadClubData = useCallback(async () => {
     try {
-      const [cRes, eRes] = await Promise.all([
+      const [cRes, eRes, nRes] = await Promise.all([
         apiFetch(`${apiUrl}/api/unicore/clubs`),
-        apiFetch(`${apiUrl}/api/unicore/events`)
+        apiFetch(`${apiUrl}/api/unicore/events`),
+        apiFetch(`${apiUrl}/api/notices`)
       ]);
       if (cRes.ok) {
         const cData = await cRes.json();
@@ -64,6 +66,7 @@ export default function ClubPortal({ user, apiUrl }) {
         }
       }
       if (eRes.ok) setEvents(await eRes.json());
+      if (nRes.ok) setNotices(await nRes.json());
     } catch (e) {
       console.error(e);
     } finally {
@@ -130,9 +133,41 @@ export default function ClubPortal({ user, apiUrl }) {
     const data = await res.json();
     if (res.ok && data.success) {
       setMsg(`✅ ${data.message}`);
+      setEventForm({
+        title: '',
+        date: '2026-10-29',
+        start_time: '10:00',
+        end_time: '13:00',
+        venue: '',
+        description: '',
+        budget: '',
+        funding_source: '',
+        chief_guest: '',
+        expected_attendance: '',
+        logistics_needs: '',
+        image_url: '',
+        registration_link: ''
+      });
       setEventCustomFields([]);
       loadClubData();
       setPage('my_events');
+    }
+  };
+
+  const handleDeleteEvent = async (eventId, eventTitle, e) => {
+    if (e) e.stopPropagation();
+    if (!window.confirm(`Permanently delete event "${eventTitle}" from everywhere?`)) return;
+    const res = await apiFetch(`${apiUrl}/api/unicore/events/delete?event_id=${encodeURIComponent(eventId)}`, {
+      method: 'POST'
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      setMsg(`🗑️ ${data.message}`);
+      setSelectedEvent(null);
+      loadClubData();
+      if (page === 'event_detail') setPage('my_events');
+    } else {
+      setMsg(`❌ ${data.detail || 'Could not delete event.'}`);
     }
   };
 
@@ -152,7 +187,23 @@ export default function ClubPortal({ user, apiUrl }) {
       setMsg(`📢 ${data.message}`);
       setNoticeForm({ title: '', message: '', target_branch: 'All Branches', target_year: 'All Years', image_url: '', registration_link: '' });
       setNoticeCustomFields([]);
-      setPage('home');
+      loadClubData();
+      setPage('my_notices');
+    }
+  };
+
+  const handleDeleteNotice = async (noticeId, noticeTitle, e) => {
+    if (e) e.stopPropagation();
+    if (!window.confirm(`Permanently delete notice "${noticeTitle}" from everywhere?`)) return;
+    const res = await apiFetch(`${apiUrl}/api/notices/delete?notice_id=${encodeURIComponent(noticeId)}`, {
+      method: 'POST'
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      setMsg(`🗑️ ${data.message}`);
+      loadClubData();
+    } else {
+      setMsg(`❌ ${data.detail || 'Could not delete notice.'}`);
     }
   };
 
@@ -173,7 +224,8 @@ export default function ClubPortal({ user, apiUrl }) {
   };
 
   const myClub = clubs.find((c) => c.club_id.toUpperCase() === user.user_id.toUpperCase()) || {};
-  const myEvents = events.filter((e) => e.club_id.toUpperCase() === (user.user_id || '').toUpperCase());
+  const myEvents = events.filter((e) => (e.club_id || '').toUpperCase() === (user.user_id || '').toUpperCase());
+  const myNotices = notices.filter((n) => (n.club_id || '').toUpperCase() === (user.user_id || '').toUpperCase());
 
   return (
     <div className="ptm-shell-layout">
@@ -182,8 +234,9 @@ export default function ClubPortal({ user, apiUrl }) {
         <button className={`ptm-side-btn ${page === 'info' ? 'active' : ''}`} onClick={() => setPage('info')}>ℹ️ Club Info & Advisor</button>
         <button className={`ptm-side-btn ${page === 'members' ? 'active' : ''}`} onClick={() => setPage('members')}>👥 Custom Positions ({myClub.members?.length || 0})</button>
         <button className={`ptm-side-btn ${page === 'propose_event' ? 'active' : ''}`} onClick={() => setPage('propose_event')}>🚀 Request Event to Dean</button>
-        <button className={`ptm-side-btn ${page === 'propose_notice' ? 'active' : ''}`} onClick={() => setPage('propose_notice')}>📢 Post Student Notice</button>
         <button className={`ptm-side-btn ${page === 'my_events' ? 'active' : ''}`} onClick={() => setPage('my_events')}>🎪 My Events ({myEvents.length})</button>
+        <button className={`ptm-side-btn ${page === 'propose_notice' ? 'active' : ''}`} onClick={() => setPage('propose_notice')}>📢 Post Student Notice</button>
+        <button className={`ptm-side-btn ${page === 'my_notices' ? 'active' : ''}`} onClick={() => setPage('my_notices')}>🗂️ My Notices ({myNotices.length})</button>
         <button className={`ptm-side-btn ${page === 'gallery' ? 'active' : ''}`} onClick={() => setPage('gallery')}>📸 Media Links</button>
       </aside>
 
@@ -197,7 +250,7 @@ export default function ClubPortal({ user, apiUrl }) {
               Loading {user.user_id} Club Portal...
             </div>
             <div style={{ fontSize: '12px', color: '#6B7280', marginTop: '4px' }}>
-              Fetching club profile, committee roster, and event proposals...
+              Fetching club profile, committee roster, events, and notices...
             </div>
           </div>
         ) : (
@@ -233,9 +286,12 @@ export default function ClubPortal({ user, apiUrl }) {
                 </div>
 
                 <div className="ptm-card">
-                  <div className="ptm-row-between" style={{ marginBottom: '10px' }}>
-                    <div className="ptm-section-title" style={{ margin: 0 }}>Recent Events ({myEvents.length})</div>
-                    <button className="ptm-btn-secondary" onClick={() => setPage('gallery')}>📸 Add Drive Photos</button>
+                  <div className="ptm-row-between" style={{ marginBottom: '10px', flexWrap: 'wrap' }}>
+                    <div className="ptm-section-title" style={{ margin: 0 }}>My Club Events ({myEvents.length})</div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button className="ptm-btn-secondary" onClick={() => setPage('my_notices')}>🗂️ Notices ({myNotices.length})</button>
+                      <button className="ptm-btn-secondary" onClick={() => setPage('gallery')}>📸 Add Drive Photos</button>
+                    </div>
                   </div>
                   {myEvents.length === 0 ? (
                     <div className="ptm-list-sub">No events proposed yet.</div>
@@ -247,8 +303,47 @@ export default function ClubPortal({ user, apiUrl }) {
                           <div className="ptm-list-main">
                             <div className="ptm-list-title">{ev.title}</div>
                             <div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date} • 👥 {ev.rsvps?.length || 0} RSVPs</div>
+                            <span className="ptm-tag-pill">{ev.status}</span>
                           </div>
-                          <span className="ptm-status-badge" style={{ background: '#E0F2FE', color: '#002970' }}>{ev.status} ›</span>
+                          <button
+                            type="button"
+                            className="ptm-btn-danger"
+                            style={{ width: 'auto', padding: '6px 12px', fontSize: '12px' }}
+                            onClick={(e) => handleDeleteEvent(ev.event_id, ev.title, e)}
+                          >
+                            🗑️ Delete
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="ptm-card">
+                  <div className="ptm-row-between" style={{ marginBottom: '10px' }}>
+                    <div className="ptm-section-title" style={{ margin: 0 }}>My Club Notices ({myNotices.length})</div>
+                    <button className="ptm-btn-secondary" onClick={() => setPage('propose_notice')}>+ Post Notice</button>
+                  </div>
+                  {myNotices.length === 0 ? (
+                    <div className="ptm-list-sub">No notices posted by your club yet.</div>
+                  ) : (
+                    <div className="ptm-list">
+                      {myNotices.map((n) => (
+                        <div key={n.notice_id} className="ptm-list-row" style={{ cursor: 'default' }}>
+                          <div className="ptm-avatar-pastel">📢</div>
+                          <div className="ptm-list-main">
+                            <div className="ptm-list-title">{n.title}</div>
+                            <div className="ptm-list-sub">{n.message}</div>
+                            <span className="ptm-tag-pill">{n.status} • {n.target_year} ({n.target_branch})</span>
+                          </div>
+                          <button
+                            type="button"
+                            className="ptm-btn-danger"
+                            style={{ width: 'auto', padding: '6px 12px', fontSize: '12px' }}
+                            onClick={(e) => handleDeleteNotice(n.notice_id, n.title, e)}
+                          >
+                            🗑️ Delete
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -502,21 +597,75 @@ export default function ClubPortal({ user, apiUrl }) {
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">My Club Events</h1>
+                  <div className="ptm-row-between">
+                    <h1 className="ptm-page-title">My Club Events ({myEvents.length})</h1>
+                    <button className="ptm-btn-secondary" onClick={() => setPage('propose_event')}>+ New Event</button>
+                  </div>
                 </div>
                 <div className="ptm-card">
-                  <div className="ptm-list">
-                    {myEvents.map((ev) => (
-                      <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
-                        <div className="ptm-avatar-pastel">🎪</div>
-                        <div className="ptm-list-main">
-                          <div className="ptm-list-title">{ev.title}</div>
-                          <div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date} • 👥 {ev.rsvps?.length || 0} RSVPs</div>
+                  {myEvents.length === 0 ? (
+                    <div className="ptm-list-sub">No events created yet.</div>
+                  ) : (
+                    <div className="ptm-list">
+                      {myEvents.map((ev) => (
+                        <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
+                          <div className="ptm-avatar-pastel">🎪</div>
+                          <div className="ptm-list-main">
+                            <div className="ptm-list-title">{ev.title}</div>
+                            <div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date} • 👥 {ev.rsvps?.length || 0} RSVPs</div>
+                            <span className="ptm-tag-pill">{ev.status}</span>
+                          </div>
+                          <button
+                            type="button"
+                            className="ptm-btn-danger"
+                            style={{ width: 'auto', padding: '6px 12px', fontSize: '12px' }}
+                            onClick={(e) => handleDeleteEvent(ev.event_id, ev.title, e)}
+                          >
+                            🗑️ Delete
+                          </button>
                         </div>
-                        <span className="ptm-status-badge" style={{ background: '#E0F2FE', color: '#002970' }}>{ev.status} ›</span>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {page === 'my_notices' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+                  <div className="ptm-row-between">
+                    <h1 className="ptm-page-title">My Club Notices ({myNotices.length})</h1>
+                    <button className="ptm-btn-secondary" onClick={() => setPage('propose_notice')}>+ New Notice</button>
                   </div>
+                  <p className="ptm-page-sub">Deleting a notice removes it permanently from Student and Dean portals.</p>
+                </div>
+                <div className="ptm-card">
+                  {myNotices.length === 0 ? (
+                    <div className="ptm-list-sub">No notices posted by your club yet.</div>
+                  ) : (
+                    <div className="ptm-list">
+                      {myNotices.map((n) => (
+                        <div key={n.notice_id} className="ptm-list-row" style={{ cursor: 'default' }}>
+                          <div className="ptm-avatar-pastel">📢</div>
+                          <div className="ptm-list-main">
+                            <div className="ptm-list-title">{n.title}</div>
+                            <div className="ptm-list-sub">{n.message}</div>
+                            <span className="ptm-tag-pill">{n.status} • {n.target_year} • {n.target_branch}</span>
+                          </div>
+                          <button
+                            type="button"
+                            className="ptm-btn-danger"
+                            style={{ width: 'auto', padding: '6px 12px', fontSize: '12px' }}
+                            onClick={(e) => handleDeleteNotice(n.notice_id, n.title, e)}
+                          >
+                            🗑️ Delete
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -531,8 +680,17 @@ export default function ClubPortal({ user, apiUrl }) {
                   <p style={{ whiteSpace: 'pre-line' }}>{selectedEvent.description}</p>
                   <div className="ptm-list">
                     <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Status</div><div className="ptm-list-sub">{selectedEvent.status}</div></div></div>
+                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Venue & Date</div><div className="ptm-list-sub">{selectedEvent.venue} • {selectedEvent.date} ({selectedEvent.start_time} - {selectedEvent.end_time})</div></div></div>
                     <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Confirmed Student RSVPs</div><div className="ptm-list-sub">{selectedEvent.rsvps?.length || 0} Students Attending</div></div></div>
                   </div>
+                  <button
+                    type="button"
+                    className="ptm-btn-danger"
+                    style={{ marginTop: '16px' }}
+                    onClick={(e) => handleDeleteEvent(selectedEvent.event_id, selectedEvent.title, e)}
+                  >
+                    🗑️ Permanently Delete Event from Everywhere
+                  </button>
                 </div>
               </div>
             )}
@@ -580,9 +738,9 @@ export default function ClubPortal({ user, apiUrl }) {
 
       <nav className="ptm-bottom-nav">
         <button className={`ptm-bnav-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}><span>🏠</span><span>Home</span></button>
-        <button className={`ptm-bnav-btn ${page === 'members' ? 'active' : ''}`} onClick={() => setPage('members')}><span>👥</span><span>Members</span></button>
+        <button className={`ptm-bnav-btn ${page === 'my_events' ? 'active' : ''}`} onClick={() => setPage('my_events')}><span>🎪</span><span>Events</span></button>
         <button className={`ptm-bnav-btn ${page === 'propose_event' ? 'active' : ''}`} onClick={() => setPage('propose_event')}><span>🚀</span><span>Propose</span></button>
-        <button className={`ptm-bnav-btn ${page === 'propose_notice' ? 'active' : ''}`} onClick={() => setPage('propose_notice')}><span>📢</span><span>Notice</span></button>
+        <button className={`ptm-bnav-btn ${page === 'my_notices' ? 'active' : ''}`} onClick={() => setPage('my_notices')}><span>🗂️</span><span>Notices</span></button>
       </nav>
     </div>
   );

@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../api';
 
 export default function StudentPortal({ user, apiUrl }) {
+  const isDayScholar = (user.hostel_block || '').toLowerCase() === 'day scholar';
+
   const [page, setPage] = useState('home');
   const [dataLoading, setDataLoading] = useState(true);
   const [complaints, setComplaints] = useState([]);
@@ -22,7 +24,6 @@ export default function StudentPortal({ user, apiUrl }) {
   const [category, setCategory] = useState('ELECTRICITY');
   const [summary, setSummary] = useState('');
   const [description, setDescription] = useState('');
-  const [submitting, setSubmitting] = useState(false);
   const [feedbackRating, setFeedbackRating] = useState(5);
   const [feedbackReview, setFeedbackReview] = useState('');
 
@@ -30,8 +31,7 @@ export default function StudentPortal({ user, apiUrl }) {
   const [calMonth, setCalMonth] = useState(9);
   const [selectedDateStr, setSelectedDateStr] = useState('2026-10-28');
 
-  const loadStudentData = useCallback(async (showSpinner = false) => {
-    if (showSpinner) setDataLoading(true);
+  const loadStudentData = useCallback(async () => {
     try {
       const [cRes, dRes, eRes, clRes, nRes, adRes] = await Promise.all([
         apiFetch(`${apiUrl}/api/complaints?role=Student&user_id=${user.user_id}`),
@@ -58,9 +58,7 @@ export default function StudentPortal({ user, apiUrl }) {
     }
   }, [apiUrl, user.user_id, user.hostel_block]);
 
-  useEffect(() => {
-    loadStudentData(true);
-  }, [loadStudentData]);
+  useEffect(() => { loadStudentData(); }, [loadStudentData]);
 
   useEffect(() => {
     if (ads.length <= 1) return;
@@ -72,25 +70,20 @@ export default function StudentPortal({ user, apiUrl }) {
 
   const handleCreateComplaint = async (e) => {
     e.preventDefault();
-    setSubmitting(true);
-    try {
-      const res = await apiFetch(`${apiUrl}/api/complaints`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: user.user_id, category, summary, description })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setMsg(`✅ Grievance ${data.ticket.ticket_id} submitted!`);
-        setSummary('');
-        setDescription('');
-        await loadStudentData(false);
-        setPage('my_complaints');
-      } else {
-        setMsg(`❌ ${data.detail || 'Could not submit grievance.'}`);
-      }
-    } finally {
-      setSubmitting(false);
+    const res = await apiFetch(`${apiUrl}/api/complaints`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ student_id: user.user_id, category, summary, description })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      setMsg(`✅ Grievance ${data.ticket.ticket_id} submitted!`);
+      setSummary('');
+      setDescription('');
+      loadStudentData();
+      setPage('my_complaints');
+    } else {
+      setMsg(`❌ ${data.detail || 'Could not submit grievance.'}`);
     }
   };
 
@@ -102,7 +95,7 @@ export default function StudentPortal({ user, apiUrl }) {
     });
     if (res.ok) {
       setMsg(satisfied ? '✅ Marked Resolved & Closed!' : '🔄 Reopened for maintenance!');
-      await loadStudentData(false);
+      loadStudentData();
       setPage('my_complaints');
     }
   };
@@ -133,7 +126,7 @@ export default function StudentPortal({ user, apiUrl }) {
       setMsg('⭐ Review submitted!');
       setFeedbackReview('');
       setSelectedEvent(data.event);
-      loadStudentData(false);
+      loadStudentData();
     }
   };
 
@@ -149,8 +142,12 @@ export default function StudentPortal({ user, apiUrl }) {
     <div className="ptm-shell-layout">
       <aside className="ptm-sidebar-desktop">
         <button className={`ptm-side-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}>🏠 Student Home</button>
-        <button className={`ptm-side-btn ${page === 'new_complaint' ? 'active' : ''}`} onClick={() => setPage('new_complaint')}>➕ Lodge Grievance</button>
-        <button className={`ptm-side-btn ${page === 'my_complaints' ? 'active' : ''}`} onClick={() => setPage('my_complaints')}>💬 My Grievances ({complaints.length})</button>
+        {!isDayScholar && (
+          <>
+            <button className={`ptm-side-btn ${page === 'new_complaint' ? 'active' : ''}`} onClick={() => setPage('new_complaint')}>➕ Lodge Grievance</button>
+            <button className={`ptm-side-btn ${page === 'my_complaints' ? 'active' : ''}`} onClick={() => setPage('my_complaints')}>💬 My Grievances ({complaints.length})</button>
+          </>
+        )}
         <button className={`ptm-side-btn ${page === 'clubs_list' ? 'active' : ''}`} onClick={() => setPage('clubs_list')}>🎭 Campus Clubs ({clubs.length})</button>
         <button className={`ptm-side-btn ${page === 'events_list' ? 'active' : ''}`} onClick={() => setPage('events_list')}>🎪 EventRadar ({visibleEvents.length})</button>
         <button className={`ptm-side-btn ${page === 'calendar' ? 'active' : ''}`} onClick={() => setPage('calendar')}>🗓️ Event Calendar</button>
@@ -162,13 +159,13 @@ export default function StudentPortal({ user, apiUrl }) {
         {msg && <div className="ptm-toast" onClick={() => setMsg(null)}>{msg}</div>}
 
         {dataLoading ? (
-          <div className="ptm-wheel-box" style={{ minHeight: '280px' }}>
+          <div className="ptm-wheel-box">
             <div className="ptm-spinner-wheel" />
-            <div style={{ fontWeight: 800, color: '#002970', fontSize: '15px', marginTop: '14px' }}>
-              Loading your SVNIT Student Dashboard...
+            <div style={{ fontWeight: 700, color: '#002970', fontSize: '14px', marginTop: '12px' }}>
+              Loading your student portal...
             </div>
-            <div style={{ fontSize: '12.5px', color: '#6B7280', marginTop: '4px' }}>
-              Fetching hostel services, official clubs, and campus notices...
+            <div style={{ fontSize: '12px', color: '#6B7280', marginTop: '4px' }}>
+              Fetching campus events, clubs, and live updates...
             </div>
           </div>
         ) : (
@@ -176,25 +173,48 @@ export default function StudentPortal({ user, apiUrl }) {
             {page === 'home' && (
               <div>
                 <div className="ptm-mini-grid">
-                  <div className="ptm-mini-card" onClick={() => setPage('profile')}>
-                    <div className="ptm-row-between">
-                      <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>{user.hostel_block}</span>
-                      <span>🏠</span>
-                    </div>
-                    <div style={{ fontSize: '19px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>Room {user.room}</div>
-                    <button className="ptm-mini-btn">{user.year || 'Resident'} • {user.user_id}</button>
-                  </div>
+                  {isDayScholar ? (
+                    <>
+                      <div className="ptm-mini-card" onClick={() => setPage('profile')}>
+                        <div className="ptm-row-between">
+                          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>STUDENT STATUS</span>
+                          <span>🏡</span>
+                        </div>
+                        <div style={{ fontSize: '19px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>Day Scholar</div>
+                        <button className="ptm-mini-btn">{user.year || 'Student'} • {user.user_id}</button>
+                      </div>
+                      <div className="ptm-mini-card" onClick={() => setPage('calendar')}>
+                        <div className="ptm-row-between">
+                          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>CAMPUS EVENTS</span>
+                          <span>🗓️</span>
+                        </div>
+                        <div style={{ fontSize: '19px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>{visibleEvents.length} Live Events</div>
+                        <button className="ptm-mini-btn">Open Event Calendar →</button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="ptm-mini-card" onClick={() => setPage('profile')}>
+                        <div className="ptm-row-between">
+                          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>{user.hostel_block}</span>
+                          <span>🏠</span>
+                        </div>
+                        <div style={{ fontSize: '19px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>Room {user.room}</div>
+                        <button className="ptm-mini-btn">{user.year || 'Resident'} • {user.user_id}</button>
+                      </div>
 
-                  <div className="ptm-mini-card" onClick={() => setPage('my_complaints')}>
-                    <div className="ptm-row-between">
-                      <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>My Grievances</span>
-                      <span>🛠️</span>
-                    </div>
-                    <div style={{ fontSize: '19px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>{complaints.length} Tickets</div>
-                    <button className="ptm-mini-btn">
-                      {actionNeeded > 0 ? `⚡ ${actionNeeded} Verify Now` : 'Check Status →'}
-                    </button>
-                  </div>
+                      <div className="ptm-mini-card" onClick={() => setPage('my_complaints')}>
+                        <div className="ptm-row-between">
+                          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>My Grievances</span>
+                          <span>🛠️</span>
+                        </div>
+                        <div style={{ fontSize: '19px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>{complaints.length} Tickets</div>
+                        <button className="ptm-mini-btn">
+                          {actionNeeded > 0 ? `⚡ ${actionNeeded} Verify Now` : 'Check Status →'}
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {activeAd && (
@@ -215,30 +235,32 @@ export default function StudentPortal({ user, apiUrl }) {
                   </div>
                 )}
 
-                <div className="ptm-card">
-                  <div className="ptm-section-title">Hostel & Maintenance Services</div>
-                  <div className="ptm-icon-grid">
-                    <button className="ptm-icon-tile" onClick={() => setPage('new_complaint')}>
-                      <div className="ptm-icon-circle">➕</div>
-                      <span className="ptm-icon-label">Lodge Grievance</span>
-                    </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('my_complaints')}>
-                      <div className="ptm-icon-circle">
-                        💬
-                        {actionNeeded > 0 && <span className="ptm-tile-badge">{actionNeeded}</span>}
-                      </div>
-                      <span className="ptm-icon-label">Track Status</span>
-                    </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('coming_soon')}>
-                      <div className="ptm-icon-circle light">📅</div>
-                      <span className="ptm-icon-label">Attendance</span>
-                    </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('coming_soon')}>
-                      <div className="ptm-icon-circle light">🪪</div>
-                      <span className="ptm-icon-label">Leave Pass</span>
-                    </button>
+                {!isDayScholar && (
+                  <div className="ptm-card">
+                    <div className="ptm-section-title">Hostel & Maintenance Services</div>
+                    <div className="ptm-icon-grid">
+                      <button className="ptm-icon-tile" onClick={() => setPage('new_complaint')}>
+                        <div className="ptm-icon-circle">➕</div>
+                        <span className="ptm-icon-label">Lodge Grievance</span>
+                      </button>
+                      <button className="ptm-icon-tile" onClick={() => setPage('my_complaints')}>
+                        <div className="ptm-icon-circle">
+                          💬
+                          {actionNeeded > 0 && <span className="ptm-tile-badge">{actionNeeded}</span>}
+                        </div>
+                        <span className="ptm-icon-label">Track Status</span>
+                      </button>
+                      <button className="ptm-icon-tile" onClick={() => setPage('coming_soon')}>
+                        <div className="ptm-icon-circle light">📅</div>
+                        <span className="ptm-icon-label">Attendance</span>
+                      </button>
+                      <button className="ptm-icon-tile" onClick={() => setPage('coming_soon')}>
+                        <div className="ptm-icon-circle light">🪪</div>
+                        <span className="ptm-icon-label">Leave Pass</span>
+                      </button>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <div className="ptm-card">
                   <div className="ptm-section-title">Campus Life, Clubs & Notice Board</div>
@@ -267,12 +289,12 @@ export default function StudentPortal({ user, apiUrl }) {
               </div>
             )}
 
-            {page === 'new_complaint' && (
+            {!isDayScholar && page === 'new_complaint' && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
                   <h1 className="ptm-page-title">Lodge Hostel Grievance</h1>
-                  <p className="ptm-page-sub">{user.hostel_block} • {user.wing ? `${user.wing} • ` : ''}Room {user.room}</p>
+                  <p className="ptm-page-sub">{user.hostel_block} • {user.wing} • Room {user.room}</p>
                 </div>
                 <div className="ptm-card">
                   <form onSubmit={handleCreateComplaint} className="ptm-form-stack">
@@ -288,17 +310,15 @@ export default function StudentPortal({ user, apiUrl }) {
                     </div>
                     <div>
                       <label className="ptm-label">Detailed Description</label>
-                      <textarea rows="3" className="ptm-input" placeholder="Describe the issue and preferred time for inspection..." value={description} onChange={(e) => setDescription(e.target.value)} required />
+                      <textarea rows="3" className="ptm-input" placeholder="Describe the issue and preferred time..." value={description} onChange={(e) => setDescription(e.target.value)} required />
                     </div>
-                    <button type="submit" className="ptm-btn-primary" disabled={submitting}>
-                      {submitting ? 'Submitting Grievance...' : 'Submit Grievance'}
-                    </button>
+                    <button type="submit" className="ptm-btn-primary">Submit Grievance</button>
                   </form>
                 </div>
               </div>
             )}
 
-            {page === 'my_complaints' && (
+            {!isDayScholar && page === 'my_complaints' && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
@@ -331,7 +351,7 @@ export default function StudentPortal({ user, apiUrl }) {
               </div>
             )}
 
-            {page === 'ticket_detail' && selectedTicket && (
+            {!isDayScholar && page === 'ticket_detail' && selectedTicket && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('my_complaints')}>←</button>
@@ -363,8 +383,7 @@ export default function StudentPortal({ user, apiUrl }) {
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">Official SVNIT Student Clubs & Chapters</h1>
-                  <p className="ptm-page-sub">Tap any club or chapter to view its mission, faculty advisors, members, and events</p>
+                  <h1 className="ptm-page-title">Official SVNIT Clubs & Chapters</h1>
                 </div>
                 <div className="ptm-card">
                   {clubs.length === 0 ? (
@@ -373,11 +392,11 @@ export default function StudentPortal({ user, apiUrl }) {
                     <div className="ptm-list">
                       {clubs.map((c) => (
                         <div key={c.club_id} className="ptm-list-row" onClick={() => { setSelectedClub(c); setClubSubView('hub'); setPage('club_detail'); }}>
-                          <div className="ptm-avatar-pastel" style={{ background: '#E0F2FE', color: '#002970' }}>{c.club_id.slice(0, 3)}</div>
+                          <div className="ptm-avatar-pastel" style={{ background: '#E0F2FE', color: '#002970' }}>{c.club_id.slice(0, 2)}</div>
                           <div className="ptm-list-main">
                             <div className="ptm-list-title">{c.name}</div>
                             <div className="ptm-list-sub">{c.mission}</div>
-                            {c.faculty_advisor && <span className="ptm-tag-pill">👨‍🏫 {c.faculty_advisor}</span>}
+                            <span className="ptm-tag-pill">Faculty Advisor: {c.faculty_advisor}</span>
                           </div>
                           <span>›</span>
                         </div>
@@ -392,7 +411,6 @@ export default function StudentPortal({ user, apiUrl }) {
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => clubSubView !== 'hub' ? setClubSubView('hub') : setPage('clubs_list')}>←</button>
-                  <span className="ptm-tag-pill">{selectedClub.club_id}</span>
                   <h1 className="ptm-page-title">{selectedClub.name}</h1>
                   <p className="ptm-page-sub">{selectedClub.mission}</p>
                 </div>
@@ -401,99 +419,70 @@ export default function StudentPortal({ user, apiUrl }) {
                     <button className="ptm-icon-tile" onClick={() => setClubSubView('hub')}><div className="ptm-icon-circle">🎪</div><span className="ptm-icon-label">Club Events</span></button>
                     <button className="ptm-icon-tile" onClick={() => setClubSubView('members')}><div className="ptm-icon-circle">👥</div><span className="ptm-icon-label">Members ({selectedClub.members?.length || 0})</span></button>
                     <button className="ptm-icon-tile" onClick={() => setClubSubView('gallery')}><div className="ptm-icon-circle">📸</div><span className="ptm-icon-label">Gallery Links</span></button>
-                    <button className="ptm-icon-tile" onClick={() => setClubSubView('info')}><div className="ptm-icon-circle">ℹ️</div><span className="ptm-icon-label">Faculty & Info</span></button>
+                    <button className="ptm-icon-tile" onClick={() => setClubSubView('info')}><div className="ptm-icon-circle">ℹ️</div><span className="ptm-icon-label">Club Info</span></button>
                   </div>
                 </div>
 
                 {clubSubView === 'hub' && (
                   <div className="ptm-card">
                     <div className="ptm-section-title">Events by {selectedClub.club_id}</div>
-                    {visibleEvents.filter((e) => e.club_id.toUpperCase() === selectedClub.club_id.toUpperCase()).length === 0 ? (
-                      <div className="ptm-list-sub">No upcoming events posted by {selectedClub.name} yet.</div>
-                    ) : (
-                      <div className="ptm-list">
-                        {visibleEvents.filter((e) => e.club_id.toUpperCase() === selectedClub.club_id.toUpperCase()).map((ev) => (
-                          <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
-                            <div className="ptm-avatar-pastel">🎪</div>
-                            <div className="ptm-list-main">
-                              <div className="ptm-list-title">{ev.title}</div>
-                              <div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date}</div>
-                            </div>
-                            <span>›</span>
+                    <div className="ptm-list">
+                      {visibleEvents.filter((e) => e.club_id.toUpperCase() === selectedClub.club_id.toUpperCase()).map((ev) => (
+                        <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
+                          <div className="ptm-avatar-pastel">🎪</div>
+                          <div className="ptm-list-main">
+                            <div className="ptm-list-title">{ev.title}</div>
+                            <div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date}</div>
                           </div>
-                        ))}
-                      </div>
-                    )}
+                          <span>›</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 
                 {clubSubView === 'members' && (
                   <div className="ptm-card">
                     <div className="ptm-section-title">Committee Members</div>
-                    {(!selectedClub.members || selectedClub.members.length === 0) ? (
-                      <div className="ptm-list-sub">Committee member list will be updated by the club coordinator.</div>
-                    ) : (
-                      <div className="ptm-list">
-                        {selectedClub.members.map((m, i) => (
-                          <div key={i} className="ptm-list-row">
-                            <div className="ptm-avatar-pastel">{(m.name || 'MB').slice(0, 2)}</div>
-                            <div className="ptm-list-main"><div className="ptm-list-title">{m.name}</div><div className="ptm-list-sub">{m.roll}</div></div>
-                            <span className="ptm-tag-pill">{m.position}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <div className="ptm-list">
+                      {selectedClub.members?.map((m, i) => (
+                        <div key={i} className="ptm-list-row">
+                          <div className="ptm-avatar-pastel">{(m.name || 'MB').slice(0, 2)}</div>
+                          <div className="ptm-list-main"><div className="ptm-list-title">{m.name}</div><div className="ptm-list-sub">{m.roll}</div></div>
+                          <span className="ptm-tag-pill">{m.position}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 
                 {clubSubView === 'gallery' && (
                   <div className="ptm-card">
                     <div className="ptm-section-title">Club Media & Drive Links</div>
-                    {(!selectedClub.gallery || selectedClub.gallery.length === 0) ? (
-                      <div className="ptm-list-sub">No media links uploaded yet.</div>
-                    ) : (
-                      <div className="ptm-list">
-                        {selectedClub.gallery.map((g, i) => (
-                          <div key={i} className="ptm-list-row">
-                            <div className="ptm-avatar-pastel">📸</div>
-                            <div className="ptm-list-main">
-                              <div className="ptm-list-title">{g.caption}</div>
-                              <div className="ptm-list-sub">{g.timestamp}</div>
-                            </div>
-                            <a href={g.media_url} target="_blank" rel="noreferrer" className="ptm-btn-secondary" style={{ textDecoration: 'none' }}>
-                              Open Link ↗
-                            </a>
+                    <div className="ptm-list">
+                      {selectedClub.gallery?.map((g, i) => (
+                        <div key={i} className="ptm-list-row">
+                          <div className="ptm-avatar-pastel">📸</div>
+                          <div className="ptm-list-main">
+                            <div className="ptm-list-title">{g.caption}</div>
+                            <div className="ptm-list-sub">{g.timestamp}</div>
                           </div>
-                        ))}
-                      </div>
-                    )}
+                          <a href={g.media_url} target="_blank" rel="noreferrer" className="ptm-btn-secondary" style={{ textDecoration: 'none' }}>
+                            Open Link ↗
+                          </a>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 
                 {clubSubView === 'info' && (
                   <div className="ptm-card">
-                    <div className="ptm-list">
-                      <div className="ptm-list-row">
-                        <div className="ptm-list-main">
-                          <div className="ptm-list-title">Faculty Advisor</div>
-                          <div className="ptm-list-sub">{selectedClub.faculty_advisor || 'SAC Faculty Advisor'}</div>
-                        </div>
-                      </div>
-                      <div className="ptm-list-row">
-                        <div className="ptm-list-main">
-                          <div className="ptm-list-title">Student Head / Convener</div>
-                          <div className="ptm-list-sub">{selectedClub.head_coordinator || 'Student Coordinator'}</div>
-                        </div>
-                      </div>
-                      {selectedClub.extra_dean_info && (
-                        <div className="ptm-list-row">
-                          <div className="ptm-list-main">
-                            <div className="ptm-list-title">Activities & Highlights</div>
-                            <div className="ptm-list-sub">{selectedClub.extra_dean_info}</div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    <div className="ptm-list-title">Faculty Advisor: {selectedClub.faculty_advisor}</div>
+                    <div className="ptm-list-sub" style={{ marginTop: '6px' }}>Head Coordinator: {selectedClub.head_coordinator}</div>
+                    {selectedClub.extra_dean_info && (
+                      <div className="ptm-list-sub" style={{ marginTop: '6px' }}>Highlights: {selectedClub.extra_dean_info}</div>
+                    )}
                   </div>
                 )}
               </div>
@@ -545,7 +534,7 @@ export default function StudentPortal({ user, apiUrl }) {
                   <div className="ptm-form-stack" style={{ marginTop: '14px' }}>
                     {selectedEvent.image_url && (
                       <a href={selectedEvent.image_url} target="_blank" rel="noreferrer" className="ptm-btn-secondary" style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}>
-                        🖼️ View Event Poster / Google Drive Attachment ↗
+                        🖼️ View Event Poster / Brochure ↗
                       </a>
                     )}
                     {selectedEvent.registration_link && (
@@ -615,7 +604,6 @@ export default function StudentPortal({ user, apiUrl }) {
                   <div className="ptm-list-sub" style={{ marginBottom: '16px' }}>
                     🎯 <strong>Target Audience:</strong> {selectedNotice.target_year} • {selectedNotice.target_branch}
                   </div>
-
                   <div className="ptm-form-stack">
                     {selectedNotice.image_url && (
                       <a href={selectedNotice.image_url} target="_blank" rel="noreferrer" className="ptm-btn-secondary" style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}>
@@ -662,17 +650,13 @@ export default function StudentPortal({ user, apiUrl }) {
                 </div>
                 <div className="ptm-card">
                   <div className="ptm-section-title">Events on {selectedDateStr}</div>
-                  {visibleEvents.filter((e) => e.date === selectedDateStr).length === 0 ? (
-                    <div className="ptm-list-sub">No events scheduled on this date.</div>
-                  ) : (
-                    visibleEvents.filter((e) => e.date === selectedDateStr).map((ev) => (
-                      <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
-                        <div className="ptm-avatar-pastel">🎪</div>
-                        <div className="ptm-list-main"><div className="ptm-list-title">{ev.title}</div><div className="ptm-list-sub">📍 {ev.venue}</div></div>
-                        <span>›</span>
-                      </div>
-                    ))
-                  )}
+                  {visibleEvents.filter((e) => e.date === selectedDateStr).map((ev) => (
+                    <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
+                      <div className="ptm-avatar-pastel">🎪</div>
+                      <div className="ptm-list-main"><div className="ptm-list-title">{ev.title}</div><div className="ptm-list-sub">📍 {ev.venue}</div></div>
+                      <span>›</span>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
@@ -681,13 +665,13 @@ export default function StudentPortal({ user, apiUrl }) {
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">My Resident Profile</h1>
+                  <h1 className="ptm-page-title">My Student Profile</h1>
                 </div>
                 <div className="ptm-card">
                   <div className="ptm-list">
                     <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Full Name & Roll No</div><div className="ptm-list-sub">{user.full_name} ({user.user_id})</div></div></div>
-                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Hostel, Wing & Room Number</div><div className="ptm-list-sub">{user.hostel_block}, {user.wing}, Room {user.room}</div></div></div>
-                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Department & Year</div><div className="ptm-list-sub">{user.department} • {user.year || 'Resident'}</div></div></div>
+                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Residence Status</div><div className="ptm-list-sub">{isDayScholar ? 'Day Scholar (Non-Hosteller)' : `${user.hostel_block}, ${user.wing}, Room ${user.room}`}</div></div></div>
+                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Department & Year</div><div className="ptm-list-sub">{user.department} • {user.year || 'Student'}</div></div></div>
                     <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Mobile</div><div className="ptm-list-sub">{user.phone || 'Not provided'}</div></div></div>
                   </div>
                 </div>
@@ -712,8 +696,12 @@ export default function StudentPortal({ user, apiUrl }) {
 
       <nav className="ptm-bottom-nav">
         <button className={`ptm-bnav-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}><span>🏠</span><span>Home</span></button>
-        <button className={`ptm-bnav-btn ${page === 'my_complaints' ? 'active' : ''}`} onClick={() => setPage('my_complaints')}><span>💬</span><span>Grievances</span></button>
-        <button className={`ptm-bnav-btn ${page === 'clubs_list' ? 'active' : ''}`} onClick={() => setPage('clubs_list')}><span>🎭</span><span>Clubs</span></button>
+        {!isDayScholar ? (
+          <button className={`ptm-bnav-btn ${page === 'my_complaints' ? 'active' : ''}`} onClick={() => setPage('my_complaints')}><span>💬</span><span>Grievances</span></button>
+        ) : (
+          <button className={`ptm-bnav-btn ${page === 'clubs_list' ? 'active' : ''}`} onClick={() => setPage('clubs_list')}><span>🎭</span><span>Clubs</span></button>
+        )}
+        <button className={`ptm-bnav-btn ${page === 'events_list' ? 'active' : ''}`} onClick={() => setPage('events_list')}><span>🎪</span><span>Events</span></button>
         <button className={`ptm-bnav-btn ${page === 'notices' ? 'active' : ''}`} onClick={() => setPage('notices')}><span>📢</span><span>Notices</span></button>
         <button className={`ptm-bnav-btn ${page === 'profile' ? 'active' : ''}`} onClick={() => setPage('profile')}><span>👤</span><span>Profile</span></button>
       </nav>

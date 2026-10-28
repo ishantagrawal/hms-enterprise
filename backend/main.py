@@ -71,7 +71,7 @@ def db_exec(conn, query: str, params: tuple = ()):
 
 
 def create_session_token(user_id: str) -> str:
-    exp = int(time.time()) + 86400 * 7  # 7 days validity
+    exp = int(time.time()) + 86400 * 7
     payload = f"{user_id.upper()}:{exp}"
     sig = hmac.new(AUTH_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
     raw = f"{payload}:{sig}"
@@ -144,8 +144,8 @@ def upsert_club(conn, c: tuple):
             ON CONFLICT (club_id) DO UPDATE SET
                 name = EXCLUDED.name,
                 mission = EXCLUDED.mission,
-                faculty_advisor = CASE WHEN clubs.faculty_advisor IS NULL OR clubs.faculty_advisor = '' OR clubs.faculty_advisor = 'To be updated by club' THEN EXCLUDED.faculty_advisor ELSE clubs.faculty_advisor END,
-                head_coordinator = CASE WHEN clubs.head_coordinator IS NULL OR clubs.head_coordinator = '' OR clubs.head_coordinator = 'To be updated by club' THEN EXCLUDED.head_coordinator ELSE clubs.head_coordinator END
+                faculty_advisor = CASE WHEN clubs.faculty_advisor IS NULL OR clubs.faculty_advisor = '' THEN EXCLUDED.faculty_advisor ELSE clubs.faculty_advisor END,
+                head_coordinator = CASE WHEN clubs.head_coordinator IS NULL OR clubs.head_coordinator = '' THEN EXCLUDED.head_coordinator ELSE clubs.head_coordinator END
             """,
             c,
         )
@@ -308,151 +308,28 @@ def init_db():
         upsert_user(conn, u)
 
     official_svnit_clubs = [
-        (
-            "ACM",
-            "ACM Student Chapter SVNIT",
-            "Official Association for Computing Machinery chapter at SVNIT fostering competitive programming, open-source development, AI/ML research, and flagship hackathons like HackDotSlash.",
-            "Dr. Dipti P. Rana & Dr. Mukesh A. Zaveri (DoCSE)",
-            "Student Chairperson — ACM SVNIT",
-            "Annual flagship events: DotSlash Hackathon, CodeSprint, Epiphany & CS Winter of Code."
-        ),
-        (
-            "DRISHTI",
-            "DRISHTI — Revolutionary Innovation & Robotics Club",
-            "SVNIT's premier technical hobby and robotics innovation lab building autonomous rovers, drones, IoT systems, and competing in national competitions including Robocon.",
-            "Dr. A. D. Darji (DoECE) & Dr. R. N. Patel (DoME)",
-            "Head Coordinator — Team DRISHTI",
-            "Operates out of the DRISHTI Innovation Lab; conducts fresher technical mentorship & workshops."
-        ),
-        (
-            "GDSC",
-            "Google Developer Student Clubs (GDSC SVNIT)",
-            "University developer community powered by Google Developers focusing on Web, Android, Flutter, Cloud Computing, Machine Learning, and Solution Challenge projects.",
-            "Dr. Bhavesh N. Gohil (DoCSE)",
-            "GDSC Lead — SVNIT Surat",
-            "Conducts Google Cloud Study Jams, DevFest Campus Sessions, and Android Bootcamps."
-        ),
-        (
-            "CHRD",
-            "CHRD — Center for Human Resource Development",
-            "The official cultural society of SVNIT nurturing talent across Music, Dance (Nritya), Dramatics (Kirdaar), and Fine Arts (Aakriti), and spearheading cultural nights during Sparsh.",
-            "Dr. S. R. Patel & SAC Cultural Committee",
-            "General Secretary (Cultural) / CHRD Convener",
-            "Wings: Raag (Music), Nritya (Dance), Kirdaar (Drama), and Aakriti (Fine Arts)."
-        ),
-        (
-            "LAC",
-            "LAC — Literary & Debating Club",
-            "Official literary, parliamentary debating, quizzing, creative writing, and public speaking society of SVNIT Surat.",
-            "Dr. Urvashi Kaushal (DoHSS)",
-            "Convener — Literary & Debating Club",
-            "Organises SVNIT Parliamentary Debate, Model United Nations (MUN), and LitFest."
-        ),
-        (
-            "SCOSH",
-            "SCOSH — Society for Cultivation of Science & Humanities",
-            "Dedicated to cultivating scientific temperament, astronomy observation, research symposia, and interdisciplinary science quizzing across campus.",
-            "Dr. Vipul Kheraj (Department of Physics)",
-            "Convener — SCOSH SVNIT",
-            "Organises InQuest, Night Sky Stargazing Sessions, and National Science Day Conclave."
-        ),
-        (
-            "SAE",
-            "SAE Collegiate Club — Motorsports & Automotive",
-            "Society of Automotive Engineers chapter designing and fabricating All-Terrain Vehicles (Baja SAE), Formula-style race cars (Phoenix Racing), and Aero Design prototypes.",
-            "Dr. R. D. Shah & Dr. J. V. Menghani (DoME)",
-            "Captain — SAE SVNIT / Phoenix Racing",
-            "Represents SVNIT at SAE BAJA, SUPRA SAEINDIA, and Efficycle competitions."
-        ),
-        (
-            "CES",
-            "CES — Civil Engineering Society",
-            "Departmental technical society of the Department of Civil Engineering organising Kaizen (Annual Civil Techfest), site visits, AutoCAD/STAAD workshops, and industry lectures.",
-            "Dr. G. J. Joshi & Dr. Kashyap A. Patel (DoCE)",
-            "Student President — CES SVNIT",
-            "Flagship Conclave: Kaizen — Civil Engineering Annual Symposium."
-        ),
-        (
-            "EES",
-            "EES — Electrical Engineering Society",
-            "Official student chapter of the Department of Electrical Engineering conducting power systems workshops, EV seminars, PCB design bootcamps, and Urja tech events.",
-            "Dr. Sabha Raj Arya & Dr. Basant Kumar (DoEE)",
-            "President — Electrical Engineering Society",
-            "Conducts technical workshops on MATLAB/Simulink, Embedded Systems, and Smart Grids."
-        ),
-        (
-            "ISF",
-            "ISF — IETE Students' Forum (ECE)",
-            "Institution of Electronics and Telecommunication Engineers student chapter at SVNIT focusing on VLSI, Embedded Systems, Signal Processing, and 5G/IoT innovation.",
-            "Dr. P. N. Patel & Dr. J. N. Sarvaiya (DoECE)",
-            "Chairperson — ISF SVNIT",
-            "Hosts VLSI & Arduino hardware hackathons and electronics design contests."
-        ),
-        (
-            "CHES",
-            "ChES — Chemical Engineering Society (AIChE)",
-            "Official Chemical Engineering Society and AIChE student chapter promoting process simulation, green energy research, Chem-E-Car, and Siphon (Annual Chemical Techfest).",
-            "Dr. V. N. Lad & Dr. Mausumi Mukhopadhyay (DoChE)",
-            "President — ChES SVNIT",
-            "Flagship Event: Siphon — Annual Chemical Engineering Festival."
-        ),
-        (
-            "CEV",
-            "CEV — Cutting Edge Visionaries",
-            "Techno-managerial, finance, entrepreneurship, stock market literacy, and startup incubation society of SVNIT Surat.",
-            "Dr. R. K. Jana (DoMS / Applied Math)",
-            "Chief Coordinator — Cutting Edge Visionaries",
-            "Conducts Case Study Competitions, FinStreet Sessions, and Startup Pitching."
-        ),
-        (
-            "RENESA",
-            "Renesa — Official Campus Media & Magazine",
-            "The official student media body, journalism society, and monthly newsletter/magazine publication house of SVNIT Surat.",
-            "Dr. Urvashi Kaushal (Chief Editor / Faculty Advisor)",
-            "Editor-in-Chief — Renesa SVNIT",
-            "Publishes official campus editions, interviews, and event coverage."
-        ),
-        (
-            "MALANG",
-            "Malang — Dramatics & Street Play Society",
-            "Official theatre, Nukkad Natak (street play), and stage acting troupe of SVNIT performing social-awareness plays across national collegiate festivals.",
-            "SAC Cultural Faculty Coordinator",
-            "Head Coordinator — Malang SVNIT",
-            "Performs Nukkad Natak, Stage Plays, and Mime at Sparsh and IIT/NIT fests."
-        ),
-        (
-            "NSS",
-            "NSS & Nirvaan — National Service Scheme SVNIT",
-            "Official community service, blood donation, campus cleanliness, tree plantation, and rural outreach unit of SVNIT Surat.",
-            "Dr. R. N. Patel (NSS Programme Coordinator)",
-            "Student Head — NSS SVNIT Unit",
-            "Organises Blood Donation Camps, Cloth Drives, and Village Education Drives."
-        )
+        ("ACM", "ACM Student Chapter SVNIT", "Official Association for Computing Machinery chapter at SVNIT fostering competitive programming, open-source development, AI/ML research, and flagship hackathons like HackDotSlash.", "Dr. Dipti P. Rana & Dr. Mukesh A. Zaveri (DoCSE)", "Student Chairperson — ACM SVNIT", "Annual flagship events: DotSlash Hackathon, CodeSprint, Epiphany & CS Winter of Code."),
+        ("DRISHTI", "DRISHTI — Revolutionary Innovation & Robotics Club", "SVNIT's premier technical hobby and robotics innovation lab building autonomous rovers, drones, IoT systems, and competing in national competitions including Robocon.", "Dr. A. D. Darji (DoECE) & Dr. R. N. Patel (DoME)", "Head Coordinator — Team DRISHTI", "Operates out of the DRISHTI Innovation Lab; conducts fresher technical mentorship & workshops."),
+        ("GDSC", "Google Developer Student Clubs (GDSC SVNIT)", "University developer community powered by Google Developers focusing on Web, Android, Flutter, Cloud Computing, Machine Learning, and Solution Challenge projects.", "Dr. Bhavesh N. Gohil (DoCSE)", "GDSC Lead — SVNIT Surat", "Conducts Google Cloud Study Jams, DevFest Campus Sessions, and Android Bootcamps."),
+        ("CHRD", "CHRD — Center for Human Resource Development", "The official cultural society of SVNIT nurturing talent across Music, Dance (Nritya), Dramatics (Kirdaar), and Fine Arts (Aakriti), and spearheading cultural nights during Sparsh.", "Dr. S. R. Patel & SAC Cultural Committee", "General Secretary (Cultural) / CHRD Convener", "Wings: Raag (Music), Nritya (Dance), Kirdaar (Drama), and Aakriti (Fine Arts)."),
+        ("LAC", "LAC — Literary & Debating Club", "Official literary, parliamentary debating, quizzing, creative writing, and public speaking society of SVNIT Surat.", "Dr. Urvashi Kaushal (DoHSS)", "Convener — Literary & Debating Club", "Organises SVNIT Parliamentary Debate, Model United Nations (MUN), and LitFest."),
+        ("SCOSH", "SCOSH — Society for Cultivation of Science & Humanities", "Dedicated to cultivating scientific temperament, astronomy observation, research symposia, and interdisciplinary science quizzing across campus.", "Dr. Vipul Kheraj (Department of Physics)", "Convener — SCOSH SVNIT", "Organises InQuest, Night Sky Stargazing Sessions, and National Science Day Conclave."),
+        ("SAE", "SAE Collegiate Club — Motorsports & Automotive", "Society of Automotive Engineers chapter designing and fabricating All-Terrain Vehicles (Baja SAE), Formula-style race cars (Phoenix Racing), and Aero Design prototypes.", "Dr. R. D. Shah & Dr. J. V. Menghani (DoME)", "Captain — SAE SVNIT / Phoenix Racing", "Represents SVNIT at SAE BAJA, SUPRA SAEINDIA, and Efficycle competitions."),
+        ("CES", "CES — Civil Engineering Society", "Departmental technical society of the Department of Civil Engineering organising Kaizen (Annual Civil Techfest), site visits, AutoCAD/STAAD workshops, and industry lectures.", "Dr. G. J. Joshi & Dr. Kashyap A. Patel (DoCE)", "Student President — CES SVNIT", "Flagship Conclave: Kaizen — Civil Engineering Annual Symposium."),
+        ("EES", "EES — Electrical Engineering Society", "Official student chapter of the Department of Electrical Engineering conducting power systems workshops, EV seminars, PCB design bootcamps, and Urja tech events.", "Dr. Sabha Raj Arya & Dr. Basant Kumar (DoEE)", "President — Electrical Engineering Society", "Conducts technical workshops on MATLAB/Simulink, Embedded Systems, and Smart Grids."),
+        ("ISF", "ISF — IETE Students' Forum (ECE)", "Institution of Electronics and Telecommunication Engineers student chapter at SVNIT focusing on VLSI, Embedded Systems, Signal Processing, and 5G/IoT innovation.", "Dr. P. N. Patel & Dr. J. N. Sarvaiya (DoECE)", "Chairperson — ISF SVNIT", "Hosts VLSI & Arduino hardware hackathons and electronics design contests."),
+        ("CHES", "ChES — Chemical Engineering Society (AIChE)", "Official Chemical Engineering Society and AIChE student chapter promoting process simulation, green energy research, Chem-E-Car, and Siphon (Annual Chemical Techfest).", "Dr. V. N. Lad & Dr. Mausumi Mukhopadhyay (DoChE)", "President — ChES SVNIT", "Flagship Event: Siphon — Annual Chemical Engineering Festival."),
+        ("CEV", "CEV — Cutting Edge Visionaries", "Techno-managerial, finance, entrepreneurship, stock market literacy, and startup incubation society of SVNIT Surat.", "Dr. R. K. Jana (DoMS / Applied Math)", "Chief Coordinator — Cutting Edge Visionaries", "Conducts Case Study Competitions, FinStreet Sessions, and Startup Pitching."),
+        ("RENESA", "Renesa — Official Campus Media & Magazine", "The official student media body, journalism society, and monthly newsletter/magazine publication house of SVNIT Surat.", "Dr. Urvashi Kaushal (Chief Editor / Faculty Advisor)", "Editor-in-Chief — Renesa SVNIT", "Publishes official campus editions, interviews, and event coverage."),
+        ("MALANG", "Malang — Dramatics & Street Play Society", "Official theatre, Nukkad Natak (street play), and stage acting troupe of SVNIT performing social-awareness plays across national collegiate festivals.", "SAC Cultural Faculty Coordinator", "Head Coordinator — Malang SVNIT", "Performs Nukkad Natak, Stage Plays, and Mime at Sparsh and IIT/NIT fests."),
+        ("NSS", "NSS & Nirvaan — National Service Scheme SVNIT", "Official community service, blood donation, campus cleanliness, tree plantation, and rural outreach unit of SVNIT Surat.", "Dr. R. N. Patel (NSS Programme Coordinator)", "Student Head — NSS SVNIT Unit", "Organises Blood Donation Camps, Cloth Drives, and Village Education Drives.")
     ]
 
     for cid, cname, cmission, cadvisor, chead, cextra in official_svnit_clubs:
-        upsert_club(
-            conn,
-            (cid, cname, cmission, cadvisor, chead, cextra, "", "", json.dumps([]), json.dumps([]))
-        )
+        upsert_club(conn, (cid, cname, cmission, cadvisor, chead, cextra, "", "", json.dumps([]), json.dumps([])))
         upsert_user(
             conn,
-            (
-                cid,
-                DEFAULT_ADMIN_PASS,
-                cname,
-                "ClubOrganizer",
-                f"Official Club Portal ({cid})",
-                "SVNIT",
-                "All",
-                "-",
-                "SAC Office",
-                "0261-2201500",
-                f"{cid.lower()}@svnit.ac.in",
-                "Student Activity Centre (SAC)",
-                "",
-                ""
-            )
+            (cid, DEFAULT_ADMIN_PASS, cname, "ClubOrganizer", f"Official Club Portal ({cid})", "SVNIT", "All", "-", "SAC Office", "0261-2201500", f"{cid.lower()}@svnit.ac.in", "Student Activity Centre (SAC)", "", "")
         )
 
     default_depts = [
@@ -474,9 +351,6 @@ def init_db():
 init_db()
 
 
-# =========================================================
-# PYDANTIC MODELS
-# =========================================================
 class PasswordLoginReq(BaseModel):
     user_id: str
     password: str
@@ -486,8 +360,8 @@ class GoogleLoginReq(BaseModel):
 
 class StudentProfileReq(BaseModel):
     hostel_block: str
-    wing: str
-    room: str
+    wing: Optional[str] = ""
+    room: Optional[str] = ""
     phone: str
 
 class CreateDepartmentReq(BaseModel):
@@ -520,6 +394,7 @@ class StudentManualAddReq(BaseModel):
     user_id: str
     full_name: str
     hostel_block: str
+    wing: Optional[str] = "Wing A"
     room: str
     department: str
     year: Optional[str] = "1st Year"
@@ -703,7 +578,7 @@ def get_account_for_google_claims(claims: dict):
     else:
         sub_parts = email.split("@", 1)[1].split(".")
         sub_code = sub_parts[0].upper() if len(sub_parts) > 2 else "SVNIT"
-        dept_name = departments.get(sub_code, "SVNIT Resident")
+        dept_name = departments.get(sub_code, "SVNIT Student")
         academic_year = 1
 
     year_suffix = "st" if academic_year == 1 else "nd" if academic_year == 2 else "rd" if academic_year == 3 else "th"
@@ -719,7 +594,7 @@ def get_account_for_google_claims(claims: dict):
         db_exec(
             conn,
             "INSERT INTO users (user_id, password, full_name, role, authority_title, institute_id, hostel_block, year, room, phone, email, department, dob, wing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (local_part, "", full_name, "Student", "Verified Resident", "SVNIT", "", year, "", "", email, dept_name, "", ""),
+            (local_part, "", full_name, "Student", "Verified Student", "SVNIT", "", year, "", "", email, dept_name, "", ""),
         )
         account = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (local_part,)).fetchone()
     conn.commit()
@@ -733,14 +608,12 @@ def account_from_bearer(request: Request):
     if scheme.lower() != "bearer" or not credential:
         raise HTTPException(status_code=401, detail="Please sign in to continue.")
 
-    # 1. Fast HMAC Session Token Check (Used by both Password & Google logins)
     token_user_id = verify_session_token(credential)
     if token_user_id:
         account = get_account_by_id(token_user_id)
         if account:
             return account
 
-    # 2. Fallback to Google JWT Verification
     claims = verify_google_credential(credential)
     email = str(claims.get("email", "")).strip().lower()
     if claims.get("email_verified") is not True or not is_svnit_email(email):
@@ -770,9 +643,6 @@ async def require_authentication(request: Request, call_next):
     return await call_next(request)
 
 
-# =========================================================
-# API ENDPOINTS
-# =========================================================
 @app.get("/")
 def root():
     return {
@@ -856,21 +726,29 @@ def update_student_profile(req: StudentProfileReq, request: Request):
     if account["role"] != "Student":
         raise HTTPException(status_code=403, detail="Only student profiles can be updated here.")
     hostel = req.hostel_block.strip()
-    wing = req.wing.strip()
-    room = req.room.strip()
     phone = req.phone.strip()
-    if wing not in {f"Wing {letter}" for letter in "ABCDEFGH"}:
-        raise HTTPException(status_code=400, detail="Select a valid hostel wing (Wing A to Wing H).")
-    if not room or len(room) > 20:
-        raise HTTPException(status_code=400, detail="Enter a valid room number.")
     if not re.fullmatch(r"\+?[0-9][0-9\s()-]{7,17}", phone):
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit mobile number.")
+
+    if hostel.lower() == "day scholar":
+        hostel = "Day Scholar"
+        wing = "N/A"
+        room = "N/A"
+        title = "Day Scholar"
+    else:
+        wing = (req.wing or "").strip()
+        room = (req.room or "").strip()
+        if wing not in {f"Wing {letter}" for letter in "ABCDEFGH"}:
+            raise HTTPException(status_code=400, detail="Select a valid hostel wing (Wing A to Wing H).")
+        if not room or len(room) > 20:
+            raise HTTPException(status_code=400, detail="Enter a valid room number.")
+        title = "Verified Resident"
 
     conn = get_conn()
     db_exec(
         conn,
-        "UPDATE users SET hostel_block = ?, wing = ?, room = ?, phone = ? WHERE UPPER(user_id) = ?",
-        (hostel, wing, room, phone, account["user_id"].upper())
+        "UPDATE users SET hostel_block = ?, wing = ?, room = ?, phone = ?, authority_title = ? WHERE UPPER(user_id) = ?",
+        (hostel, wing, room, phone, title, account["user_id"].upper())
     )
     updated = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (account["user_id"].upper(),)).fetchone()
     conn.commit()
@@ -936,7 +814,7 @@ def get_departments(request: Request, hostel_block: str = "All"):
 
 def list_departments(hostel_block: str = "All"):
     conn = get_conn()
-    if hostel_block and hostel_block != "All":
+    if hostel_block and hostel_block not in {"All", "Day Scholar"}:
         rows = db_exec(
             conn,
             "SELECT departments.*, users.email AS login_email FROM departments LEFT JOIN users ON UPPER(users.user_id) = UPPER(departments.id) WHERE departments.type = 'Central' OR LOWER(departments.hostel_block) = LOWER(?)",
@@ -1055,9 +933,9 @@ def get_hostel_students(request: Request, hostel_block: str = "All"):
         hostel_block = account["hostel_block"]
     conn = get_conn()
     if hostel_block == "All":
-        rows = db_exec(conn, "SELECT * FROM users WHERE role = 'Student'").fetchall()
+        rows = db_exec(conn, "SELECT * FROM users WHERE role = 'Student' ORDER BY user_id ASC").fetchall()
     else:
-        rows = db_exec(conn, "SELECT * FROM users WHERE role = 'Student' AND LOWER(hostel_block) = LOWER(?)", (hostel_block,)).fetchall()
+        rows = db_exec(conn, "SELECT * FROM users WHERE role = 'Student' AND LOWER(hostel_block) = LOWER(?) ORDER BY user_id ASC", (hostel_block,)).fetchall()
     conn.close()
     return [{k: v for k, v in dict(r).items() if k not in {"password", "dob"}} for r in rows]
 
@@ -1065,25 +943,65 @@ def get_hostel_students(request: Request, hostel_block: str = "All"):
 @app.post("/api/warden/add-student")
 def add_student_manual(req: StudentManualAddReq, request: Request):
     uid = req.user_id.strip().upper()
-    hostel_block = request.state.user["hostel_block"]
+    hostel_block = req.hostel_block.strip() if req.hostel_block else request.state.user["hostel_block"]
+    wing = (req.wing or "Wing A").strip()
+    room = req.room.strip()
+    if hostel_block.lower() == "day scholar":
+        hostel_block = "Day Scholar"
+        wing = "N/A"
+        room = "N/A"
     email = (req.email or f"{uid.lower()}@svnit.ac.in").strip().lower()
     conn = get_conn()
     existing = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (uid,)).fetchone()
     if existing:
         db_exec(
             conn,
-            "UPDATE users SET full_name = ?, room = ?, department = ?, year = ?, email = ? WHERE UPPER(user_id) = ?",
-            (req.full_name.strip(), req.room.strip(), req.department.strip(), (req.year or "1st Year").strip(), email, uid)
+            "UPDATE users SET full_name = ?, hostel_block = ?, wing = ?, room = ?, department = ?, year = ?, phone = ?, email = ? WHERE UPPER(user_id) = ?",
+            (req.full_name.strip(), hostel_block, wing, room, req.department.strip(), (req.year or "1st Year").strip(), (req.phone or "").strip(), email, uid)
         )
     else:
         db_exec(
             conn,
             "INSERT INTO users (user_id, password, full_name, role, authority_title, institute_id, hostel_block, year, room, phone, email, department, dob, wing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (uid, "", req.full_name.strip(), "Student", "Verified Resident", "SVNIT", hostel_block, (req.year or "1st Year").strip(), req.room.strip(), (req.phone or "").strip(), email, req.department.strip(), "", "")
+            (uid, "", req.full_name.strip(), "Student", "Verified Resident", "SVNIT", hostel_block, (req.year or "1st Year").strip(), room, (req.phone or "").strip(), email, req.department.strip(), "", wing)
         )
     conn.commit()
     conn.close()
-    return {"success": True, "message": f"Student {req.full_name} ({uid}) saved."}
+    return {"success": True, "message": f"Student {req.full_name} ({uid}) saved in {hostel_block}."}
+
+
+@app.post("/api/warden/update-student")
+def update_student_by_warden(req: StudentManualAddReq, request: Request):
+    uid = req.user_id.strip().upper()
+    new_hostel = req.hostel_block.strip()
+    new_wing = (req.wing or "Wing A").strip()
+    new_room = req.room.strip()
+    if new_hostel.lower() == "day scholar":
+        new_hostel = "Day Scholar"
+        new_wing = "N/A"
+        new_room = "N/A"
+    conn = get_conn()
+    existing = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (uid,)).fetchone()
+    if not existing:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Student record not found.")
+    db_exec(
+        conn,
+        "UPDATE users SET full_name = ?, hostel_block = ?, wing = ?, room = ?, department = ?, year = ?, phone = ? WHERE UPPER(user_id) = ?",
+        (req.full_name.strip(), new_hostel, new_wing, new_room, req.department.strip(), (req.year or "1st Year").strip(), (req.phone or "").strip(), uid)
+    )
+    # Also update active complaints so the new hostel warden sees them
+    db_exec(
+        conn,
+        "UPDATE complaints SET hostel_block = ?, wing = ?, room = ?, student_name = ? WHERE UPPER(student_id) = ? AND status != 'Completed'",
+        (new_hostel, new_wing, new_room, req.full_name.strip(), uid)
+    )
+    conn.commit()
+    conn.close()
+    return {
+        "success": True,
+        "message": f"Updated {req.full_name} ({uid}) → {new_hostel} ({new_wing}, Room {new_room})."
+    }
 
 
 @app.post("/api/warden/upload-students")
@@ -1110,7 +1028,7 @@ def upload_students_bulk(students: List[StudentManualAddReq], request: Request):
             db_exec(
                 conn,
                 "INSERT INTO users (user_id, password, full_name, role, authority_title, institute_id, hostel_block, year, room, phone, email, department, dob, wing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (uid, "", s.full_name.strip(), "Student", "Verified Resident", "SVNIT", hostel_block, (s.year or "1st Year").strip(), s.room.strip(), "", email, s.department.strip(), "", "")
+                (uid, "", s.full_name.strip(), "Student", "Verified Resident", "SVNIT", hostel_block, (s.year or "1st Year").strip(), s.room.strip(), "", email, s.department.strip(), "", "Wing A")
             )
             added += 1
     conn.commit()
@@ -1166,6 +1084,9 @@ def create_complaint(req: ComplaintCreateReq, request: Request):
     if not student:
         conn.close()
         raise HTTPException(status_code=404, detail="Student not found")
+    if (student["hostel_block"] or "").strip().lower() == "day scholar":
+        conn.close()
+        raise HTTPException(status_code=403, detail="Hostel complaints are only available for Hostel Residents.")
     dept_obj = db_exec(conn, "SELECT * FROM departments WHERE (UPPER(id) = ? OR LOWER(title) = LOWER(?))", (req.category.upper(), req.category)).fetchone()
     routed_title = dept_obj["title"] if dept_obj else req.category
     cat_id = dept_obj["id"] if dept_obj else req.category.upper()
@@ -1397,6 +1318,23 @@ def approve_event(event_id: str = Query(...), action: str = Query(...)):
     return {"success": True}
 
 
+@app.post("/api/unicore/events/delete")
+def delete_event(request: Request, event_id: str = Query(...)):
+    account = request.state.user
+    conn = get_conn()
+    row = db_exec(conn, "SELECT * FROM events WHERE event_id = ?", (event_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found.")
+    if account["role"] == "ClubOrganizer" and row["club_id"].upper() != account["user_id"].upper():
+        conn.close()
+        raise HTTPException(status_code=403, detail="You can only delete your own club's events.")
+    db_exec(conn, "DELETE FROM events WHERE event_id = ?", (event_id,))
+    conn.commit()
+    conn.close()
+    return {"success": True, "message": "Event permanently deleted from everywhere."}
+
+
 @app.post("/api/unicore/events/rsvp")
 def rsvp_event(req: EventRsvpReq, request: Request):
     uid = request.state.user["user_id"].strip().upper()
@@ -1451,9 +1389,12 @@ def submit_event_feedback(req: EventFeedbackReq, request: Request):
 
 @app.get("/api/notices")
 def get_notices(request: Request):
+    account = request.state.user
     conn = get_conn()
-    if request.state.user["role"] == "Student":
+    if account["role"] == "Student":
         rows = db_exec(conn, "SELECT * FROM notices WHERE status = 'Approved' ORDER BY created_at DESC").fetchall()
+    elif account["role"] == "ClubOrganizer":
+        rows = db_exec(conn, "SELECT * FROM notices WHERE UPPER(club_id) = ? ORDER BY created_at DESC", (account["user_id"].upper(),)).fetchall()
     else:
         rows = db_exec(conn, "SELECT * FROM notices ORDER BY created_at DESC").fetchall()
     conn.close()
@@ -1492,3 +1433,20 @@ def approve_notice(notice_id: str = Query(...), action: str = Query(...)):
     conn.commit()
     conn.close()
     return {"success": True}
+
+
+@app.post("/api/notices/delete")
+def delete_notice(request: Request, notice_id: str = Query(...)):
+    account = request.state.user
+    conn = get_conn()
+    row = db_exec(conn, "SELECT * FROM notices WHERE notice_id = ?", (notice_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Notice not found.")
+    if account["role"] == "ClubOrganizer" and row["club_id"].upper() != account["user_id"].upper():
+        conn.close()
+        raise HTTPException(status_code=403, detail="You can only delete your own club's notices.")
+    db_exec(conn, "DELETE FROM notices WHERE notice_id = ?", (notice_id,))
+    conn.commit()
+    conn.close()
+    return {"success": True, "message": "Notice permanently deleted from everywhere."}
