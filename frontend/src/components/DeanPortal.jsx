@@ -1,49 +1,82 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../api';
+import { getCached, setCached } from '../cache';
 
 const SVNIT_HOSTELS = [
-  { code: 'CW_GAJJAR', name: 'Gajjar Bhawan', phone: '0261-2201659' },
-  { code: 'CW_BHABHA', name: 'Bhabha Bhawan', phone: '0261-2201790' },
-  { code: 'CW_MTB', name: 'Mother Teresa Bhawan', phone: '0261-2201967' },
-  { code: 'CW_SVB', name: 'Swami Vivekananda Bhawan', phone: '0261-2201657' },
-  { code: 'CW_NEHRU', name: 'Nehru Bhawan', phone: '0261-2201703' },
-  { code: 'CW_TAGORE', name: 'Tagore Bhawan', phone: '0261-2201707' },
-  { code: 'CW_SARABHAI', name: 'Sarabhai Bhawan', phone: '0261-2201793' },
-  { code: 'CW_RAMAN', name: 'Raman Bhawan', phone: '0261-2201789' },
-  { code: 'CW_ABVB', name: 'Atal Bihari Vajpayee Bhawan', phone: '0261-2201880' }
+  { code: 'CW_GAJJAR', name: 'Gajjar Bhawan', phone: '0261-2201659', email: 'warden.gajjar@svnit.ac.in' },
+  { code: 'CW_BHABHA', name: 'Bhabha Bhawan', phone: '0261-2201790', email: 'warden.bhabha@svnit.ac.in' },
+  { code: 'CW_MTB', name: 'Mother Teresa Bhawan', phone: '0261-2201967', email: 'warden.mtb@svnit.ac.in' },
+  { code: 'CW_SVB', name: 'Swami Vivekananda Bhawan', phone: '0261-2201657', email: 'warden.svb@svnit.ac.in' },
+  { code: 'CW_NEHRU', name: 'Nehru Bhawan', phone: '0261-2201703', email: 'warden.nehru@svnit.ac.in' },
+  { code: 'CW_TAGORE', name: 'Tagore Bhawan', phone: '0261-2201707', email: 'warden.tagore@svnit.ac.in' },
+  { code: 'CW_SARABHAI', name: 'Sarabhai Bhawan', phone: '0261-2201793', email: 'warden.sarabhai@svnit.ac.in' },
+  { code: 'CW_RAMAN', name: 'Raman Bhawan', phone: '0261-2201789', email: 'warden.raman@svnit.ac.in' },
+  { code: 'CW_ABVB', name: 'Atal Bihari Vajpayee Bhawan', phone: '0261-2201880', email: 'warden.abvb@svnit.ac.in' }
 ];
 
 export default function DeanPortal({ apiUrl }) {
   const [page, setPage] = useState('home');
-  const [dataLoading, setDataLoading] = useState(true);
-  const [clubs, setClubs] = useState([]);
-  const [events, setEvents] = useState([]);
-  const [notices, setNotices] = useState([]);
-  const [departments, setDepartments] = useState([]);
-  const [complaints, setComplaints] = useState([]);
-  const [studentsCount, setStudentsCount] = useState(0);
+  const [dataLoading, setDataLoading] = useState(false);
+
+  // Instant Persistent Cache Initialization
+  const [clubs, setClubs] = useState(() => getCached('dean_clubs') || []);
+  const [events, setEvents] = useState(() => getCached('dean_events') || []);
+  const [notices, setNotices] = useState(() => getCached('dean_notices') || []);
+  const [departments, setDepartments] = useState(() => getCached('dean_depts') || []);
+  const [complaints, setComplaints] = useState(() => getCached('dean_complaints') || []);
+  const [students, setStudents] = useState(() => getCached('dean_all_students') || []);
+  const [studentsCount, setStudentsCount] = useState(() => getCached('dean_student_count') || 0);
   const [msg, setMsg] = useState(null);
 
+  // Drill-down states
   const [selectedClub, setSelectedClub] = useState(null);
   const [clubSubView, setClubSubView] = useState('hub');
   const [selectedEvent, setSelectedEvent] = useState(null);
+  const [selectedNotice, setSelectedNotice] = useState(null);
   const [previousPage, setPreviousPage] = useState('home');
+  const [clubSearch, setClubSearch] = useState('');
 
-  const [clubForm, setClubForm] = useState({ club_id: '', name: '', email: '' });
-  const [deptForm, setDeptForm] = useState({ dept_id: '', name: '', email: '', icon: '⚡' });
-  const [wardenForm, setWardenForm] = useState({ user_id: 'CW_GAJJAR', hostel_block: 'Gajjar Bhawan', email: '', phone: '0261-2201659' });
+  // Forms for Creating Clubs, Central Wings & Updating Wardens
+  const [clubForm, setClubForm] = useState({
+    club_id: '',
+    name: '',
+    email: '',
+    faculty_advisor: '',
+    head_coordinator: '',
+    mission: ''
+  });
+  const [deptForm, setDeptForm] = useState({
+    dept_id: '',
+    name: '',
+    email: '',
+    icon: '⚡'
+  });
+  const [wardenForm, setWardenForm] = useState({
+    user_id: 'CW_GAJJAR',
+    hostel_block: 'Gajjar Bhawan',
+    email: 'warden.gajjar@svnit.ac.in',
+    phone: '0261-2201659'
+  });
 
+  // Interactive Event Calendar states
   const [calYear, setCalYear] = useState(2026);
   const [calMonth, setCalMonth] = useState(9);
   const [selectedDateStr, setSelectedDateStr] = useState('2026-10-28');
 
+  // Reports & Print PDF Generator states
   const [reportYear, setReportYear] = useState('2026');
   const [reportClub, setReportClub] = useState('All');
   const [pdfScope, setPdfScope] = useState('All');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
 
+  // Background SWR Data Loader (Zero Spinner if Cache Exists)
   const loadDeanData = useCallback(async () => {
+    const hasCache = Boolean(getCached('dean_clubs') || getCached('dean_events'));
+    if (!hasCache) {
+      setDataLoading(true);
+    }
+
     try {
       const [cRes, eRes, nRes, dRes, compRes, stRes] = await Promise.all([
         apiFetch(`${apiUrl}/api/unicore/clubs`),
@@ -53,25 +86,243 @@ export default function DeanPortal({ apiUrl }) {
         apiFetch(`${apiUrl}/api/complaints?role=Dean`),
         apiFetch(`${apiUrl}/api/warden/students?hostel_block=All`)
       ]);
-      if (cRes.ok) setClubs(await cRes.json());
-      if (eRes.ok) setEvents(await eRes.json());
-      if (nRes.ok) setNotices(await nRes.json());
-      if (dRes.ok) setDepartments(await dRes.json());
-      if (compRes.ok) setComplaints(await compRes.json());
+
+      if (cRes.ok) {
+        const d = await cRes.json();
+        setClubs(d);
+        setCached('dean_clubs', d);
+        setCached('clubs', d);
+      }
+      if (eRes.ok) {
+        const d = await eRes.json();
+        setEvents(d);
+        setCached('dean_events', d);
+        setCached('events', d);
+      }
+      if (nRes.ok) {
+        const d = await nRes.json();
+        setNotices(d);
+        setCached('dean_notices', d);
+      }
+      if (dRes.ok) {
+        const d = await dRes.json();
+        setDepartments(d);
+        setCached('dean_depts', d);
+      }
+      if (compRes.ok) {
+        const d = await compRes.json();
+        setComplaints(d);
+        setCached('dean_complaints', d);
+      }
       if (stRes.ok) {
         const s = await stRes.json();
-        setStudentsCount(Array.isArray(s) ? s.length : 0);
+        const arr = Array.isArray(s) ? s : [];
+        setStudents(arr);
+        setStudentsCount(arr.length);
+        setCached('dean_all_students', arr);
+        setCached('dean_student_count', arr.length);
       }
     } catch (e) {
-      console.error(e);
+      console.error('Dean background sync error:', e);
     } finally {
       setDataLoading(false);
     }
   }, [apiUrl]);
 
-  useEffect(() => { loadDeanData(); }, [loadDeanData]);
+  useEffect(() => {
+    loadDeanData();
+  }, [loadDeanData]);
 
+  // 1. Optimistic Event Approval / Disapproval (0ms UI Response)
+  const handleApproveEvent = async (eventId, action) => {
+    const updated = events.map((ev) =>
+      ev.event_id === eventId ? { ...ev, status: action } : ev
+    );
+    setEvents(updated);
+    setCached('dean_events', updated);
+    setCached('events', updated);
+    if (selectedEvent && selectedEvent.event_id === eventId) {
+      setSelectedEvent({ ...selectedEvent, status: action });
+    }
+    setMsg(`✅ Event Proposal marked as ${action}!`);
+    setPage(previousPage || 'event_approvals');
+
+    try {
+      await apiFetch(
+        `${apiUrl}/api/unicore/events/approve?event_id=${encodeURIComponent(eventId)}&action=${encodeURIComponent(action)}`,
+        { method: 'POST' }
+      );
+      loadDeanData();
+    } catch (err) {
+      setMsg('❌ Network error syncing event approval.');
+      loadDeanData();
+    }
+  };
+
+  // 2. Optimistic Event Deletion (0ms UI Response)
+  const handleDeleteEvent = async (eventId, e) => {
+    if (e) e.stopPropagation();
+    if (!window.confirm('Are you sure you want to permanently delete this event from the portal?')) return;
+
+    const updated = events.filter((ev) => ev.event_id !== eventId);
+    setEvents(updated);
+    setCached('dean_events', updated);
+    setCached('events', updated);
+    setMsg('🗑️ Event permanently deleted!');
+    if (page === 'event_detail') {
+      setPage(previousPage || 'home');
+    }
+
+    try {
+      await apiFetch(`${apiUrl}/api/unicore/events/delete?event_id=${encodeURIComponent(eventId)}`, {
+        method: 'POST'
+      });
+      loadDeanData();
+    } catch (err) {
+      setMsg('❌ Error syncing event deletion.');
+      loadDeanData();
+    }
+  };
+
+  // 3. Optimistic Notice Approval / Disapproval (0ms UI Response)
+  const handleApproveNotice = async (noticeId, action) => {
+    const updated = notices.map((n) =>
+      n.notice_id === noticeId ? { ...n, status: action } : n
+    );
+    setNotices(updated);
+    setCached('dean_notices', updated);
+    setCached('notices', updated);
+    if (selectedNotice && selectedNotice.notice_id === noticeId) {
+      setSelectedNotice({ ...selectedNotice, status: action });
+    }
+    setMsg(`✅ Notice marked as ${action}!`);
+    if (page === 'notice_detail') {
+      setPage('notice_approvals');
+    }
+
+    try {
+      await apiFetch(
+        `${apiUrl}/api/notices/approve?notice_id=${encodeURIComponent(noticeId)}&action=${encodeURIComponent(action)}`,
+        { method: 'POST' }
+      );
+      loadDeanData();
+    } catch (err) {
+      setMsg('❌ Error syncing notice status.');
+      loadDeanData();
+    }
+  };
+
+  // 4. Optimistic Notice Deletion
+  const handleDeleteNotice = async (noticeId, e) => {
+    if (e) e.stopPropagation();
+    if (!window.confirm('Permanently delete this notice from the Campus Notice Board?')) return;
+
+    const updated = notices.filter((n) => n.notice_id !== noticeId);
+    setNotices(updated);
+    setCached('dean_notices', updated);
+    setCached('notices', updated);
+    setMsg('🗑️ Notice deleted!');
+    if (page === 'notice_detail') {
+      setPage('notice_approvals');
+    }
+
+    try {
+      await apiFetch(`${apiUrl}/api/notices/delete?notice_id=${encodeURIComponent(noticeId)}`, {
+        method: 'POST'
+      });
+      loadDeanData();
+    } catch (err) {
+      console.error(err);
+      loadDeanData();
+    }
+  };
+
+  // 5. Optimistic Club Creation
+  const handleCreateClub = async (e) => {
+    e.preventDefault();
+    const newClubObj = {
+      club_id: clubForm.club_id.trim().toUpperCase(),
+      name: clubForm.name.trim(),
+      email: clubForm.email.trim(),
+      faculty_advisor: clubForm.faculty_advisor.trim() || 'Assigned by Dean SW Office',
+      head_coordinator: clubForm.head_coordinator.trim() || 'Student Coordinator',
+      mission: clubForm.mission.trim() || 'Official Student Activity Center (SAC) Chapter at SVNIT Surat',
+      members: [],
+      gallery: []
+    };
+
+    const updated = [...clubs, newClubObj];
+    setClubs(updated);
+    setCached('dean_clubs', updated);
+    setCached('clubs', updated);
+    setMsg(`✅ Official Club "${newClubObj.name}" (${newClubObj.club_id}) created!`);
+    setClubForm({ club_id: '', name: '', email: '', faculty_advisor: '', head_coordinator: '', mission: '' });
+    setPage('clubs_list');
+
+    try {
+      await apiFetch(`${apiUrl}/api/unicore/clubs/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newClubObj)
+      });
+      loadDeanData();
+    } catch (err) {
+      setMsg('❌ Error syncing new club.');
+      loadDeanData();
+    }
+  };
+
+  // 6. Optimistic Central Maintenance Department Creation
+  const handleCreateCentralDept = async (e) => {
+    e.preventDefault();
+    const newD = {
+      id: deptForm.dept_id.trim().toUpperCase(),
+      dept_id: deptForm.dept_id.trim().toUpperCase(),
+      title: deptForm.name.trim(),
+      name: deptForm.name.trim(),
+      email: deptForm.email.trim(),
+      icon: deptForm.icon || '⚡',
+      type: 'Central',
+      hostel_block: 'All'
+    };
+
+    const updated = [...departments, newD];
+    setDepartments(updated);
+    setCached('dean_depts', updated);
+    setMsg(`✅ Central Maintenance Wing "${newD.title}" added!`);
+    setDeptForm({ dept_id: '', name: '', email: '', icon: '⚡' });
+
+    try {
+      await apiFetch(`${apiUrl}/api/departments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newD)
+      });
+      loadDeanData();
+    } catch (err) {
+      console.error(err);
+      loadDeanData();
+    }
+  };
+
+  // 7. Update Hostel Warden Contact / Assignment
+  const handleUpdateWarden = async (e) => {
+    e.preventDefault();
+    setMsg(`✅ Updated Chief Warden credentials for ${wardenForm.hostel_block}!`);
+    try {
+      await apiFetch(`${apiUrl}/api/dean/update-warden`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(wardenForm)
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // Automated Time-Slot & Venue Clash Detector
   const checkTimeClash = (candidate) => {
+    if (!candidate) return { clash: false, text: '' };
     const overlapping = events.filter(
       (other) =>
         other.event_id !== candidate.event_id &&
@@ -83,7 +334,7 @@ export default function DeanPortal({ apiUrl }) {
       const first = overlapping[0];
       return {
         clash: true,
-        text: `⏰ Time Overlap: ${first.club_id}'s "${first.title}" is scheduled on ${first.date} (${first.start_time} - ${first.end_time}) at ${first.venue}.`
+        text: `⏰ Time Overlap Alert: ${first.club_id}'s "${first.title}" is already scheduled on ${first.date} (${first.start_time} - ${first.end_time}) at ${first.venue}.`
       };
     }
     return {
@@ -92,87 +343,19 @@ export default function DeanPortal({ apiUrl }) {
     };
   };
 
-  const handleApproveEvent = async (eventId, action) => {
-    const res = await apiFetch(`${apiUrl}/api/unicore/events/approve?event_id=${eventId}&action=${action}`, { method: 'POST' });
-    if (res.ok) {
-      setMsg(`✅ Event ${eventId} marked as ${action}!`);
-      loadDeanData();
-      setPage(previousPage);
-    }
-  };
-
-  const handleApproveNotice = async (noticeId, action) => {
-    const res = await apiFetch(`${apiUrl}/api/notices/approve?notice_id=${noticeId}&action=${action}`, { method: 'POST' });
-    if (res.ok) {
-      setMsg(`✅ Notice marked as ${action}!`);
-      loadDeanData();
-      setPage('notice_approvals');
-    }
-  };
-
-  const handleCreateClub = async (e) => {
-    e.preventDefault();
-    const res = await apiFetch(`${apiUrl}/api/dean/create-club`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(clubForm)
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setMsg(`✅ ${data.message}`);
-      setClubForm({ club_id: '', name: '', email: '' });
-      loadDeanData();
-      setPage('clubs_list');
-    } else {
-      setMsg(`❌ ${data.detail || 'Error'}`);
-    }
-  };
-
-  const handleCreateCentralDept = async (e) => {
-    e.preventDefault();
-    const res = await apiFetch(`${apiUrl}/api/departments/create`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...deptForm, dept_type: 'Central', hostel_block: 'All' })
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setMsg(`✅ ${data.message}`);
-      setDeptForm({ dept_id: '', name: '', email: '', icon: '⚡' });
-      loadDeanData();
-    } else setMsg(`❌ ${data.detail || 'Could not save department.'}`);
-  };
-
-  const handleSaveWarden = async (e) => {
-    e.preventDefault();
-    const res = await apiFetch(`${apiUrl}/api/dean/create-warden`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(wardenForm)
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setMsg(`✅ ${data.message}`);
-    } else {
-      setMsg(`❌ ${data.detail || 'Could not save warden account.'}`);
-    }
-  };
-
   const changeMonth = (offset) => {
     let m = calMonth + offset;
     let y = calYear;
-    if (m < 0) { m = 11; y -= 1; } else if (m > 11) { m = 0; y += 1; }
+    if (m < 0) {
+      m = 11;
+      y -= 1;
+    } else if (m > 11) {
+      m = 0;
+      y += 1;
+    }
     setCalMonth(m);
     setCalYear(y);
   };
-
-  const pendingEvents = events.filter((e) => e.status === 'Pending Dean Approval');
-  const pendingNotices = notices.filter((n) => n.status === 'Pending Dean Approval');
-  const centralDepts = departments.filter((d) => d.type === 'Central');
-
-  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-  const firstDay = new Date(calYear, calMonth, 1).getDay();
-  const daysNum = new Date(calYear, calMonth + 1, 0).getDate();
 
   const openEventPage = (ev, fromPage) => {
     setSelectedEvent(ev);
@@ -180,8 +363,147 @@ export default function DeanPortal({ apiUrl }) {
     setPage('event_detail');
   };
 
+  // Print-Ready Landscape PDF Audit Generator
+  const handleGenerateAuditPdf = () => {
+    const filteredEvents = events.filter((ev) => {
+      const matchYear = !reportYear || reportYear === 'All' || (ev.date || '').startsWith(reportYear);
+      const matchClub = reportClub === 'All' || (ev.club_id || '').toUpperCase() === reportClub.toUpperCase();
+      const matchFrom = !fromDate || (ev.date || '') >= fromDate;
+      const matchTo = !toDate || (ev.date || '') <= toDate;
+      return matchYear && matchClub && matchFrom && matchTo;
+    });
+
+    const win = window.open('', '_blank');
+    if (!win) return;
+
+    const eventRows = filteredEvents
+      .map(
+        (ev) => `
+        <tr>
+          <td><strong>${ev.event_id || '-'}</strong><br/><small>${ev.date || '-'}</small></td>
+          <td><strong>${ev.club_id}</strong></td>
+          <td><strong>${ev.title}</strong><br/><small>${ev.description ? ev.description.slice(0, 90) + '...' : ''}</small></td>
+          <td>${ev.venue || '-'}<br/><small>${ev.start_time || ''} - ${ev.end_time || ''}</small></td>
+          <td>${ev.budget || 'Institute / Self'}</td>
+          <td>${ev.rsvps?.length || 0} RSVPs</td>
+          <td><strong>${ev.status}</strong></td>
+        </tr>`
+      )
+      .join('');
+
+    const complaintRows = complaints
+      .slice(0, 100)
+      .map(
+        (c) => `
+        <tr>
+          <td><strong>${c.ticket_id}</strong><br/><small>${c.created_at || ''}</small></td>
+          <td>${c.hostel_block || '-'}<br/><small>${c.wing || ''} ${c.room || ''}</small></td>
+          <td>${c.student_name || c.student_id || '-'}</td>
+          <td>${c.routed_to || c.category || '-'}</td>
+          <td><strong>${c.summary}</strong><br/><small>${c.staff_remark || 'Assigned'}</small></td>
+          <td><strong>${c.status}</strong></td>
+        </tr>`
+      )
+      .join('');
+
+    win.document.write(`
+      <html>
+        <head>
+          <title>SVNIT Dean Student Welfare — Official Audit Report</title>
+          <style>
+            @page { size: A4 landscape; margin: 12mm; }
+            body { font-family: Arial, sans-serif; color: #111827; }
+            .hdr { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #002970; padding-bottom: 8px; margin-bottom: 14px; }
+            h1 { margin: 0; font-size: 18px; color: #002970; }
+            h3 { margin: 16px 0 6px 0; font-size: 14px; color: #002970; }
+            p { margin: 2px 0; font-size: 11px; color: #4B5563; }
+            table { width: 100%; border-collapse: collapse; font-size: 10.5px; margin-bottom: 16px; }
+            th, td { border: 1px solid #CBD5E1; padding: 6px 8px; text-align: left; vertical-align: top; }
+            th { background: #F1F5F9; color: #002970; font-weight: bold; }
+          </style>
+        </head>
+        <body>
+          <div class="hdr">
+            <div>
+              <h1>SVNIT SURAT — OFFICE OF THE DEAN STUDENT WELFARE</h1>
+              <p>Official SAC Club Events, Hostel Grievance & Resident Audit Report • Generated via svnitcampus.in</p>
+            </div>
+            <div style="text-align:right;">
+              <p><strong>Scope:</strong> ${pdfScope} | <strong>Club Filter:</strong> ${reportClub} | <strong>Year:</strong> ${reportYear}</p>
+              <p><strong>Active Clubs:</strong> ${clubs.length} | <strong>Hostel Residents:</strong> ${studentsCount} | <strong>Total Tickets:</strong> ${complaints.length}</p>
+            </div>
+          </div>
+
+          ${
+            pdfScope === 'All' || pdfScope === 'Events'
+              ? `
+              <h3>1. SAC Club Events & Requisitions (${filteredEvents.length} Records)</h3>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Event ID / Date</th>
+                    <th>Club</th>
+                    <th>Event Title & Summary</th>
+                    <th>Venue & Time</th>
+                    <th>Budget / Source</th>
+                    <th>Attendance</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>${eventRows || '<tr><td colspan="7">No events match the selected filters.</td></tr>'}</tbody>
+              </table>`
+              : ''
+          }
+
+          ${
+            pdfScope === 'All' || pdfScope === 'Grievances'
+              ? `
+              <h3>2. Campus-Wide Hostel Maintenance Grievances (${complaints.length} Total)</h3>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Ticket / Date</th>
+                    <th>Bhawan / Room</th>
+                    <th>Resident</th>
+                    <th>Routed Wing</th>
+                    <th>Issue Summary & Remark</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>${complaintRows || '<tr><td colspan="6">No complaints logged.</td></tr>'}</tbody>
+              </table>`
+              : ''
+          }
+          <script>window.onload = () => { window.print(); };</script>
+        </body>
+      </html>
+    `);
+    win.document.close();
+  };
+
+  const pendingEvents = events.filter((e) => e.status === 'Pending Dean Approval');
+  const pendingNotices = notices.filter((n) => n.status === 'Pending Dean Approval');
+  const centralDepts = departments.filter((d) => d.type === 'Central');
+
+  const filteredClubs = clubs.filter((c) => {
+    const q = clubSearch.toLowerCase();
+    return (
+      (c.name || '').toLowerCase().includes(q) ||
+      (c.club_id || '').toLowerCase().includes(q) ||
+      (c.faculty_advisor || '').toLowerCase().includes(q)
+    );
+  });
+
+  const monthNames = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+  const firstDay = new Date(calYear, calMonth, 1).getDay();
+  const daysNum = new Date(calYear, calMonth + 1, 0).getDate();
+
   return (
     <div className="ptm-shell-layout">
+      {/* Desktop Left Sidebar */}
       <aside className="ptm-sidebar-desktop">
         <button className={`ptm-side-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}>
           <span>🏠 Dashboard Home</span>
@@ -192,11 +514,19 @@ export default function DeanPortal({ apiUrl }) {
         </button>
         <button className={`ptm-side-btn ${page === 'event_approvals' ? 'active' : ''}`} onClick={() => setPage('event_approvals')}>
           <span>⚡ Approve Events</span>
-          {pendingEvents.length > 0 && <span className="ptm-status-badge" style={{ background: '#FEF3C7', color: '#B45309' }}>{pendingEvents.length}</span>}
+          {pendingEvents.length > 0 && (
+            <span className="ptm-status-badge" style={{ background: '#FEF3C7', color: '#B45309' }}>
+              {pendingEvents.length}
+            </span>
+          )}
         </button>
-        <button className={`ptm-side-btn ${page === 'notice_approvals' ? 'active' : ''}`} onClick={() => setPage('notice_approvals')}>
+        <button className={`ptm-side-btn ${page === 'notice_approvals' || page === 'notice_detail' ? 'active' : ''}`} onClick={() => setPage('notice_approvals')}>
           <span>📢 Approve Notices</span>
-          {pendingNotices.length > 0 && <span className="ptm-status-badge" style={{ background: '#FEF3C7', color: '#B45309' }}>{pendingNotices.length}</span>}
+          {pendingNotices.length > 0 && (
+            <span className="ptm-status-badge" style={{ background: '#FEF3C7', color: '#B45309' }}>
+              {pendingNotices.length}
+            </span>
+          )}
         </button>
         <button className={`ptm-side-btn ${page === 'calendar' ? 'active' : ''}`} onClick={() => setPage('calendar')}>
           <span>🗓️ Event Calendar</span>
@@ -215,8 +545,13 @@ export default function DeanPortal({ apiUrl }) {
         </button>
       </aside>
 
+      {/* Main Content Area */}
       <div className="ptm-page-wrap">
-        {msg && <div className="ptm-toast" onClick={() => setMsg(null)}>{msg}</div>}
+        {msg && (
+          <div className="ptm-toast" onClick={() => setMsg(null)}>
+            {msg}
+          </div>
+        )}
 
         {dataLoading ? (
           <div className="ptm-wheel-box">
@@ -224,12 +559,12 @@ export default function DeanPortal({ apiUrl }) {
             <div style={{ fontWeight: 700, color: '#002970', fontSize: '14px', marginTop: '12px' }}>
               Loading Dean Student Welfare Portal...
             </div>
-            <div style={{ fontSize: '12px', color: '#6B7280', marginTop: '4px' }}>
-              Syncing SVNIT clubs, event requisitions, and hostel records...
-            </div>
           </div>
         ) : (
           <>
+            {/* ==========================================
+                1. DEAN DASHBOARD HOME
+                ========================================== */}
             {page === 'home' && (
               <div>
                 <div className="ptm-mini-grid">
@@ -238,7 +573,7 @@ export default function DeanPortal({ apiUrl }) {
                       <span style={{ fontWeight: 700, color: '#6B7280', fontSize: '12px' }}>Official SVNIT Clubs</span>
                       <span>🎭</span>
                     </div>
-                    <div style={{ fontSize: '24px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>{clubs.length}</div>
+                    <div style={{ fontSize: '26px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>{clubs.length}</div>
                     <button className="ptm-mini-btn">Explore Clubs →</button>
                   </div>
 
@@ -247,7 +582,7 @@ export default function DeanPortal({ apiUrl }) {
                       <span style={{ fontWeight: 700, color: '#6B7280', fontSize: '12px' }}>Pending Approvals</span>
                       <span>⚡</span>
                     </div>
-                    <div style={{ fontSize: '24px', fontWeight: 800, color: '#D97706', marginTop: '4px' }}>
+                    <div style={{ fontSize: '26px', fontWeight: 800, color: '#D97706', marginTop: '4px' }}>
                       {pendingEvents.length + pendingNotices.length}
                     </div>
                     <button className="ptm-mini-btn">Review Requests →</button>
@@ -258,7 +593,7 @@ export default function DeanPortal({ apiUrl }) {
                       <span style={{ fontWeight: 700, color: '#6B7280', fontSize: '12px' }}>Hostel Residents</span>
                       <span>🎓</span>
                     </div>
-                    <div style={{ fontSize: '24px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>{studentsCount}</div>
+                    <div style={{ fontSize: '26px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>{studentsCount}</div>
                     <button className="ptm-mini-btn">Audit Reports →</button>
                   </div>
                 </div>
@@ -295,187 +630,164 @@ export default function DeanPortal({ apiUrl }) {
                   <div className="ptm-section-title">Administration & Hostels</div>
                   <div className="ptm-icon-grid">
                     <button className="ptm-icon-tile" onClick={() => setPage('create_club')}>
-                      <div className="ptm-icon-circle light">➕</div>
-                      <span className="ptm-icon-label">Create Club Login</span>
+                      <div className="ptm-icon-circle">➕</div>
+                      <span className="ptm-icon-label">Create New Club</span>
                     </button>
                     <button className="ptm-icon-tile" onClick={() => setPage('central_depts')}>
-                      <div className="ptm-icon-circle light">🌐</div>
-                      <span className="ptm-icon-label">Central Wings</span>
+                      <div className="ptm-icon-circle">🌐</div>
+                      <span className="ptm-icon-label">Central Departments</span>
                     </button>
                     <button className="ptm-icon-tile" onClick={() => setPage('wardens')}>
-                      <div className="ptm-icon-circle light">🏢</div>
+                      <div className="ptm-icon-circle">🏢</div>
                       <span className="ptm-icon-label">Hostel Wardens</span>
                     </button>
                     <button className="ptm-icon-tile" onClick={() => setPage('reports')}>
-                      <div className="ptm-icon-circle light">🖨️</div>
-                      <span className="ptm-icon-label">Print PDF Reports</span>
+                      <div className="ptm-icon-circle">🖨️</div>
+                      <span className="ptm-icon-label">Reports & Print PDF</span>
                     </button>
                   </div>
                 </div>
               </div>
             )}
 
+            {/* ==========================================
+                2. OFFICIAL CLUBS DIRECTORY & DRILL-DOWN
+                ========================================== */}
             {page === 'clubs_list' && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
                   <div className="ptm-row-between">
                     <h1 className="ptm-page-title">Official Student Clubs ({clubs.length})</h1>
-                    <button className="ptm-btn-secondary" onClick={() => setPage('create_club')}>+ Create New Club</button>
+                    <button className="ptm-btn-secondary" onClick={() => setPage('create_club')}>+ Add Club</button>
                   </div>
-                  <p className="ptm-page-sub">All SVNIT clubs are pre-configured with password <strong>7906771779</strong>. Tap any club to inspect its details.</p>
                 </div>
 
                 <div className="ptm-card">
-                  {clubs.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: '32px', color: '#6B7280' }}>
-                      No clubs registered yet.
-                    </div>
-                  ) : (
-                    <div className="ptm-list">
-                      {clubs.map((c) => {
-                        const cEvents = events.filter((e) => e.club_id.toUpperCase() === c.club_id.toUpperCase());
-                        return (
-                          <div
-                            key={c.club_id}
-                            className="ptm-list-row"
-                            onClick={() => {
-                              setSelectedClub(c);
-                              setClubSubView('hub');
-                              setPage('club_detail');
-                            }}
-                          >
-                            <div className="ptm-avatar-pastel" style={{ background: '#E0F2FE', color: '#002970' }}>
-                              {c.club_id.slice(0, 2)}
-                            </div>
-                            <div className="ptm-list-main">
-                              <div className="ptm-list-title">{c.name} (ID: {c.club_id})</div>
-                              <div className="ptm-list-sub">Advisor: {c.faculty_advisor} • Head: {c.head_coordinator}</div>
-                              <span className="ptm-tag-pill">👥 {c.members?.length || 0} Members • 🎪 {cEvents.length} Events</span>
-                            </div>
-                            <span style={{ color: '#002970', fontWeight: 800, fontSize: '18px' }}>›</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                  <input
+                    type="text"
+                    className="ptm-input"
+                    placeholder="🔍 Search club by name, code, or faculty advisor..."
+                    value={clubSearch}
+                    onChange={(e) => setClubSearch(e.target.value)}
+                    style={{ marginBottom: '14px', borderRadius: '999px' }}
+                  />
+
+                  <div className="ptm-list">
+                    {filteredClubs.map((c) => (
+                      <div
+                        key={c.club_id}
+                        className="ptm-list-row"
+                        onClick={() => {
+                          setSelectedClub(c);
+                          setClubSubView('hub');
+                          setPage('club_detail');
+                        }}
+                      >
+                        <div className="ptm-avatar-pastel" style={{ background: '#E0F2FE', color: '#002970' }}>
+                          {(c.club_id || 'CL').slice(0, 2)}
+                        </div>
+                        <div className="ptm-list-main">
+                          <div className="ptm-list-title">{c.name} ({c.club_id})</div>
+                          <div className="ptm-list-sub">{c.mission}</div>
+                          <span className="ptm-tag-pill">Faculty Advisor: {c.faculty_advisor || 'SAC'}</span>
+                        </div>
+                        <span>›</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}
 
+            {/* ==========================================
+                3. SINGLE CLUB HUB (EVENTS, MEMBERS, GALLERY, INFO)
+                ========================================== */}
             {page === 'club_detail' && selectedClub && (
               <div>
                 <div className="ptm-drill-header">
                   <button
                     className="ptm-back-btn"
-                    onClick={() => {
-                      if (clubSubView !== 'hub') setClubSubView('hub');
-                      else setPage('clubs_list');
-                    }}
+                    onClick={() => (clubSubView !== 'hub' ? setClubSubView('hub') : setPage('clubs_list'))}
                   >
                     ←
                   </button>
-                  <span className="ptm-tag-pill" style={{ width: 'fit-content' }}>CLUB LOGIN ID: {selectedClub.club_id}</span>
+                  <span className="ptm-tag-pill">{selectedClub.club_id} • OFFICIAL SAC CHAPTER</span>
                   <h1 className="ptm-page-title">{selectedClub.name}</h1>
                   <p className="ptm-page-sub">{selectedClub.mission}</p>
                 </div>
 
+                <div className="ptm-card">
+                  <div className="ptm-icon-grid">
+                    <button className="ptm-icon-tile" onClick={() => setClubSubView('hub')}>
+                      <div className="ptm-icon-circle">🎪</div>
+                      <span className="ptm-icon-label">Club Events</span>
+                    </button>
+                    <button className="ptm-icon-tile" onClick={() => setClubSubView('members')}>
+                      <div className="ptm-icon-circle">👥</div>
+                      <span className="ptm-icon-label">Committee ({selectedClub.members?.length || 0})</span>
+                    </button>
+                    <button className="ptm-icon-tile" onClick={() => setClubSubView('gallery')}>
+                      <div className="ptm-icon-circle">📸</div>
+                      <span className="ptm-icon-label">Media Links ({selectedClub.gallery?.length || 0})</span>
+                    </button>
+                    <button className="ptm-icon-tile" onClick={() => setClubSubView('info')}>
+                      <div className="ptm-icon-circle">ℹ️</div>
+                      <span className="ptm-icon-label">Advisor & Info</span>
+                    </button>
+                  </div>
+                </div>
+
                 {clubSubView === 'hub' && (
-                  <>
-                    <div className="ptm-card">
-                      <div className="ptm-section-title">Explore {selectedClub.club_id} Sections</div>
-                      <div className="ptm-icon-grid">
-                        <button className="ptm-icon-tile" onClick={() => setClubSubView('info')}>
-                          <div className="ptm-icon-circle">ℹ️</div>
-                          <span className="ptm-icon-label">Club Info & Advisor</span>
-                        </button>
-                        <button className="ptm-icon-tile" onClick={() => setClubSubView('members')}>
-                          <div className="ptm-icon-circle">👥</div>
-                          <span className="ptm-icon-label">Committee ({selectedClub.members?.length || 0})</span>
-                        </button>
-                        <button className="ptm-icon-tile" onClick={() => setClubSubView('upcoming')}>
-                          <div className="ptm-icon-circle">🎪</div>
-                          <span className="ptm-icon-label">Upcoming Events</span>
-                        </button>
-                        <button className="ptm-icon-tile" onClick={() => setClubSubView('completed')}>
-                          <div className="ptm-icon-circle">⭐</div>
-                          <span className="ptm-icon-label">Completed & Reviews</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="ptm-card">
-                      <div className="ptm-section-title">All Events by {selectedClub.club_id}</div>
-                      <div className="ptm-list">
-                        {events.filter((e) => e.club_id.toUpperCase() === selectedClub.club_id.toUpperCase()).length === 0 ? (
-                          <div className="ptm-list-sub">No events proposed by this club yet.</div>
-                        ) : (
-                          events
-                            .filter((e) => e.club_id.toUpperCase() === selectedClub.club_id.toUpperCase())
-                            .map((ev) => (
-                              <div key={ev.event_id} className="ptm-list-row" onClick={() => openEventPage(ev, 'club_detail')}>
-                                <div className="ptm-avatar-pastel">🎪</div>
-                                <div className="ptm-list-main">
-                                  <div className="ptm-list-title">{ev.title}</div>
-                                  <div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date} ({ev.start_time} - {ev.end_time})</div>
-                                  <span className="ptm-tag-pill">👥 {ev.rsvps?.length || 0} RSVPs • Budget: {ev.budget || 'N/A'}</span>
-                                </div>
-                                <span className="ptm-status-badge" style={{ background: ev.status === 'Approved' ? '#DCFCE7' : '#FEF3C7', color: ev.status === 'Approved' ? '#15803D' : '#B45309' }}>
-                                  {ev.status}
-                                </span>
-                              </div>
-                            ))
-                        )}
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {clubSubView === 'info' && (
                   <div className="ptm-card">
-                    <div className="ptm-section-title">Club Information & Dean Notes</div>
+                    <div className="ptm-section-title">All Events Submitted by {selectedClub.club_id}</div>
                     <div className="ptm-list">
-                      <div className="ptm-list-row">
-                        <div className="ptm-list-main">
-                          <div className="ptm-list-title">Faculty Advisor</div>
-                          <div className="ptm-list-sub">{selectedClub.faculty_advisor}</div>
-                        </div>
-                      </div>
-                      <div className="ptm-list-row">
-                        <div className="ptm-list-main">
-                          <div className="ptm-list-title">Head Student Coordinator</div>
-                          <div className="ptm-list-sub">{selectedClub.head_coordinator}</div>
-                        </div>
-                      </div>
-                      <div className="ptm-list-row">
-                        <div className="ptm-list-main">
-                          <div className="ptm-list-title">Additional Notes for Dean</div>
-                          <div className="ptm-list-sub">{selectedClub.extra_dean_info || 'No additional notes submitted.'}</div>
-                        </div>
-                      </div>
+                      {events.filter((e) => (e.club_id || '').toUpperCase() === selectedClub.club_id.toUpperCase()).length === 0 ? (
+                        <div className="ptm-list-sub">No events submitted by this club yet.</div>
+                      ) : (
+                        events
+                          .filter((e) => (e.club_id || '').toUpperCase() === selectedClub.club_id.toUpperCase())
+                          .map((ev) => (
+                            <div key={ev.event_id} className="ptm-list-row" onClick={() => openEventPage(ev, 'club_detail')}>
+                              <div className="ptm-avatar-pastel">🎪</div>
+                              <div className="ptm-list-main">
+                                <div className="ptm-list-title">{ev.title}</div>
+                                <div className="ptm-list-sub">
+                                  📍 {ev.venue} • 📅 {ev.date} ({ev.start_time} - {ev.end_time})
+                                </div>
+                                <span className="ptm-tag-pill">👥 {ev.rsvps?.length || 0} RSVPs</span>
+                              </div>
+                              <span
+                                className="ptm-status-badge"
+                                style={{
+                                  background: ev.status === 'Approved' ? '#DCFCE7' : '#FEF3C7',
+                                  color: ev.status === 'Approved' ? '#15803D' : '#B45309'
+                                }}
+                              >
+                                {ev.status} ›
+                              </span>
+                            </div>
+                          ))
+                      )}
                     </div>
                   </div>
                 )}
 
                 {clubSubView === 'members' && (
                   <div className="ptm-card">
-                    <div className="ptm-section-title">Committee Members ({selectedClub.members?.length || 0})</div>
+                    <div className="ptm-section-title">Student Committee Members</div>
                     {(!selectedClub.members || selectedClub.members.length === 0) ? (
-                      <div className="ptm-list-sub">No members added by the club yet.</div>
+                      <div className="ptm-list-sub">No committee members listed yet.</div>
                     ) : (
                       <div className="ptm-list">
                         {selectedClub.members.map((m, idx) => (
                           <div key={idx} className="ptm-list-row">
-                            <div className="ptm-avatar-pastel" style={{ background: '#EDE9FE', color: '#6D28D9' }}>
-                              {(m.name || 'MB').slice(0, 2).toUpperCase()}
-                            </div>
+                            <div className="ptm-avatar-pastel">{(m.name || 'MB').slice(0, 2)}</div>
                             <div className="ptm-list-main">
                               <div className="ptm-list-title">{m.name}</div>
-                              <div className="ptm-list-sub">Roll No: {m.roll} {m.phone && `• 📞 ${m.phone}`}</div>
+                              <div className="ptm-list-sub">Roll No: {m.roll}</div>
                             </div>
-                            <span className="ptm-status-badge" style={{ background: '#E0F2FE', color: '#002970' }}>
-                              {m.position}
-                            </span>
+                            <span className="ptm-tag-pill">{m.position}</span>
                           </div>
                         ))}
                       </div>
@@ -483,219 +795,645 @@ export default function DeanPortal({ apiUrl }) {
                   </div>
                 )}
 
-                {clubSubView === 'upcoming' && (
+                {clubSubView === 'gallery' && (
                   <div className="ptm-card">
-                    <div className="ptm-section-title">Upcoming Events</div>
-                    <div className="ptm-list">
-                      {events
-                        .filter((e) => e.club_id.toUpperCase() === selectedClub.club_id.toUpperCase() && e.status !== 'Completed')
-                        .map((ev) => (
-                          <div key={ev.event_id} className="ptm-list-row" onClick={() => openEventPage(ev, 'club_detail')}>
-                            <div className="ptm-avatar-pastel">🎪</div>
+                    <div className="ptm-section-title">Club Media & Google Drive Archives</div>
+                    {(!selectedClub.gallery || selectedClub.gallery.length === 0) ? (
+                      <div className="ptm-list-sub">No media links uploaded yet.</div>
+                    ) : (
+                      <div className="ptm-list">
+                        {selectedClub.gallery.map((g, idx) => (
+                          <div key={idx} className="ptm-list-row">
+                            <div className="ptm-avatar-pastel">📸</div>
                             <div className="ptm-list-main">
-                              <div className="ptm-list-title">{ev.title}</div>
-                              <div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date}</div>
+                              <div className="ptm-list-title">{g.caption}</div>
+                              <div className="ptm-list-sub">{g.timestamp}</div>
                             </div>
-                            <span className="ptm-status-badge" style={{ background: '#E0F2FE', color: '#002970' }}>{ev.status}</span>
+                            <a
+                              href={g.media_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="ptm-btn-secondary"
+                              style={{ textDecoration: 'none', width: 'auto', padding: '6px 12px' }}
+                            >
+                              Open Drive ↗
+                            </a>
                           </div>
                         ))}
-                    </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {clubSubView === 'completed' && (
+                {clubSubView === 'info' && (
                   <div className="ptm-card">
-                    <div className="ptm-section-title">Completed Events & Student Feedback</div>
+                    <div className="ptm-section-title">Governance & Faculty Oversight</div>
                     <div className="ptm-list">
-                      {events
-                        .filter((e) => e.club_id.toUpperCase() === selectedClub.club_id.toUpperCase() && e.status === 'Completed')
-                        .map((ev) => (
-                          <div key={ev.event_id} className="ptm-list-row" onClick={() => openEventPage(ev, 'club_detail')}>
-                            <div className="ptm-avatar-pastel">🏁</div>
-                            <div className="ptm-list-main">
-                              <div className="ptm-list-title">{ev.title}</div>
-                              <div className="ptm-list-sub">👥 {ev.rsvps?.length || 0} Attended • ⭐ {ev.ai_audit?.average_rating || '5.0'}/5</div>
-                            </div>
-                            <span>›</span>
+                      <div className="ptm-list-row">
+                        <div className="ptm-list-main">
+                          <div className="ptm-list-title">Faculty Advisor</div>
+                          <div className="ptm-list-sub">{selectedClub.faculty_advisor || 'Assigned by Dean SW'}</div>
+                        </div>
+                      </div>
+                      <div className="ptm-list-row">
+                        <div className="ptm-list-main">
+                          <div className="ptm-list-title">Student Head Coordinator</div>
+                          <div className="ptm-list-sub">{selectedClub.head_coordinator || 'Club Secretary'}</div>
+                        </div>
+                      </div>
+                      {selectedClub.extra_dean_info && (
+                        <div className="ptm-list-row">
+                          <div className="ptm-list-main">
+                            <div className="ptm-list-title">Additional Notes for Dean SW</div>
+                            <div className="ptm-list-sub">{selectedClub.extra_dean_info}</div>
                           </div>
-                        ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
               </div>
             )}
 
+            {/* ==========================================
+                4. APPROVE EVENTS QUEUE
+                ========================================== */}
+            {page === 'event_approvals' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+                  <h1 className="ptm-page-title">Pending Event Requisitions ({pendingEvents.length})</h1>
+                  <p className="ptm-page-sub">Click any event to inspect its full requisition dossier and automated time-clash audit.</p>
+                </div>
+
+                <div className="ptm-card">
+                  {pendingEvents.length === 0 ? (
+                    <div className="ptm-list-sub" style={{ textAlign: 'center', padding: '24px' }}>
+                      ✅ All pending club event proposals have been reviewed!
+                    </div>
+                  ) : (
+                    <div className="ptm-list">
+                      {pendingEvents.map((ev) => {
+                        const audit = checkTimeClash(ev);
+                        return (
+                          <div key={ev.event_id} className="ptm-list-row" onClick={() => openEventPage(ev, 'event_approvals')}>
+                            <div className="ptm-avatar-pastel">⚡</div>
+                            <div className="ptm-list-main">
+                              <div className="ptm-list-title">{ev.title}</div>
+                              <div className="ptm-list-sub">
+                                <strong>{ev.club_id}</strong> • 📍 {ev.venue} • 📅 {ev.date} ({ev.start_time} - {ev.end_time})
+                              </div>
+                              <span
+                                className="ptm-tag-pill"
+                                style={{
+                                  background: audit.clash ? '#FEF3C7' : '#DCFCE7',
+                                  color: audit.clash ? '#92400E' : '#166534'
+                                }}
+                              >
+                                {audit.clash ? '⏰ Time Overlap Detected' : '✅ Slot Clear'}
+                              </span>
+                            </div>
+                            <span className="ptm-status-badge" style={{ background: '#FEF3C7', color: '#B45309' }}>
+                              Open Dossier ›
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="ptm-card">
+                  <div className="ptm-section-title">Recently Approved / Active Campus Events</div>
+                  <div className="ptm-list">
+                    {events
+                      .filter((e) => e.status !== 'Pending Dean Approval')
+                      .map((ev) => (
+                        <div key={ev.event_id} className="ptm-list-row" onClick={() => openEventPage(ev, 'event_approvals')}>
+                          <div className="ptm-avatar-pastel">🎪</div>
+                          <div className="ptm-list-main">
+                            <div className="ptm-list-title">{ev.title}</div>
+                            <div className="ptm-list-sub">
+                              {ev.club_id} • 📍 {ev.venue} • 📅 {ev.date} • 👥 {ev.rsvps?.length || 0} Attending
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="ptm-btn-danger"
+                            style={{ width: 'auto', padding: '6px 12px', fontSize: '11px', marginRight: '8px' }}
+                            onClick={(e) => handleDeleteEvent(ev.event_id, e)}
+                          >
+                            🗑️ Delete
+                          </button>
+                          <span
+                            className="ptm-status-badge"
+                            style={{
+                              background: ev.status === 'Approved' ? '#DCFCE7' : '#FEE2E2',
+                              color: ev.status === 'Approved' ? '#15803D' : '#B91C1C'
+                            }}
+                          >
+                            {ev.status} ›
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ==========================================
+                5. FULL EVENT REQUISITION DOSSIER (DARPAN VIEW)
+                ========================================== */}
             {page === 'event_detail' && selectedEvent && (
               <div>
                 <div className="ptm-drill-header">
-                  <button className="ptm-back-btn" onClick={() => setPage(previousPage)}>←</button>
-                  <span className="ptm-tag-pill" style={{ width: 'fit-content' }}>
-                    {selectedEvent.club_id} • {selectedEvent.status}
-                  </span>
+                  <button className="ptm-back-btn" onClick={() => setPage(previousPage || 'event_approvals')}>←</button>
+                  <span className="ptm-tag-pill">{selectedEvent.event_id} • {selectedEvent.status}</span>
                   <h1 className="ptm-page-title">{selectedEvent.title}</h1>
-                  <p className="ptm-page-sub">Submitted by {selectedEvent.submitted_by}</p>
+                  <p className="ptm-page-sub">Submitted by {selectedEvent.club_id}</p>
                 </div>
 
                 {selectedEvent.image_url && (
-                  <div className="ptm-card" style={{ padding: '10px' }}>
-                    <img src={selectedEvent.image_url} alt={selectedEvent.title} style={{ width: '100%', maxHeight: '280px', objectFit: 'cover', borderRadius: '14px' }} />
+                  <div className="ptm-card" style={{ padding: '12px', overflow: 'hidden' }}>
+                    <img
+                      src={selectedEvent.image_url}
+                      alt={selectedEvent.title}
+                      style={{ width: '100%', maxHeight: '320px', objectFit: 'cover', borderRadius: '12px' }}
+                      onError={(e) => {
+                        e.target.style.display = 'none';
+                      }}
+                    />
                   </div>
                 )}
 
                 <div className="ptm-card">
                   <div className="ptm-section-title">Event Requisition Dossier</div>
-                  <p style={{ color: '#374151', marginBottom: '16px' }}>{selectedEvent.description}</p>
+                  <p style={{ whiteSpace: 'pre-line', color: '#1F2937', marginBottom: '14px', lineHeight: 1.55 }}>
+                    {selectedEvent.description}
+                  </p>
 
                   {(() => {
-                    const clashInfo = checkTimeClash(selectedEvent);
+                    const audit = checkTimeClash(selectedEvent);
                     return (
-                      <div style={{
-                        padding: '12px 14px', borderRadius: '12px', marginBottom: '16px', fontWeight: 700, fontSize: '13px',
-                        background: clashInfo.clash ? '#FEF3C7' : '#DCFCE7',
-                        color: clashInfo.clash ? '#B45309' : '#15803D'
-                      }}>
-                        {clashInfo.text}
+                      <div
+                        style={{
+                          background: audit.clash ? '#FEF3C7' : '#DCFCE7',
+                          border: `1px solid ${audit.clash ? '#FCD34D' : '#86EFAC'}`,
+                          color: audit.clash ? '#92400E' : '#166534',
+                          padding: '12px 14px',
+                          borderRadius: '10px',
+                          fontWeight: 700,
+                          fontSize: '13px',
+                          marginBottom: '16px'
+                        }}
+                      >
+                        {audit.text}
                       </div>
                     );
                   })()}
 
                   <div className="ptm-list">
                     <div className="ptm-list-row">
-                      <div className="ptm-list-main"><div className="ptm-list-title">📍 Venue</div><div className="ptm-list-sub">{selectedEvent.venue}</div></div>
+                      <div className="ptm-list-main">
+                        <div className="ptm-list-title">📍 Venue</div>
+                        <div className="ptm-list-sub">{selectedEvent.venue}</div>
+                      </div>
                     </div>
                     <div className="ptm-list-row">
-                      <div className="ptm-list-main"><div className="ptm-list-title">📅 Date & Timing</div><div className="ptm-list-sub">{selectedEvent.date} ({selectedEvent.start_time} to {selectedEvent.end_time})</div></div>
-                    </div>
-                    <div className="ptm-list-row">
-                      <div className="ptm-list-main"><div className="ptm-list-title">💰 Estimated Budget & Funding</div><div className="ptm-list-sub">Budget: {selectedEvent.budget || 'N/A'} • Source: {selectedEvent.funding_source || 'N/A'}</div></div>
-                    </div>
-                    <div className="ptm-list-row">
-                      <div className="ptm-list-main"><div className="ptm-list-title">🎙️ Chief Guest / Speakers</div><div className="ptm-list-sub">{selectedEvent.chief_guest || 'None specified'}</div></div>
-                    </div>
-                    <div className="ptm-list-row">
-                      <div className="ptm-list-main"><div className="ptm-list-title">👥 Expected Crowd & Live RSVPs</div><div className="ptm-list-sub">Expected: {selectedEvent.expected_attendance || 'N/A'} • Confirmed Student RSVPs: {selectedEvent.rsvps?.length || 0}</div></div>
-                    </div>
-                    <div className="ptm-list-row">
-                      <div className="ptm-list-main"><div className="ptm-list-title">🛠️ Logistics & Permissions Needed</div><div className="ptm-list-sub">{selectedEvent.logistics_needs || 'Standard'}</div></div>
-                    </div>
-
-                    {selectedEvent.custom_fields && selectedEvent.custom_fields.map((cf, i) => (
-                      <div key={i} className="ptm-list-row">
-                        <div className="ptm-list-main">
-                          <div className="ptm-list-title">📌 {cf.label}</div>
-                          <div className="ptm-list-sub">{cf.value}</div>
+                      <div className="ptm-list-main">
+                        <div className="ptm-list-title">🗓️ Date & Timing</div>
+                        <div className="ptm-list-sub">
+                          {selectedEvent.date} ({selectedEvent.start_time} to {selectedEvent.end_time})
                         </div>
                       </div>
-                    ))}
-                  </div>
-
-                  {selectedEvent.status === 'Pending Dean Approval' && (
-                    <div className="ptm-grid-2" style={{ marginTop: '18px' }}>
-                      <button className="ptm-btn-primary" onClick={() => handleApproveEvent(selectedEvent.event_id, 'Approved')}>
-                        ✓ Approve Event Proposal
-                      </button>
-                      <button className="ptm-btn-danger" onClick={() => handleApproveEvent(selectedEvent.event_id, 'Rejected')}>
-                        ✕ Disapprove Request
-                      </button>
                     </div>
-                  )}
-                </div>
-
-                {selectedEvent.feedbacks && selectedEvent.feedbacks.length > 0 && (
-                  <div className="ptm-card">
-                    <div className="ptm-section-title">Student Feedback & Ratings ({selectedEvent.feedbacks.length})</div>
-                    <div className="ptm-list">
-                      {selectedEvent.feedbacks.map((f, i) => (
-                        <div key={i} className="ptm-list-row">
-                          <div className="ptm-avatar-pastel">⭐</div>
-                          <div className="ptm-list-main">
-                            <div className="ptm-list-title">{f.student_id}</div>
-                            <div className="ptm-list-sub">"{f.review}"</div>
-                          </div>
-                          <span className="ptm-status-badge" style={{ background: '#FEF3C7', color: '#B45309' }}>{f.rating}/5</span>
+                    <div className="ptm-list-row">
+                      <div className="ptm-list-main">
+                        <div className="ptm-list-title">💰 Estimated Budget & Funding</div>
+                        <div className="ptm-list-sub">
+                          Budget: {selectedEvent.budget || 'Not Specified'} • Source: {selectedEvent.funding_source || 'Institute / Self'}
                         </div>
-                      ))}
+                      </div>
+                    </div>
+                    <div className="ptm-list-row">
+                      <div className="ptm-list-main">
+                        <div className="ptm-list-title">🎙️ Chief Guest / Speakers</div>
+                        <div className="ptm-list-sub">{selectedEvent.chief_guest || 'None'}</div>
+                      </div>
+                    </div>
+                    <div className="ptm-list-row">
+                      <div className="ptm-list-main">
+                        <div className="ptm-list-title">👥 Expected Crowd & Live RSVPs</div>
+                        <div className="ptm-list-sub">
+                          Expected: {selectedEvent.expected_attendance || '100+'} • Confirmed Student RSVPs: {selectedEvent.rsvps?.length || 0}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="ptm-list-row">
+                      <div className="ptm-list-main">
+                        <div className="ptm-list-title">🛠️ Logistics & Permissions Needed</div>
+                        <div className="ptm-list-sub">{selectedEvent.logistics || 'Standard Venue Setup'}</div>
+                      </div>
                     </div>
                   </div>
-                )}
+
+                  <div className="ptm-form-stack" style={{ marginTop: '14px' }}>
+                    {selectedEvent.image_url && (
+                      <a
+                        href={selectedEvent.image_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="ptm-btn-secondary"
+                        style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}
+                      >
+                        🖼️ Open Event Poster / Google Drive Attachment ↗
+                      </a>
+                    )}
+                    {selectedEvent.registration_link && (
+                      <a
+                        href={selectedEvent.registration_link}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="ptm-btn-secondary"
+                        style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}
+                      >
+                        📝 View Registration / Google Form Link ↗
+                      </a>
+                    )}
+                  </div>
+
+                  <div className="ptm-grid-2" style={{ marginTop: '18px' }}>
+                    <button
+                      className="ptm-btn-primary"
+                      onClick={() => handleApproveEvent(selectedEvent.event_id, 'Approved')}
+                    >
+                      ✓ Approve Event Proposal
+                    </button>
+                    <button
+                      className="ptm-btn-danger"
+                      onClick={() => handleApproveEvent(selectedEvent.event_id, 'Disapproved')}
+                    >
+                      ✕ Disapprove Request
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="ptm-btn-danger"
+                    style={{ marginTop: '10px' }}
+                    onClick={(e) => handleDeleteEvent(selectedEvent.event_id, e)}
+                  >
+                    🗑️ Permanently Delete Event from Portal
+                  </button>
+                </div>
               </div>
             )}
 
-            {page === 'event_approvals' && (
-              <div>
-                <div className="ptm-drill-header">
-                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">Pending Event Proposals</h1>
-                  <p className="ptm-page-sub">Tap any event proposal to inspect its budget, chief guest, logistics, and approve/disapprove</p>
-                </div>
-                <div className="ptm-card">
-                  {pendingEvents.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: '30px', color: '#6B7280' }}>✅ All club event requests have been reviewed!</div>
-                  ) : (
-                    <div className="ptm-list">
-                      {pendingEvents.map((ev) => (
-                        <div key={ev.event_id} className="ptm-list-row" onClick={() => openEventPage(ev, 'event_approvals')}>
-                          <div className="ptm-avatar-pastel" style={{ background: '#FEF3C7', color: '#B45309' }}>⚡</div>
-                          <div className="ptm-list-main">
-                            <div className="ptm-list-title">{ev.title}</div>
-                            <div className="ptm-list-sub">Club: <strong>{ev.club_id}</strong> • 📍 {ev.venue} • 📅 {ev.date}</div>
-                            <span className="ptm-tag-pill">💰 Budget: {ev.budget || 'N/A'} • Tap to Review Dossier</span>
-                          </div>
-                          <span>›</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
+            {/* ==========================================
+                6. APPROVE NOTICES QUEUE & DETAIL VIEW
+                ========================================== */}
             {page === 'notice_approvals' && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">Club Notice Board Approvals</h1>
+                  <h1 className="ptm-page-title">Campus Notice Approvals ({pendingNotices.length} Pending)</h1>
                 </div>
+
                 <div className="ptm-card">
+                  <div className="ptm-section-title">Pending Dean Approval</div>
                   {pendingNotices.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: '30px', color: '#6B7280' }}>✅ No pending notices waiting for approval.</div>
+                    <div className="ptm-list-sub">No pending notices waiting for approval.</div>
                   ) : (
                     <div className="ptm-list">
                       {pendingNotices.map((n) => (
-                        <div key={n.notice_id} className="ptm-card" style={{ background: '#F8FAFC' }}>
-                          <div className="ptm-row-between">
-                            <span className="ptm-list-title">{n.title}</span>
-                            <span className="ptm-tag-pill">{n.club_id}</span>
+                        <div
+                          key={n.notice_id}
+                          className="ptm-list-row"
+                          onClick={() => {
+                            setSelectedNotice(n);
+                            setPage('notice_detail');
+                          }}
+                        >
+                          <div className="ptm-avatar-pastel">📢</div>
+                          <div className="ptm-list-main">
+                            <div className="ptm-list-title">{n.title}</div>
+                            <div className="ptm-list-sub">
+                              {n.club_id} • Target: {n.target_year} ({n.target_branch})
+                            </div>
                           </div>
-                          <p className="ptm-list-sub" style={{ margin: '8px 0' }}>{n.message}</p>
-                          <div className="ptm-list-sub">🎯 Target: <strong>{n.target_year} • {n.target_branch}</strong></div>
-                          {n.custom_fields && n.custom_fields.map((cf, i) => (
-                            <div key={i} className="ptm-list-sub" style={{ marginTop: '4px' }}>📌 <strong>{cf.label}:</strong> {cf.value}</div>
-                          ))}
-                          <div className="ptm-grid-2" style={{ marginTop: '12px' }}>
-                            <button className="ptm-btn-primary" onClick={() => handleApproveNotice(n.notice_id, 'Approved')}>✓ Approve Notice</button>
-                            <button className="ptm-btn-danger" onClick={() => handleApproveNotice(n.notice_id, 'Rejected')}>✕ Reject</button>
-                          </div>
+                          <button
+                            type="button"
+                            className="ptm-btn-primary"
+                            style={{ width: 'auto', padding: '6px 14px', fontSize: '12px' }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleApproveNotice(n.notice_id, 'Approved');
+                            }}
+                          >
+                            ✓ Approve
+                          </button>
                         </div>
                       ))}
                     </div>
                   )}
                 </div>
+
+                <div className="ptm-card">
+                  <div className="ptm-section-title">Published Campus Notices ({notices.length})</div>
+                  <div className="ptm-list">
+                    {notices.map((n) => (
+                      <div
+                        key={n.notice_id}
+                        className="ptm-list-row"
+                        onClick={() => {
+                          setSelectedNotice(n);
+                          setPage('notice_detail');
+                        }}
+                      >
+                        <div className="ptm-avatar-pastel">📢</div>
+                        <div className="ptm-list-main">
+                          <div className="ptm-list-title">{n.title}</div>
+                          <div className="ptm-list-sub">
+                            {n.club_id} • {n.status} • {n.created_at}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="ptm-btn-danger"
+                          style={{ width: 'auto', padding: '6px 12px', fontSize: '11px' }}
+                          onClick={(e) => handleDeleteNotice(n.notice_id, e)}
+                        >
+                          🗑️ Delete
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
 
+            {page === 'notice_detail' && selectedNotice && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('notice_approvals')}>←</button>
+                  <span className="ptm-tag-pill">{selectedNotice.club_id} • {selectedNotice.status}</span>
+                  <h1 className="ptm-page-title">{selectedNotice.title}</h1>
+                </div>
+                <div className="ptm-card">
+                  <p style={{ whiteSpace: 'pre-line', marginBottom: '14px' }}>{selectedNotice.message}</p>
+                  <div className="ptm-list-sub" style={{ marginBottom: '14px' }}>
+                    🎯 <strong>Target Audience:</strong> {selectedNotice.target_year} • {selectedNotice.target_branch}
+                  </div>
+                  <div className="ptm-grid-2">
+                    <button className="ptm-btn-primary" onClick={() => handleApproveNotice(selectedNotice.notice_id, 'Approved')}>
+                      ✓ Approve Notice
+                    </button>
+                    <button className="ptm-btn-danger" onClick={() => handleApproveNotice(selectedNotice.notice_id, 'Disapproved')}>
+                      ✕ Disapprove
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ==========================================
+                7. CREATE NEW OFFICIAL SAC CLUB
+                ========================================== */}
+            {page === 'create_club' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+                  <h1 className="ptm-page-title">Register New Official SVNIT Club</h1>
+                  <p className="ptm-page-sub">Creates an official club login & directory listing immediately.</p>
+                </div>
+                <div className="ptm-card">
+                  <form onSubmit={handleCreateClub} className="ptm-form-stack">
+                    <div>
+                      <label className="ptm-label">Club Short Code / Login ID</label>
+                      <input
+                        type="text"
+                        className="ptm-input"
+                        placeholder="e.g. CHRD, CES, ACM, DRISHTI"
+                        value={clubForm.club_id}
+                        onChange={(e) => setClubForm({ ...clubForm, club_id: e.target.value.toUpperCase() })}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="ptm-label">Full Official Club Name</label>
+                      <input
+                        type="text"
+                        className="ptm-input"
+                        placeholder="e.g. Center for Human Resource Development"
+                        value={clubForm.name}
+                        onChange={(e) => setClubForm({ ...clubForm, name: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="ptm-label">Faculty Advisor Name</label>
+                      <input
+                        type="text"
+                        className="ptm-input"
+                        placeholder="e.g. Dr. Shweta Shah"
+                        value={clubForm.faculty_advisor}
+                        onChange={(e) => setClubForm({ ...clubForm, faculty_advisor: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="ptm-label">Student Head Coordinator</label>
+                      <input
+                        type="text"
+                        className="ptm-input"
+                        placeholder="e.g. Student Secretary Name"
+                        value={clubForm.head_coordinator}
+                        onChange={(e) => setClubForm({ ...clubForm, head_coordinator: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="ptm-label">Official Club Email</label>
+                      <input
+                        type="email"
+                        className="ptm-input"
+                        placeholder="club@svnit.ac.in"
+                        value={clubForm.email}
+                        onChange={(e) => setClubForm({ ...clubForm, email: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="ptm-label">Club Mission / Description</label>
+                      <textarea
+                        rows="2"
+                        className="ptm-input"
+                        placeholder="Short description of club activities..."
+                        value={clubForm.mission}
+                        onChange={(e) => setClubForm({ ...clubForm, mission: e.target.value })}
+                      />
+                    </div>
+                    <button type="submit" className="ptm-btn-primary">+ Create Official Club</button>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* ==========================================
+                8. CENTRAL MAINTENANCE DEPARTMENTS
+                ========================================== */}
+            {page === 'central_depts' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+                  <h1 className="ptm-page-title">Central Institute Maintenance Wings</h1>
+                  <p className="ptm-page-sub">Central wings (Electrical, Plumbing, LAN, Estate) serve all 9 SVNIT Bhawans.</p>
+                </div>
+
+                <div className="ptm-card">
+                  <form onSubmit={handleCreateCentralDept} className="ptm-form-stack">
+                    <div>
+                      <label className="ptm-label">Department Code / Staff Login ID</label>
+                      <input
+                        type="text"
+                        className="ptm-input"
+                        placeholder="e.g. ELECTRICITY, PLUMBING, LAN_WIFI"
+                        value={deptForm.dept_id}
+                        onChange={(e) => setDeptForm({ ...deptForm, dept_id: e.target.value.toUpperCase() })}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="ptm-label">Department Title</label>
+                      <input
+                        type="text"
+                        className="ptm-input"
+                        placeholder="e.g. Electrical Maintenance (Central)"
+                        value={deptForm.name}
+                        onChange={(e) => setDeptForm({ ...deptForm, name: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="ptm-label">Engineer / Supervisor Email</label>
+                      <input
+                        type="email"
+                        className="ptm-input"
+                        placeholder="estate.electrical@svnit.ac.in"
+                        value={deptForm.email}
+                        onChange={(e) => setDeptForm({ ...deptForm, email: e.target.value })}
+                      />
+                    </div>
+                    <button type="submit" className="ptm-btn-primary">+ Add Central Maintenance Wing</button>
+                  </form>
+                </div>
+
+                <div className="ptm-card">
+                  <div className="ptm-section-title">Active Central Departments ({centralDepts.length})</div>
+                  <div className="ptm-list">
+                    {centralDepts.map((d) => (
+                      <div key={d.id} className="ptm-list-row">
+                        <div className="ptm-avatar-pastel">{d.icon || '⚡'}</div>
+                        <div className="ptm-list-main">
+                          <div className="ptm-list-title">{d.title}</div>
+                          <div className="ptm-list-sub">Login ID: {d.id} • Scope: All 9 SVNIT Hostels</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ==========================================
+                9. HOSTEL WARDENS MANAGEMENT (9 BHAWANS)
+                ========================================== */}
+            {page === 'wardens' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+                  <h1 className="ptm-page-title">SVNIT Hostel Chief Wardens (9 Bhawans)</h1>
+                </div>
+
+                <div className="ptm-card">
+                  <div className="ptm-section-title">Update Chief Warden Contact / Assignment</div>
+                  <form onSubmit={handleUpdateWarden} className="ptm-form-stack">
+                    <div>
+                      <label className="ptm-label">Select Hostel Bhawan</label>
+                      <select
+                        className="ptm-input"
+                        value={wardenForm.user_id}
+                        onChange={(e) => {
+                          const found = SVNIT_HOSTELS.find((h) => h.code === e.target.value);
+                          if (found) {
+                            setWardenForm({
+                              user_id: found.code,
+                              hostel_block: found.name,
+                              phone: found.phone,
+                              email: found.email
+                            });
+                          }
+                        }}
+                      >
+                        {SVNIT_HOSTELS.map((h) => (
+                          <option key={h.code} value={h.code}>
+                            {h.name} ({h.code})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="ptm-label">Official Warden Email</label>
+                      <input
+                        type="email"
+                        className="ptm-input"
+                        value={wardenForm.email}
+                        onChange={(e) => setWardenForm({ ...wardenForm, email: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="ptm-label">Hostel Office Phone</label>
+                      <input
+                        type="text"
+                        className="ptm-input"
+                        value={wardenForm.phone}
+                        onChange={(e) => setWardenForm({ ...wardenForm, phone: e.target.value })}
+                      />
+                    </div>
+                    <button type="submit" className="ptm-btn-primary">💾 Update Warden Office Record</button>
+                  </form>
+                </div>
+
+                <div className="ptm-card">
+                  <div className="ptm-section-title">All 9 SVNIT Hostel Bhawans</div>
+                  <div className="ptm-list">
+                    {SVNIT_HOSTELS.map((h) => (
+                      <div key={h.code} className="ptm-list-row">
+                        <div className="ptm-avatar-pastel">🏢</div>
+                        <div className="ptm-list-main">
+                          <div className="ptm-list-title">{h.name}</div>
+                          <div className="ptm-list-sub">
+                            Portal Login ID: <strong>{h.code}</strong> • 📞 {h.phone} • ✉️ {h.email}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ==========================================
+                10. INTERACTIVE EVENT CALENDAR
+                ========================================== */}
             {page === 'calendar' && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">Campus Event Calendar</h1>
-                  <p className="ptm-page-sub">Tap any date to view events scheduled on that day</p>
+                  <h1 className="ptm-page-title">Campus Master Event Calendar</h1>
                 </div>
 
                 <div className="ptm-card">
                   <div className="ptm-row-between" style={{ marginBottom: '14px' }}>
                     <button className="ptm-btn-secondary" onClick={() => changeMonth(-1)}>◀ Prev</button>
-                    <h3 style={{ margin: 0, fontSize: '18px' }}>{monthNames[calMonth]} {calYear}</h3>
+                    <h3 style={{ margin: 0 }}>{monthNames[calMonth]} {calYear}</h3>
                     <button className="ptm-btn-secondary" onClick={() => changeMonth(1)}>Next ▶</button>
                   </div>
 
@@ -718,9 +1456,7 @@ export default function DeanPortal({ apiUrl }) {
                         >
                           <span className="ptm-cal-daynum">{dayNum}</span>
                           {dayEvents.length > 0 && (
-                            <div className="ptm-cal-event-chip">
-                              {dayEvents.length === 1 ? dayEvents[0].title : `${dayEvents.length} Events`}
-                            </div>
+                            <div className="ptm-cal-event-chip">{dayEvents[0].title}</div>
                           )}
                         </div>
                       );
@@ -729,185 +1465,102 @@ export default function DeanPortal({ apiUrl }) {
                 </div>
 
                 <div className="ptm-card">
-                  <div className="ptm-section-title">Events on {selectedDateStr}</div>
+                  <div className="ptm-section-title">Scheduled Events on {selectedDateStr}</div>
                   {events.filter((e) => e.date === selectedDateStr).length === 0 ? (
                     <div className="ptm-list-sub">No events scheduled on this date.</div>
                   ) : (
                     <div className="ptm-list">
-                      {events.filter((e) => e.date === selectedDateStr).map((ev) => (
-                        <div key={ev.event_id} className="ptm-list-row" onClick={() => openEventPage(ev, 'calendar')}>
-                          <div className="ptm-avatar-pastel">🎪</div>
-                          <div className="ptm-list-main">
-                            <div className="ptm-list-title">{ev.title}</div>
-                            <div className="ptm-list-sub">{ev.club_id} • 📍 {ev.venue} ({ev.start_time} - {ev.end_time})</div>
+                      {events
+                        .filter((e) => e.date === selectedDateStr)
+                        .map((ev) => (
+                          <div key={ev.event_id} className="ptm-list-row" onClick={() => openEventPage(ev, 'calendar')}>
+                            <div className="ptm-avatar-pastel">🎪</div>
+                            <div className="ptm-list-main">
+                              <div className="ptm-list-title">{ev.title} ({ev.club_id})</div>
+                              <div className="ptm-list-sub">
+                                📍 {ev.venue} • ⏰ {ev.start_time} - {ev.end_time} • {ev.status}
+                              </div>
+                            </div>
+                            <span>›</span>
                           </div>
-                          <span className="ptm-status-badge" style={{ background: '#E0F2FE', color: '#002970' }}>{ev.status} ›</span>
-                        </div>
-                      ))}
+                        ))}
                     </div>
                   )}
                 </div>
               </div>
             )}
 
-            {page === 'create_club' && (
-              <div>
-                <div className="ptm-drill-header">
-                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">Create Additional Club Portal</h1>
-                  <p className="ptm-page-sub">All 15 official SVNIT clubs are already pre-loaded. Use this form to add any new chapter (default password: 7906771779).</p>
-                </div>
-                <div className="ptm-card">
-                  <form onSubmit={handleCreateClub} className="ptm-form-stack">
-                    <div>
-                      <label className="ptm-label">Club Login ID (e.g. SPICMACAY)</label>
-                      <input type="text" className="ptm-input" placeholder="Enter Club ID" value={clubForm.club_id} onChange={(e) => setClubForm({ ...clubForm, club_id: e.target.value })} required />
-                    </div>
-                    <div>
-                      <label className="ptm-label">Official Club Name</label>
-                      <input type="text" className="ptm-input" placeholder="e.g. SPIC MACAY SVNIT Chapter" value={clubForm.name} onChange={(e) => setClubForm({ ...clubForm, name: e.target.value })} required />
-                    </div>
-                    <div>
-                      <label className="ptm-label">Official Email (Optional)</label>
-                      <input type="email" className="ptm-input" placeholder="club@svnit.ac.in" value={clubForm.email} onChange={(e) => setClubForm({ ...clubForm, email: e.target.value })} />
-                    </div>
-                    <button type="submit" className="ptm-btn-primary">Create Club Account (Password: 7906771779)</button>
-                  </form>
-                </div>
-              </div>
-            )}
-
-            {page === 'central_depts' && (
-              <div>
-                <div className="ptm-drill-header">
-                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">Central Maintenance Wings</h1>
-                  <p className="ptm-page-sub">Shared across all 9 hostels (Default Staff Password: 7906771779)</p>
-                </div>
-
-                <div className="ptm-card">
-                  <div className="ptm-section-title">Create or Configure a Central Department</div>
-                  <form onSubmit={handleCreateCentralDept} className="ptm-form-stack">
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Department ID</label>
-                        <input type="text" className="ptm-input" placeholder="e.g. SOLAR_LIGHT" value={deptForm.dept_id} onChange={(e) => setDeptForm({ ...deptForm, dept_id: e.target.value })} required />
-                      </div>
-                      <div>
-                        <label className="ptm-label">Department Display Name</label>
-                        <input type="text" className="ptm-input" placeholder="e.g. Solar & Street Lighting" value={deptForm.name} onChange={(e) => setDeptForm({ ...deptForm, name: e.target.value })} required />
-                      </div>
-                    </div>
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Staff Email (Optional)</label>
-                        <input type="email" className="ptm-input" placeholder="staff@svnit.ac.in" value={deptForm.email} onChange={(e) => setDeptForm({ ...deptForm, email: e.target.value })} />
-                      </div>
-                      <div>
-                        <label className="ptm-label">Emoji Icon</label>
-                        <input type="text" className="ptm-input" value={deptForm.icon} onChange={(e) => setDeptForm({ ...deptForm, icon: e.target.value })} required />
-                      </div>
-                    </div>
-                    <button type="submit" className="ptm-btn-primary">Save Central Department (Password: 7906771779)</button>
-                  </form>
-                </div>
-
-                <div className="ptm-card">
-                  <div className="ptm-section-title">Active Central Departments ({centralDepts.length})</div>
-                  <div className="ptm-list">
-                    {centralDepts.map((d) => (
-                      <div key={d.id} className="ptm-list-row">
-                        <div className="ptm-avatar-pastel">{d.icon}</div>
-                        <div className="ptm-list-main">
-                          <div className="ptm-list-title">{d.title}</div>
-                          <div className="ptm-list-sub">Login ID: <strong>{d.id}</strong> • Password: <strong>7906771779</strong></div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {page === 'wardens' && (
-              <div>
-                <div className="ptm-drill-header">
-                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">SVNIT Hostel Warden Portals</h1>
-                  <p className="ptm-page-sub">All 9 Bhawan Warden logins are active with password <strong>7906771779</strong>.</p>
-                </div>
-
-                <div className="ptm-card">
-                  <div className="ptm-section-title">All 9 SVNIT Hostel Warden Accounts</div>
-                  <div className="ptm-list">
-                    {SVNIT_HOSTELS.map((h) => (
-                      <div key={h.code} className="ptm-list-row" onClick={() => setWardenForm({ ...wardenForm, user_id: h.code, hostel_block: h.name, phone: h.phone, email: '' })}>
-                        <div className="ptm-avatar-pastel" style={{ background: '#E0F2FE', color: '#002970' }}>🏢</div>
-                        <div className="ptm-list-main">
-                          <div className="ptm-list-title">{h.name}</div>
-                          <div className="ptm-list-sub">Login ID: <strong>{h.code}</strong> • Pass: <strong>7906771779</strong> • Office: {h.phone}</div>
-                        </div>
-                        <span className="ptm-tag-pill">Active</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
+            {/* ==========================================
+                11. REPORTS & CUSTOM LANDSCAPE PDF EXPORT
+                ========================================== */}
             {page === 'reports' && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">Annual Reports & PDF Export</h1>
+                  <h1 className="ptm-page-title">Institute Audit Reports & Landscape PDF Export</h1>
+                  <p className="ptm-page-sub">Filter across SAC clubs, date ranges, and hostel grievances to generate official print-ready reports.</p>
                 </div>
 
                 <div className="ptm-card">
-                  <div className="ptm-section-title">1. Print Annual Club Events Report</div>
-                  <div className="ptm-grid-2" style={{ marginBottom: '14px' }}>
+                  <div className="ptm-grid-2" style={{ marginBottom: '12px' }}>
                     <div>
-                      <label className="ptm-label">Academic Year</label>
-                      <select className="ptm-input" value={reportYear} onChange={(e) => setReportYear(e.target.value)}>
-                        <option value="2026">2026</option>
-                        <option value="2025">2025</option>
+                      <label className="ptm-label">Report Scope</label>
+                      <select className="ptm-input" value={pdfScope} onChange={(e) => setPdfScope(e.target.value)}>
+                        <option value="All">Complete Audit (Events + Hostel Grievances)</option>
+                        <option value="Events">SAC Club Events Only</option>
+                        <option value="Grievances">Hostel Grievances Register Only</option>
                       </select>
                     </div>
                     <div>
-                      <label className="ptm-label">Club Filter</label>
+                      <label className="ptm-label">Filter by Club</label>
                       <select className="ptm-input" value={reportClub} onChange={(e) => setReportClub(e.target.value)}>
-                        <option value="All">All Clubs Combined</option>
-                        {clubs.map((c) => <option key={c.club_id} value={c.club_id}>{c.name}</option>)}
+                        <option value="All">All 16 SVNIT Clubs</option>
+                        {clubs.map((c) => (
+                          <option key={c.club_id} value={c.club_id}>
+                            {c.name} ({c.club_id})
+                          </option>
+                        ))}
                       </select>
                     </div>
                   </div>
-                  <button className="ptm-btn-primary" onClick={() => window.open(`${apiUrl}/api/unicore/events/export-pdf?year=${reportYear}&club_id=${reportClub}`, '_blank')}>
-                    🖨️ Download / Print Events PDF Report
+
+                  <div className="ptm-grid-2" style={{ marginBottom: '14px' }}>
+                    <div>
+                      <label className="ptm-label">From Date (Optional)</label>
+                      <input type="date" className="ptm-input" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="ptm-label">To Date (Optional)</label>
+                      <input type="date" className="ptm-input" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+                    </div>
+                  </div>
+
+                  <button className="ptm-btn-primary" onClick={handleGenerateAuditPdf}>
+                    🖨️ Generate & Print Landscape Audit PDF
                   </button>
                 </div>
 
                 <div className="ptm-card">
-                  <div className="ptm-section-title">2. Print Hostel Grievance Audit Report</div>
-                  <div className="ptm-form-stack">
-                    <div>
-                      <label className="ptm-label">Hostel Scope</label>
-                      <select className="ptm-input" value={pdfScope} onChange={(e) => setPdfScope(e.target.value)}>
-                        <option value="All">All SVNIT Hostels Combined</option>
-                        {SVNIT_HOSTELS.map((h) => <option key={h.code} value={h.name}>{h.name}</option>)}
-                      </select>
+                  <div className="ptm-section-title">Live Campus Telemetry Summary</div>
+                  <div className="ptm-list">
+                    <div className="ptm-list-row">
+                      <div className="ptm-list-main">
+                        <div className="ptm-list-title">Verified Students Onboarded</div>
+                        <div className="ptm-list-sub">{studentsCount} Active Student Profiles (@svnit.ac.in)</div>
+                      </div>
                     </div>
-                    <div className="ptm-grid-2">
-                      <div><label className="ptm-label">From Date</label><input type="date" className="ptm-input" value={fromDate} onChange={(e) => setFromDate(e.target.value)} /></div>
-                      <div><label className="ptm-label">To Date</label><input type="date" className="ptm-input" value={toDate} onChange={(e) => setToDate(e.target.value)} /></div>
+                    <div className="ptm-list-row">
+                      <div className="ptm-list-main">
+                        <div className="ptm-list-title">Hostel Maintenance Grievances</div>
+                        <div className="ptm-list-sub">{complaints.length} Total Tickets Logged Across 9 Bhawans</div>
+                      </div>
                     </div>
-                    <button
-                      className="ptm-btn-primary"
-                      onClick={() => {
-                        const q = new URLSearchParams({ hostel_block: pdfScope, from_date: fromDate, to_date: toDate });
-                        window.open(`${apiUrl}/api/complaints/export-pdf?${q.toString()}`, '_blank');
-                      }}
-                    >
-                      🖨️ Download / Print Grievance PDF Report
-                    </button>
+                    <div className="ptm-list-row">
+                      <div className="ptm-list-main">
+                        <div className="ptm-list-title">Official SAC Clubs & Events</div>
+                        <div className="ptm-list-sub">{clubs.length} Clubs • {events.length} Events Managed</div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -916,21 +1569,27 @@ export default function DeanPortal({ apiUrl }) {
         )}
       </div>
 
+      {/* Mobile Bottom Navigation */}
       <nav className="ptm-bottom-nav">
         <button className={`ptm-bnav-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}>
-          <span>🏠</span><span>Home</span>
+          <span>🏠</span>
+          <span>Home</span>
         </button>
         <button className={`ptm-bnav-btn ${page === 'clubs_list' || page === 'club_detail' ? 'active' : ''}`} onClick={() => setPage('clubs_list')}>
-          <span>🎭</span><span>Clubs</span>
+          <span>🎭</span>
+          <span>Clubs</span>
         </button>
         <button className={`ptm-bnav-btn ${page === 'event_approvals' ? 'active' : ''}`} onClick={() => setPage('event_approvals')}>
-          <span>⚡</span><span>Approvals</span>
+          <span>⚡</span>
+          <span>Approvals</span>
         </button>
         <button className={`ptm-bnav-btn ${page === 'calendar' ? 'active' : ''}`} onClick={() => setPage('calendar')}>
-          <span>🗓️</span><span>Calendar</span>
+          <span>🗓️</span>
+          <span>Calendar</span>
         </button>
         <button className={`ptm-bnav-btn ${page === 'reports' ? 'active' : ''}`} onClick={() => setPage('reports')}>
-          <span>🖨️</span><span>Reports</span>
+          <span>🖨️</span>
+          <span>Reports</span>
         </button>
       </nav>
     </div>
