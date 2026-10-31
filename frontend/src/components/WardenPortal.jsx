@@ -1,36 +1,39 @@
 ﻿import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../api';
-import { downloadComplaintRegister } from '../registerPdf';
+import { getCached, setCached } from '../cache';
 
-const ALL_SVNIT_HOSTELS = [
-  'Atal Bihari Vajpayee Bhawan',
-  'Bhabha Bhawan',
+const ALL_BHAWANS = [
   'Gajjar Bhawan',
+  'Bhabha Bhawan',
   'Mother Teresa Bhawan',
-  'Nehru Bhawan',
-  'Raman Bhawan',
-  'Sarabhai Bhawan',
   'Swami Vivekananda Bhawan',
+  'Nehru Bhawan',
   'Tagore Bhawan',
+  'Sarabhai Bhawan',
+  'Raman Bhawan',
+  'Atal Bihari Vajpayee Bhawan',
   'Day Scholar'
 ];
 
 export default function WardenPortal({ user, apiUrl }) {
+  const safeUser = user || {};
+  const hostelBlock = safeUser.hostel_block || 'Gajjar Bhawan';
+  const sKey = `warden_students_${hostelBlock}`;
+  const cKey = `warden_complaints_${hostelBlock}`;
+  const dKey = `warden_depts_${hostelBlock}`;
+
   const [page, setPage] = useState('home');
-  const [dataLoading, setDataLoading] = useState(true);
-  const [complaints, setComplaints] = useState([]);
-  const [departments, setDepartments] = useState([]);
-  const [students, setStudents] = useState([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedTicket, setSelectedTicket] = useState(null);
-  const [editingStudent, setEditingStudent] = useState(null);
+  const [dataLoading, setDataLoading] = useState(false);
+  const [students, setStudents] = useState(() => getCached(sKey) || []);
+  const [complaints, setComplaints] = useState(() => getCached(cKey) || []);
+  const [departments, setDepartments] = useState(() => getCached(dKey) || []);
   const [msg, setMsg] = useState(null);
-  const [wingFilter, setWingFilter] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('');
 
-  const hostelName = user.hostel_block && user.hostel_block !== 'All' ? user.hostel_block : 'Gajjar Bhawan';
+  const [searchQuery, setSearchQuery] = useState('');
+  const [editingStudent, setEditingStudent] = useState(null);
+  const [editForm, setEditForm] = useState({ hostel_block: '', wing: '', room: '', phone: '' });
 
-  const [studentForm, setStudentForm] = useState({
+  const [newStudent, setNewStudent] = useState({
     user_id: '',
     full_name: '',
     wing: 'Wing A',
@@ -40,165 +43,248 @@ export default function WardenPortal({ user, apiUrl }) {
     phone: ''
   });
 
-  const [bulkCsvText, setBulkCsvText] = useState('');
-  const [deptForm, setDeptForm] = useState({ dept_id: '', name: '', email: '', icon: '🧹' });
+  const [newDept, setNewDept] = useState({ dept_id: '', name: '', email: '', icon: '🛠️' });
+  const [selectedTicket, setSelectedTicket] = useState(null);
+  const [wardenRemark, setWardenRemark] = useState('');
+
+  const [regWing, setRegWing] = useState('All');
+  const [regCategory, setRegCategory] = useState('All');
 
   const loadWardenData = useCallback(async () => {
+    const hasCache = Boolean(getCached(sKey) || getCached(cKey));
+    if (!hasCache) {
+      setDataLoading(true);
+    }
+
     try {
-      const [dRes, sRes] = await Promise.all([
-        apiFetch(`${apiUrl}/api/departments?hostel_block=${encodeURIComponent(hostelName)}`),
-        apiFetch(`${apiUrl}/api/warden/students?hostel_block=${encodeURIComponent(hostelName)}`)
+      const [sRes, cRes, dRes] = await Promise.all([
+        apiFetch(`${apiUrl}/api/warden/students?hostel_block=${encodeURIComponent(hostelBlock)}`),
+        apiFetch(`${apiUrl}/api/complaints?role=Warden&hostel_block=${encodeURIComponent(hostelBlock)}`),
+        apiFetch(`${apiUrl}/api/departments?hostel_block=${encodeURIComponent(hostelBlock)}`)
       ]);
-      if (dRes.ok) setDepartments(await dRes.json());
-      if (sRes.ok) setStudents(await sRes.json());
+
+      if (sRes.ok) {
+        const d = await sRes.json();
+        setStudents(d);
+        setCached(sKey, d);
+      }
+      if (cRes.ok) {
+        const d = await cRes.json();
+        setComplaints(d);
+        setCached(cKey, d);
+      }
+      if (dRes.ok) {
+        const d = await dRes.json();
+        setDepartments(d);
+        setCached(dKey, d);
+      }
     } catch (e) {
-      console.error(e);
+      console.error('Warden sync error:', e);
     } finally {
       setDataLoading(false);
     }
-  }, [apiUrl, hostelName]);
+  }, [apiUrl, hostelBlock, sKey, cKey, dKey]);
 
-  const loadWardenComplaints = useCallback(async () => {
+  useEffect(() => {
+    loadWardenData();
+  }, [loadWardenData]);
+
+  const handleOpenEditStudent = (st) => {
+    setEditingStudent(st);
+    setEditForm({
+      hostel_block: st.hostel_block || hostelBlock,
+      wing: st.wing || 'Wing A',
+      room: st.room || '',
+      phone: st.phone || ''
+    });
+    setPage('edit_student');
+  };
+
+  const handleSaveStudentEdit = async (e) => {
+    e.preventDefault();
+    if (!editingStudent) return;
+
+    // Optimistic UI update
+    const movedToAnotherHostel = editForm.hostel_block !== hostelBlock;
+    const updatedStudents = movedToAnotherHostel
+      ? students.filter((s) => s.user_id !== editingStudent.user_id)
+      : students.map((s) => (s.user_id === editingStudent.user_id ? { ...s, ...editForm } : s));
+
+    setStudents(updatedStudents);
+    setCached(sKey, updatedStudents);
+    setMsg(
+      movedToAnotherHostel
+        ? `✅ Transferred ${editingStudent.full_name} to ${editForm.hostel_block}!`
+        : `✅ Updated room details for ${editingStudent.full_name}!`
+    );
+    setPage('directory');
+
     try {
-      const query = new URLSearchParams({
-        role: 'Warden',
-        hostel_block: hostelName,
-        wing: wingFilter,
-        category: categoryFilter
+      await apiFetch(`${apiUrl}/api/warden/update-student`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: editingStudent.user_id,
+          ...editForm
+        })
       });
-      const response = await apiFetch(`${apiUrl}/api/complaints?${query.toString()}`);
-      if (response.ok) setComplaints(await response.json());
-    } catch (e) {
-      console.error(e);
+      loadWardenData();
+    } catch (err) {
+      setMsg('❌ Error syncing student update.');
+      loadWardenData();
     }
-  }, [apiUrl, hostelName, wingFilter, categoryFilter]);
-
-  useEffect(() => { loadWardenData(); }, [loadWardenData]);
-  useEffect(() => { loadWardenComplaints(); }, [loadWardenComplaints]);
+  };
 
   const handleAddStudent = async (e) => {
     e.preventDefault();
-    const res = await apiFetch(`${apiUrl}/api/warden/add-student`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...studentForm, hostel_block: hostelName })
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setMsg(`✅ ${data.message}`);
-      setStudentForm({ user_id: '', full_name: '', wing: 'Wing A', room: '', department: studentForm.department, year: studentForm.year, phone: '' });
-      loadWardenData();
-    } else {
-      setMsg(`❌ ${data.detail || 'Error'}`);
-    }
-  };
+    const added = { ...newStudent, hostel_block: hostelBlock, role: 'Student' };
+    const updated = [added, ...students];
+    setStudents(updated);
+    setCached(sKey, updated);
+    setMsg(`✅ Resident ${newStudent.full_name} added!`);
+    setNewStudent({ user_id: '', full_name: '', wing: 'Wing A', room: '', department: 'Civil Engineering', year: '1st Year', phone: '' });
+    setPage('directory');
 
-  const handleUpdateStudent = async (e) => {
-    e.preventDefault();
-    if (!editingStudent) return;
-    const res = await apiFetch(`${apiUrl}/api/warden/update-student`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editingStudent)
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setMsg(`✅ ${data.message}`);
-      setEditingStudent(null);
-      loadWardenData();
-      loadWardenComplaints();
-      setPage('directory');
-    } else {
-      setMsg(`❌ ${data.detail || 'Could not update student details.'}`);
-    }
-  };
-
-  const handleBulkUpload = async (e) => {
-    e.preventDefault();
-    const lines = bulkCsvText.trim().split('\n');
-    const parsed = [];
-    for (let line of lines) {
-      const p = line.split(',').map((x) => x.trim());
-      if (p.length >= 5) {
-        parsed.push({
-          user_id: p[0],
-          full_name: p[1],
-          room: p[2],
-          department: p[3],
-          year: p[4],
-          hostel_block: hostelName
-        });
-      }
-    }
-    if (parsed.length === 0) {
-      setMsg('❌ Format required: RollNo, Name, RoomNo, Department, Year');
-      return;
-    }
-    const res = await apiFetch(`${apiUrl}/api/warden/upload-students`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(parsed)
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setMsg(`✅ ${data.message}`);
-      setBulkCsvText('');
-      loadWardenData();
-      setPage('directory');
-    } else {
-      setMsg(`❌ ${data.detail || 'Could not upload the student list.'}`);
-    }
-  };
-
-  const handleCreateHostelDept = async (e) => {
-    e.preventDefault();
-    const res = await apiFetch(`${apiUrl}/api/departments/create`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...deptForm, dept_type: 'Hostel', hostel_block: hostelName })
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setMsg(`✅ ${data.message}`);
-      setDeptForm({ dept_id: '', name: '', email: '', icon: '🧹' });
-      loadWardenData();
-    } else {
-      setMsg(`❌ ${data.detail || 'Could not save department.'}`);
-    }
-  };
-
-  const handleDownloadRegister = async () => {
     try {
-      await downloadComplaintRegister({
-        title: 'Hostel Complaint Register',
-        hostel: hostelName,
-        wing: wingFilter || 'All Wings',
-        category: categoryFilter || 'All Categories',
-        complaints
+      await apiFetch(`${apiUrl}/api/warden/add-student`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(added)
       });
-    } catch (error) {
-      setMsg(`❌ ${error.message || 'Could not generate the complaint register PDF.'}`);
+      loadWardenData();
+    } catch (err) {
+      console.error(err);
     }
   };
 
-  const filteredStudents = students.filter(
-    (s) =>
-      (s.full_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (s.user_id || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (s.room || '').toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const handleCreateHostelWing = async (e) => {
+    e.preventDefault();
+    setMsg(`✅ Maintenance Wing "${newDept.name}" created!`);
+    const payload = { ...newDept, hostel_block: hostelBlock, type: 'Hostel' };
+    setNewDept({ dept_id: '', name: '', email: '', icon: '🛠️' });
 
-  const openComplaints = complaints.filter((c) => c.status !== 'Completed');
-  const hostelDepts = departments.filter((d) => d.type === 'Hostel');
+    try {
+      await apiFetch(`${apiUrl}/api/departments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      loadWardenData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleUpdateTicketStatus = async (ticketId, status) => {
+    const updated = complaints.map((c) =>
+      c.ticket_id === ticketId
+        ? { ...c, status, staff_remark: wardenRemark || c.staff_remark }
+        : c
+    );
+    setComplaints(updated);
+    setCached(cKey, updated);
+    setMsg(`✅ Ticket ${ticketId} marked as ${status}!`);
+    setWardenRemark('');
+    setPage('complaints');
+
+    try {
+      await apiFetch(`${apiUrl}/api/complaints/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ticket_id: ticketId,
+          status,
+          remark: wardenRemark || 'Updated by Chief Warden Office'
+        })
+      });
+      loadWardenData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const filteredStudents = students.filter((s) => {
+    const q = searchQuery.toLowerCase();
+    return (
+      (s.full_name || '').toLowerCase().includes(q) ||
+      (s.user_id || '').toLowerCase().includes(q) ||
+      (s.room || '').toLowerCase().includes(q) ||
+      (s.wing || '').toLowerCase().includes(q)
+    );
+  });
+
+  const filteredRegister = complaints.filter((c) => {
+    const wingMatch = regWing === 'All' || (c.wing || '').toLowerCase().includes(regWing.toLowerCase());
+    const catMatch = regCategory === 'All' || (c.routed_to || '') === regCategory || (c.category || '') === regCategory;
+    return wingMatch && catMatch;
+  });
+
+  const handlePrintRegister = () => {
+    const win = window.open('', '_blank');
+    if (!win) return;
+    const rowsHtml = filteredRegister
+      .map(
+        (c) => `
+        <tr>
+          <td><strong>${c.ticket_id}</strong><br/><small>${c.created_at || ''}</small></td>
+          <td>${c.wing || '-'} / ${c.room || '-'}</td>
+          <td>${c.student_name || c.student_id || '-'}</td>
+          <td>${c.student_phone || '-'}</td>
+          <td>${c.routed_to || c.category || '-'}</td>
+          <td><strong>${c.summary}</strong><br/><small>${c.description || ''}</small></td>
+          <td>${c.status}</td>
+        </tr>`
+      )
+      .join('');
+
+    win.document.write(`
+      <html>
+        <head>
+          <title>${hostelBlock} - Official Complaint Register</title>
+          <style>
+            @page { size: A4 landscape; margin: 12mm; }
+            body { font-family: Arial, sans-serif; color: #111; }
+            h2 { margin: 0 0 4px 0; color: #002970; }
+            p { margin: 0 0 12px 0; font-size: 12px; color: #555; }
+            table { width: 100%; border-collapse: collapse; font-size: 11px; }
+            th, td { border: 1px solid #ccc; padding: 7px 8px; text-align: left; vertical-align: top; }
+            th { background: #f1f5f9; color: #002970; }
+          </style>
+        </head>
+        <body>
+          <h2>${hostelBlock} — Physical Maintenance & Grievance Register</h2>
+          <p>Wing Filter: ${regWing} | Category Filter: ${regCategory} | Total Records: ${filteredRegister.length}</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Ticket / Date</th>
+                <th>Wing / Room</th>
+                <th>Student</th>
+                <th>Mobile</th>
+                <th>Category</th>
+                <th>Complaint / Action</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+          <script>window.onload = () => { window.print(); }</script>
+        </body>
+      </html>
+    `);
+    win.document.close();
+  };
+
+  const pendingCount = complaints.filter((c) => c.status !== 'Completed').length;
 
   return (
     <div className="ptm-shell-layout">
       <aside className="ptm-sidebar-desktop">
         <button className={`ptm-side-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}>🏠 Warden Home</button>
-        <button className={`ptm-side-btn ${page === 'onboard' ? 'active' : ''}`} onClick={() => setPage('onboard')}>➕ Add / Upload Students</button>
+        <button className={`ptm-side-btn ${page === 'add_student' ? 'active' : ''}`} onClick={() => setPage('add_student')}>➕ Add / Upload Students</button>
         <button className={`ptm-side-btn ${page === 'directory' || page === 'edit_student' ? 'active' : ''}`} onClick={() => setPage('directory')}>🎓 Student Directory ({students.length})</button>
-        <button className={`ptm-side-btn ${page === 'departments' ? 'active' : ''}`} onClick={() => setPage('departments')}>🛠️ Hostel Maintenance Wings</button>
-        <button className={`ptm-side-btn ${page === 'complaints' ? 'active' : ''}`} onClick={() => setPage('complaints')}>💬 Hostel Complaints ({openComplaints.length})</button>
+        <button className={`ptm-side-btn ${page === 'wings' ? 'active' : ''}`} onClick={() => setPage('wings')}>🛠️ Hostel Maintenance Wings</button>
+        <button className={`ptm-side-btn ${page === 'complaints' || page === 'ticket_detail' ? 'active' : ''}`} onClick={() => setPage('complaints')}>💬 Hostel Complaints ({complaints.length})</button>
         <button className={`ptm-side-btn ${page === 'register' ? 'active' : ''}`} onClick={() => setPage('register')}>📋 Complaint Register</button>
       </aside>
 
@@ -209,10 +295,7 @@ export default function WardenPortal({ user, apiUrl }) {
           <div className="ptm-wheel-box">
             <div className="ptm-spinner-wheel" />
             <div style={{ fontWeight: 700, color: '#002970', fontSize: '14px', marginTop: '12px' }}>
-              Loading {hostelName} Warden Portal...
-            </div>
-            <div style={{ fontSize: '12px', color: '#6B7280', marginTop: '4px' }}>
-              Fetching hostel resident directory and maintenance registers...
+              Loading {hostelBlock} Warden Portal...
             </div>
           </div>
         ) : (
@@ -221,109 +304,53 @@ export default function WardenPortal({ user, apiUrl }) {
               <div>
                 <div className="ptm-mini-grid">
                   <div className="ptm-mini-card" onClick={() => setPage('directory')}>
-                    <div className="ptm-row-between"><span style={{ fontSize: '12px', fontWeight: 700, color: '#6B7280' }}>{hostelName} Students</span><span>🎓</span></div>
-                    <div style={{ fontSize: '24px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>{students.length}</div>
-                    <button className="ptm-mini-btn">Manage & Edit Students →</button>
+                    <div className="ptm-row-between">
+                      <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>{hostelBlock} Residents</span>
+                      <span>🎓</span>
+                    </div>
+                    <div style={{ fontSize: '22px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>{students.length} Students</div>
+                    <button className="ptm-mini-btn">Manage Directory →</button>
                   </div>
+
                   <div className="ptm-mini-card" onClick={() => setPage('complaints')}>
-                    <div className="ptm-row-between"><span style={{ fontSize: '12px', fontWeight: 700, color: '#6B7280' }}>Active Complaints</span><span>💬</span></div>
-                    <div style={{ fontSize: '24px', fontWeight: 800, color: '#D97706', marginTop: '4px' }}>{openComplaints.length}</div>
-                    <button className="ptm-mini-btn">View Complaints →</button>
+                    <div className="ptm-row-between">
+                      <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>Active Grievances</span>
+                      <span>🛠️</span>
+                    </div>
+                    <div style={{ fontSize: '22px', fontWeight: 800, color: '#D97706', marginTop: '4px' }}>{pendingCount} Open</div>
+                    <button className="ptm-mini-btn">View All ({complaints.length}) →</button>
+                  </div>
+
+                  <div className="ptm-mini-card" onClick={() => setPage('register')}>
+                    <div className="ptm-row-between">
+                      <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>Physical Audit PDF</span>
+                      <span>📋</span>
+                    </div>
+                    <div style={{ fontSize: '20px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>Print Register</div>
+                    <button className="ptm-mini-btn">Export Landscape PDF →</button>
                   </div>
                 </div>
 
                 <div className="ptm-card">
-                  <div className="ptm-section-title">{hostelName} Quick Actions</div>
+                  <div className="ptm-section-title">{hostelBlock} Chief Warden Controls</div>
                   <div className="ptm-icon-grid">
-                    <button className="ptm-icon-tile" onClick={() => setPage('onboard')}>
-                      <div className="ptm-icon-circle">➕</div>
-                      <span className="ptm-icon-label">Add / Bulk Upload Students</span>
-                    </button>
                     <button className="ptm-icon-tile" onClick={() => setPage('directory')}>
-                      <div className="ptm-icon-circle">🔍</div>
-                      <span className="ptm-icon-label">Directory & Edit Room/Hostel</span>
+                      <div className="ptm-icon-circle">🎓</div>
+                      <span className="ptm-icon-label">Student Directory</span>
                     </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('departments')}>
-                      <div className="ptm-icon-circle">🛠️</div>
-                      <span className="ptm-icon-label">Hostel Staff Wings</span>
+                    <button className="ptm-icon-tile" onClick={() => setPage('complaints')}>
+                      <div className="ptm-icon-circle">💬</div>
+                      <span className="ptm-icon-label">Hostel Complaints</span>
                     </button>
                     <button className="ptm-icon-tile" onClick={() => setPage('register')}>
                       <div className="ptm-icon-circle">📋</div>
                       <span className="ptm-icon-label">Complaint Register</span>
                     </button>
+                    <button className="ptm-icon-tile" onClick={() => setPage('wings')}>
+                      <div className="ptm-icon-circle">🛠️</div>
+                      <span className="ptm-icon-label">Maintenance Wings</span>
+                    </button>
                   </div>
-                </div>
-              </div>
-            )}
-
-            {page === 'onboard' && (
-              <div>
-                <div className="ptm-drill-header">
-                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">Onboard {hostelName} Students</h1>
-                  <p className="ptm-page-sub">Add residents using their SVNIT roll number and room details.</p>
-                </div>
-
-                <div className="ptm-card">
-                  <div className="ptm-section-title">1. Bulk Paste Student List (5 Columns)</div>
-                  <p className="ptm-list-sub" style={{ marginBottom: '12px' }}>
-                    Format per line: <strong>RollNo, Name, RoomNo, Department, Year</strong>
-                  </p>
-                  <form onSubmit={handleBulkUpload} className="ptm-form-stack">
-                    <textarea
-                      rows="5"
-                      className="ptm-input"
-                      placeholder="U26CE011, Ishant Agrawal, D-315, Civil Engineering, 1st Year"
-                      value={bulkCsvText}
-                      onChange={(e) => setBulkCsvText(e.target.value)}
-                      required
-                    />
-                    <button type="submit" className="ptm-btn-primary">📤 Upload & Save Students</button>
-                  </form>
-                </div>
-
-                <div className="ptm-card">
-                  <div className="ptm-section-title">2. Add Single Student Manually</div>
-                  <form onSubmit={handleAddStudent} className="ptm-form-stack">
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Roll Number (Login ID)</label>
-                        <input type="text" className="ptm-input" placeholder="e.g. U26CE011" value={studentForm.user_id} onChange={(e) => setStudentForm({ ...studentForm, user_id: e.target.value })} required />
-                      </div>
-                      <div>
-                        <label className="ptm-label">Full Name</label>
-                        <input type="text" className="ptm-input" placeholder="e.g. Ishant Agrawal" value={studentForm.full_name} onChange={(e) => setStudentForm({ ...studentForm, full_name: e.target.value })} required />
-                      </div>
-                    </div>
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Wing</label>
-                        <select className="ptm-input" value={studentForm.wing} onChange={(e) => setStudentForm({ ...studentForm, wing: e.target.value })}>
-                          {'ABCDEFGH'.split('').map((letter) => <option key={letter} value={`Wing ${letter}`}>Wing {letter}</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="ptm-label">Room Number</label>
-                        <input type="text" className="ptm-input" placeholder="e.g. D-315" value={studentForm.room} onChange={(e) => setStudentForm({ ...studentForm, room: e.target.value })} required />
-                      </div>
-                    </div>
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Department</label>
-                        <input type="text" className="ptm-input" placeholder="e.g. Civil Engineering" value={studentForm.department} onChange={(e) => setStudentForm({ ...studentForm, department: e.target.value })} required />
-                      </div>
-                      <div>
-                        <label className="ptm-label">Academic Year</label>
-                        <select className="ptm-input" value={studentForm.year} onChange={(e) => setStudentForm({ ...studentForm, year: e.target.value })}>
-                          <option value="1st Year">1st Year</option>
-                          <option value="2nd Year">2nd Year</option>
-                          <option value="3rd Year">3rd Year</option>
-                          <option value="4th Year">4th Year</option>
-                        </select>
-                      </div>
-                    </div>
-                    <button type="submit" className="ptm-btn-primary">Register Student</button>
-                  </form>
                 </div>
               </div>
             )}
@@ -332,46 +359,40 @@ export default function WardenPortal({ user, apiUrl }) {
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">{hostelName} Student Directory</h1>
-                  <p className="ptm-page-sub">Tap <strong>"✏️ Edit"</strong> on any student to change their Room, Wing, or transfer them to another Hostel Bhawan.</p>
+                  <h1 className="ptm-page-title">{hostelBlock} Student Directory</h1>
+                  <p className="ptm-page-sub">Tap "✏️ Edit" on any student to change their Room, Wing, or transfer them to another Hostel Bhawan.</p>
                 </div>
-                <div className="ptm-search-pill">
-                  <span>🔍</span>
-                  <input type="text" placeholder="Search by Roll No, Name, or Room..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
-                </div>
+
                 <div className="ptm-card">
+                  <input
+                    type="text"
+                    className="ptm-input"
+                    placeholder="🔍 Search by Roll No, Name, or Room..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    style={{ marginBottom: '14px', borderRadius: '999px' }}
+                  />
+
                   {filteredStudents.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: '24px', color: '#6B7280' }}>No students found in {hostelName}.</div>
+                    <div className="ptm-list-sub" style={{ textAlign: 'center', padding: '20px' }}>No matching students found.</div>
                   ) : (
                     <div className="ptm-list">
                       {filteredStudents.map((st) => (
-                        <div key={st.user_id} className="ptm-list-row" style={{ cursor: 'default' }}>
+                        <div key={st.user_id} className="ptm-list-row">
                           <div className="ptm-avatar-pastel" style={{ background: '#E0F2FE', color: '#002970' }}>
                             {(st.full_name || 'ST').slice(0, 2).toUpperCase()}
                           </div>
                           <div className="ptm-list-main">
                             <div className="ptm-list-title">{st.full_name} ({st.user_id})</div>
                             <div className="ptm-list-sub">
-                              🚪 {st.wing ? `${st.wing} • ` : ''}Room {st.room || '—'} • {st.year} • {st.department}
-                              {st.phone ? ` • 📞 ${st.phone}` : ''}
+                              🚪 {st.wing || 'Wing'} • Room {st.room || '-'} • {st.year || '1st Year'} • {st.department || 'SVNIT'} • 📞 {st.phone || 'N/A'}
                             </div>
                           </div>
                           <button
                             type="button"
                             className="ptm-btn-secondary"
-                            onClick={() => {
-                              setEditingStudent({
-                                user_id: st.user_id,
-                                full_name: st.full_name || '',
-                                hostel_block: st.hostel_block || hostelName,
-                                wing: st.wing || 'Wing A',
-                                room: st.room || '',
-                                department: st.department || '',
-                                year: st.year || '1st Year',
-                                phone: st.phone || ''
-                              });
-                              setPage('edit_student');
-                            }}
+                            style={{ width: 'auto', padding: '7px 14px', fontSize: '12px' }}
+                            onClick={() => handleOpenEditStudent(st)}
                           >
                             ✏️ Edit
                           </button>
@@ -386,165 +407,101 @@ export default function WardenPortal({ user, apiUrl }) {
             {page === 'edit_student' && editingStudent && (
               <div>
                 <div className="ptm-drill-header">
-                  <button className="ptm-back-btn" onClick={() => { setEditingStudent(null); setPage('directory'); }}>←</button>
-                  <span className="ptm-tag-pill">EDIT RESIDENT / HOSTEL TRANSFER • {editingStudent.user_id}</span>
-                  <h1 className="ptm-page-title">Edit {editingStudent.full_name}</h1>
-                  <p className="ptm-page-sub">
-                    If you change the student's Hostel Bhawan below, they will automatically move to the new hostel warden's portal and be removed from {hostelName}.
-                  </p>
+                  <button className="ptm-back-btn" onClick={() => setPage('directory')}>←</button>
+                  <h1 className="ptm-page-title">Edit / Transfer Resident</h1>
+                  <p className="ptm-page-sub">{editingStudent.full_name} ({editingStudent.user_id})</p>
                 </div>
-
                 <div className="ptm-card">
-                  <form onSubmit={handleUpdateStudent} className="ptm-form-stack">
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Student Roll Number (ID)</label>
-                        <input type="text" className="ptm-input" value={editingStudent.user_id} disabled style={{ background: '#F1F5F9' }} />
-                      </div>
-                      <div>
-                        <label className="ptm-label">Full Name</label>
-                        <input
-                          type="text"
-                          className="ptm-input"
-                          value={editingStudent.full_name}
-                          onChange={(e) => setEditingStudent({ ...editingStudent, full_name: e.target.value })}
-                          required
-                        />
-                      </div>
+                  <form onSubmit={handleSaveStudentEdit} className="ptm-form-stack">
+                    <div>
+                      <label className="ptm-label">Hostel Bhawan (Select another Bhawan to auto-transfer resident)</label>
+                      <select
+                        className="ptm-input"
+                        value={editForm.hostel_block}
+                        onChange={(e) => setEditForm({ ...editForm, hostel_block: e.target.value })}
+                      >
+                        {ALL_BHAWANS.map((b) => (
+                          <option key={b} value={b}>{b}</option>
+                        ))}
+                      </select>
                     </div>
-
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Assigned Hostel Bhawan (or Day Scholar)</label>
-                        <select
-                          className="ptm-input"
-                          value={editingStudent.hostel_block}
-                          onChange={(e) => setEditingStudent({ ...editingStudent, hostel_block: e.target.value })}
-                          required
-                        >
-                          {ALL_SVNIT_HOSTELS.map((h) => (
-                            <option key={h} value={h}>{h}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="ptm-label">Wing</label>
-                        <select
-                          className="ptm-input"
-                          value={editingStudent.wing}
-                          onChange={(e) => setEditingStudent({ ...editingStudent, wing: e.target.value })}
-                        >
-                          {'ABCDEFGH'.split('').map((letter) => (
-                            <option key={letter} value={`Wing ${letter}`}>Wing {letter}</option>
-                          ))}
-                          <option value="N/A">N/A (Day Scholar)</option>
-                        </select>
-                      </div>
+                    <div>
+                      <label className="ptm-label">Hostel Wing</label>
+                      <input
+                        type="text"
+                        className="ptm-input"
+                        value={editForm.wing}
+                        onChange={(e) => setEditForm({ ...editForm, wing: e.target.value })}
+                        required
+                      />
                     </div>
-
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Room Number</label>
-                        <input
-                          type="text"
-                          className="ptm-input"
-                          value={editingStudent.room}
-                          onChange={(e) => setEditingStudent({ ...editingStudent, room: e.target.value })}
-                          required
-                        />
-                      </div>
-                      <div>
-                        <label className="ptm-label">Mobile Number</label>
-                        <input
-                          type="text"
-                          className="ptm-input"
-                          value={editingStudent.phone}
-                          onChange={(e) => setEditingStudent({ ...editingStudent, phone: e.target.value })}
-                        />
-                      </div>
+                    <div>
+                      <label className="ptm-label">Room Number</label>
+                      <input
+                        type="text"
+                        className="ptm-input"
+                        value={editForm.room}
+                        onChange={(e) => setEditForm({ ...editForm, room: e.target.value })}
+                        required
+                      />
                     </div>
-
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Department / Branch</label>
-                        <input
-                          type="text"
-                          className="ptm-input"
-                          value={editingStudent.department}
-                          onChange={(e) => setEditingStudent({ ...editingStudent, department: e.target.value })}
-                          required
-                        />
-                      </div>
-                      <div>
-                        <label className="ptm-label">Academic Year</label>
-                        <select
-                          className="ptm-input"
-                          value={editingStudent.year}
-                          onChange={(e) => setEditingStudent({ ...editingStudent, year: e.target.value })}
-                        >
-                          <option value="1st Year">1st Year</option>
-                          <option value="2nd Year">2nd Year</option>
-                          <option value="3rd Year">3rd Year</option>
-                          <option value="4th Year">4th Year</option>
-                          <option value="5th Year">5th Year</option>
-                        </select>
-                      </div>
+                    <div>
+                      <label className="ptm-label">Mobile Number</label>
+                      <input
+                        type="text"
+                        className="ptm-input"
+                        value={editForm.phone}
+                        onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+                      />
                     </div>
-
-                    <div className="ptm-grid-2" style={{ marginTop: '8px' }}>
-                      <button type="submit" className="ptm-btn-primary">💾 Save Student Changes</button>
-                      <button type="button" className="ptm-btn-danger" onClick={() => { setEditingStudent(null); setPage('directory'); }}>
-                        Cancel
-                      </button>
-                    </div>
+                    <button type="submit" className="ptm-btn-primary">💾 Save Changes & Route Student</button>
                   </form>
                 </div>
               </div>
             )}
 
-            {page === 'departments' && (
+            {page === 'add_student' && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">{hostelName} Maintenance Wings</h1>
+                  <h1 className="ptm-page-title">Add Resident to {hostelBlock}</h1>
                 </div>
                 <div className="ptm-card">
-                  <div className="ptm-section-title">Create {hostelName} Department & Login</div>
-                  <form onSubmit={handleCreateHostelDept} className="ptm-form-stack">
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Department ID (auto-prefixed for this hostel)</label>
-                        <input type="text" className="ptm-input" placeholder="e.g. PLUMBING" value={deptForm.dept_id} onChange={(e) => setDeptForm({ ...deptForm, dept_id: e.target.value })} required />
-                      </div>
-                      <div>
-                        <label className="ptm-label">Department Name</label>
-                        <input type="text" className="ptm-input" placeholder="e.g. Plumbing, Cleanliness" value={deptForm.name} onChange={(e) => setDeptForm({ ...deptForm, name: e.target.value })} required />
-                      </div>
-                    </div>
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Staff official email (Optional)</label>
-                        <input type="email" className="ptm-input" placeholder="staff@svnit.ac.in" value={deptForm.email} onChange={(e) => setDeptForm({ ...deptForm, email: e.target.value })} />
-                      </div>
-                      <div>
-                        <label className="ptm-label">Icon</label>
-                        <input type="text" className="ptm-input" value={deptForm.icon} onChange={(e) => setDeptForm({ ...deptForm, icon: e.target.value })} required />
-                      </div>
-                    </div>
-                    <button type="submit" className="ptm-btn-primary">+ Create Department Login (Pass: 7906771779)</button>
+                  <form onSubmit={handleAddStudent} className="ptm-form-stack">
+                    <input type="text" className="ptm-input" placeholder="Roll No (e.g. U26CE011)" value={newStudent.user_id} onChange={(e) => setNewStudent({ ...newStudent, user_id: e.target.value.toUpperCase() })} required />
+                    <input type="text" className="ptm-input" placeholder="Student Full Name" value={newStudent.full_name} onChange={(e) => setNewStudent({ ...newStudent, full_name: e.target.value })} required />
+                    <input type="text" className="ptm-input" placeholder="Wing (e.g. Wing D)" value={newStudent.wing} onChange={(e) => setNewStudent({ ...newStudent, wing: e.target.value })} required />
+                    <input type="text" className="ptm-input" placeholder="Room Number (e.g. D-315)" value={newStudent.room} onChange={(e) => setNewStudent({ ...newStudent, room: e.target.value })} required />
+                    <input type="text" className="ptm-input" placeholder="Mobile Number" value={newStudent.phone} onChange={(e) => setNewStudent({ ...newStudent, phone: e.target.value })} />
+                    <button type="submit" className="ptm-btn-primary">+ Add Resident</button>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {page === 'wings' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+                  <h1 className="ptm-page-title">{hostelBlock} Maintenance Wings</h1>
+                </div>
+                <div className="ptm-card">
+                  <form onSubmit={handleCreateHostelWing} className="ptm-form-stack">
+                    <input type="text" className="ptm-input" placeholder="Wing Code (e.g. MESS_GAJJAR)" value={newDept.dept_id} onChange={(e) => setNewDept({ ...newDept, dept_id: e.target.value.toUpperCase() })} required />
+                    <input type="text" className="ptm-input" placeholder="Wing Title (e.g. Gajjar Mess & Water Committee)" value={newDept.name} onChange={(e) => setNewDept({ ...newDept, name: e.target.value })} required />
+                    <input type="email" className="ptm-input" placeholder="Supervisor Email" value={newDept.email} onChange={(e) => setNewDept({ ...newDept, email: e.target.value })} />
+                    <button type="submit" className="ptm-btn-primary">+ Add Hostel Wing</button>
                   </form>
                 </div>
                 <div className="ptm-card">
-                  <div className="ptm-section-title">Active {hostelName} Wings ({hostelDepts.length})</div>
+                  <div className="ptm-section-title">Active Maintenance Departments</div>
                   <div className="ptm-list">
-                    {hostelDepts.map((d) => (
+                    {departments.map((d) => (
                       <div key={d.id} className="ptm-list-row">
-                        <div className="ptm-avatar-pastel">{d.icon}</div>
+                        <div className="ptm-avatar-pastel">{d.icon || '🛠️'}</div>
                         <div className="ptm-list-main">
                           <div className="ptm-list-title">{d.title}</div>
-                          <div className="ptm-list-sub">
-                            Login ID: <strong>{d.id}</strong> • Password: <strong>7906771779</strong>
-                          </div>
+                          <div className="ptm-list-sub">ID: {d.id} • Scope: {d.type || 'Hostel'}</div>
                         </div>
                       </div>
                     ))}
@@ -557,11 +514,11 @@ export default function WardenPortal({ user, apiUrl }) {
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">{hostelName} Grievances</h1>
+                  <h1 className="ptm-page-title">{hostelBlock} Grievances ({complaints.length})</h1>
                 </div>
                 <div className="ptm-card">
                   {complaints.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: '24px', color: '#6B7280' }}>No complaints logged in {hostelName}.</div>
+                    <div className="ptm-list-sub">No complaints found for {hostelBlock}.</div>
                   ) : (
                     <div className="ptm-list">
                       {complaints.map((c) => (
@@ -570,11 +527,13 @@ export default function WardenPortal({ user, apiUrl }) {
                           <div className="ptm-list-main">
                             <div className="ptm-list-title">{c.summary}</div>
                             <div className="ptm-list-sub">
-                              {c.wing ? `${c.wing} • ` : ''}Room {c.room} • {c.student_name} ({c.student_id})
+                              {c.ticket_id} • {c.wing} Room {c.room} • {c.student_name || c.student_id}
                             </div>
-                            <span className="ptm-tag-pill">{c.routed_to}</span>
+                            <span className="ptm-tag-pill">{c.routed_to} • {c.created_at}</span>
                           </div>
-                          <span className="ptm-status-badge" style={{ background: '#F3F4F6', color: '#111827' }}>{c.status} ›</span>
+                          <span className="ptm-status-badge" style={{ background: c.status === 'Completed' ? '#DCFCE7' : '#FEF3C7', color: c.status === 'Completed' ? '#15803D' : '#B45309' }}>
+                            {c.status} ›
+                          </span>
                         </div>
                       ))}
                     </div>
@@ -583,96 +542,100 @@ export default function WardenPortal({ user, apiUrl }) {
               </div>
             )}
 
-            {page === 'register' && (
-              <div>
-                <div className="ptm-drill-header">
-                  <span className="ptm-tag-pill">{hostelName} • PHYSICAL REGISTER</span>
-                  <h1 className="ptm-page-title">Hostel Complaint Register</h1>
-                  <p className="ptm-page-sub">Filter maintenance requests by wing and category, then export a print-ready landscape register.</p>
-                </div>
-                <div className="ptm-card">
-                  <div className="ptm-grid-2">
-                    <label className="ptm-label">Wing
-                      <select className="ptm-input" value={wingFilter} onChange={(event) => setWingFilter(event.target.value)}>
-                        <option value="">All Wings</option>
-                        {'ABCDEFGH'.split('').map((letter) => <option key={letter} value={`Wing ${letter}`}>Wing {letter}</option>)}
-                      </select>
-                    </label>
-                    <label className="ptm-label">Category
-                      <select className="ptm-input" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
-                        <option value="">All Categories</option>
-                        {departments.map((department) => <option key={department.id} value={department.id}>{department.title}</option>)}
-                      </select>
-                    </label>
-                  </div>
-                  <button type="button" className="ptm-btn-primary" style={{ marginTop: '12px' }} onClick={handleDownloadRegister}>
-                    📥 Download Register PDF ({complaints.length})
-                  </button>
-                </div>
-                <div className="ptm-card" style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '820px', textAlign: 'left' }}>
-                    <thead>
-                      <tr>
-                        {['Ticket / Date', 'Wing / Room', 'Student', 'Mobile', 'Category', 'Complaint / Action', 'Status'].map((heading) => (
-                          <th key={heading} style={{ padding: '9px', borderBottom: '2px solid #CBD5E1' }}>{heading}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {complaints.map((complaint) => (
-                        <tr key={complaint.ticket_id}>
-                          <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.ticket_id}<br />{complaint.created_at}</td>
-                          <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.wing || 'Unassigned'}<br />{complaint.room}</td>
-                          <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.student_name}<br />{complaint.student_id}</td>
-                          <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.phone || '—'}</td>
-                          <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.routed_to}</td>
-                          <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.summary}<br />{complaint.staff_remark || complaint.description}</td>
-                          <td style={{ padding: '9px', borderBottom: '1px solid #E2E8F0' }}>{complaint.status}</td>
-                        </tr>
-                      ))}
-                      {complaints.length === 0 && (
-                        <tr>
-                          <td colSpan="7" style={{ padding: '20px', textAlign: 'center' }}>No complaints match these filters.</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
             {page === 'ticket_detail' && selectedTicket && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('complaints')}>←</button>
-                  <span className="ptm-tag-pill" style={{ width: 'fit-content' }}>{selectedTicket.ticket_id}</span>
+                  <span className="ptm-tag-pill">{selectedTicket.ticket_id} • {selectedTicket.wing} Room {selectedTicket.room}</span>
                   <h1 className="ptm-page-title">{selectedTicket.summary}</h1>
                 </div>
                 <div className="ptm-card">
-                  <p style={{ color: '#374151', marginBottom: '16px' }}>{selectedTicket.description}</p>
-                  <div className="ptm-list">
-                    <div className="ptm-list-row">
-                      <div className="ptm-list-main">
-                        <div className="ptm-list-title">1️⃣ Lodged by Resident</div>
-                        <div className="ptm-list-sub">
-                          {selectedTicket.student_name} ({selectedTicket.student_id}) • {selectedTicket.wing ? `${selectedTicket.wing}, ` : ''}Room {selectedTicket.room}
-                          {selectedTicket.phone ? ` • 📞 ${selectedTicket.phone}` : ''} • {selectedTicket.created_at}
-                        </div>
-                      </div>
+                  <p style={{ marginBottom: '12px' }}>{selectedTicket.description}</p>
+                  <div className="ptm-list-sub" style={{ marginBottom: '14px' }}>
+                    <strong>Student:</strong> {selectedTicket.student_name || selectedTicket.student_id} • 📞 {selectedTicket.student_phone || 'N/A'}
+                  </div>
+                  <textarea
+                    rows="2"
+                    className="ptm-input"
+                    placeholder="Add Warden / Maintenance Supervisor action remark..."
+                    value={wardenRemark}
+                    onChange={(e) => setWardenRemark(e.target.value)}
+                    style={{ marginBottom: '12px' }}
+                  />
+                  <div className="ptm-grid-2">
+                    <button className="ptm-btn-primary" onClick={() => handleUpdateTicketStatus(selectedTicket.ticket_id, 'Awaiting Confirmation')}>
+                      ⚡ Mark Action Taken (Ask Student to Verify)
+                    </button>
+                    <button className="ptm-btn-secondary" onClick={() => handleUpdateTicketStatus(selectedTicket.ticket_id, 'In Progress')}>
+                      🔧 Mark In Progress
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {page === 'register' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <span className="ptm-tag-pill">{hostelBlock} • PHYSICAL REGISTER</span>
+                  <h1 className="ptm-page-title">Hostel Complaint Register</h1>
+                  <p className="ptm-page-sub">Filter maintenance requests by wing and category, then export a print-ready landscape register.</p>
+                </div>
+
+                <div className="ptm-card">
+                  <div className="ptm-grid-2" style={{ marginBottom: '14px' }}>
+                    <div>
+                      <label className="ptm-label">Wing</label>
+                      <select className="ptm-input" value={regWing} onChange={(e) => setRegWing(e.target.value)}>
+                        <option value="All">All Wings</option>
+                        {['Wing A', 'Wing B', 'Wing C', 'Wing D', 'Wing E', 'Wing F', 'Wing G', 'Wing H'].map((w) => (
+                          <option key={w} value={w}>{w}</option>
+                        ))}
+                      </select>
                     </div>
-                    <div className="ptm-list-row">
-                      <div className="ptm-list-main">
-                        <div className="ptm-list-title">2️⃣ Department Resolution</div>
-                        <div className="ptm-list-sub">{selectedTicket.staff_remark || 'Pending inspection'}</div>
-                      </div>
-                    </div>
-                    <div className="ptm-list-row">
-                      <div className="ptm-list-main">
-                        <div className="ptm-list-title">3️⃣ Student Verification</div>
-                        <div className="ptm-list-sub">{selectedTicket.status}</div>
-                      </div>
+                    <div>
+                      <label className="ptm-label">Category</label>
+                      <select className="ptm-input" value={regCategory} onChange={(e) => setRegCategory(e.target.value)}>
+                        <option value="All">All Categories</option>
+                        {departments.map((d) => (
+                          <option key={d.id} value={d.title}>{d.title}</option>
+                        ))}
+                      </select>
                     </div>
                   </div>
+
+                  <button className="ptm-btn-primary" onClick={handlePrintRegister}>
+                    📥 Download Register PDF ({filteredRegister.length})
+                  </button>
+                </div>
+
+                <div className="ptm-card" style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid #E5E7EB', textAlign: 'left' }}>
+                        <th style={{ padding: '10px 8px' }}>Ticket / Date</th>
+                        <th style={{ padding: '10px 8px' }}>Wing / Room</th>
+                        <th style={{ padding: '10px 8px' }}>Student</th>
+                        <th style={{ padding: '10px 8px' }}>Mobile</th>
+                        <th style={{ padding: '10px 8px' }}>Category</th>
+                        <th style={{ padding: '10px 8px' }}>Complaint / Action</th>
+                        <th style={{ padding: '10px 8px' }}>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredRegister.map((c) => (
+                        <tr key={c.ticket_id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                          <td style={{ padding: '10px 8px' }}><strong>{c.ticket_id}</strong><br/><span style={{ fontSize: '11px', color: '#6B7280' }}>{c.created_at}</span></td>
+                          <td style={{ padding: '10px 8px' }}>{c.wing}<br/>{c.room}</td>
+                          <td style={{ padding: '10px 8px' }}>{c.student_name || c.student_id}</td>
+                          <td style={{ padding: '10px 8px' }}>{c.student_phone || '-'}</td>
+                          <td style={{ padding: '10px 8px' }}>{c.routed_to || c.category}</td>
+                          <td style={{ padding: '10px 8px' }}><strong>{c.summary}</strong><br/>{c.description}</td>
+                          <td style={{ padding: '10px 8px' }}>{c.status}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
@@ -682,9 +645,8 @@ export default function WardenPortal({ user, apiUrl }) {
 
       <nav className="ptm-bottom-nav">
         <button className={`ptm-bnav-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}><span>🏠</span><span>Home</span></button>
-        <button className={`ptm-bnav-btn ${page === 'onboard' ? 'active' : ''}`} onClick={() => setPage('onboard')}><span>➕</span><span>Add Student</span></button>
-        <button className={`ptm-bnav-btn ${page === 'directory' || page === 'edit_student' ? 'active' : ''}`} onClick={() => setPage('directory')}><span>🎓</span><span>Directory</span></button>
-        <button className={`ptm-bnav-btn ${page === 'complaints' ? 'active' : ''}`} onClick={() => setPage('complaints')}><span>💬</span><span>Complaints</span></button>
+        <button className={`ptm-bnav-btn ${page === 'directory' ? 'active' : ''}`} onClick={() => setPage('directory')}><span>🎓</span><span>Directory</span></button>
+        <button className={`ptm-bnav-btn ${page === 'complaints' ? 'active' : ''}`} onClick={() => setPage('complaints')}><span>💬</span><span>Tickets</span></button>
         <button className={`ptm-bnav-btn ${page === 'register' ? 'active' : ''}`} onClick={() => setPage('register')}><span>📋</span><span>Register</span></button>
       </nav>
     </div>

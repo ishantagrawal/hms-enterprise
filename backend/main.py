@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 import google.auth.exceptions
@@ -21,11 +22,17 @@ from google.oauth2 import id_token
 
 try:
     import psycopg2
+    from psycopg2 import pool
     from psycopg2.extras import RealDictCursor
 except ImportError:
     psycopg2 = None
+    pool = None
+    RealDictCursor = None
 
 app = FastAPI(title="svnitcampus - Production Backend")
+
+# Compress payloads > 500 bytes by ~80% for fast campus Wi-Fi transfer
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 GOOGLE_CLIENT_ID = os.getenv(
     "GOOGLE_CLIENT_ID",
@@ -36,6 +43,12 @@ DEFAULT_ADMIN_PASS = "7906771779"
 
 _GOOGLE_TOKEN_CACHE: Dict[str, tuple] = {}
 _GOOGLE_TOKEN_CACHE_LOCK = threading.Lock()
+
+# RAM Cache for Bearer token user lookup (eliminates redundant DB hit on every API call)
+_USER_AUTH_CACHE: Dict[str, tuple] = {}
+_USER_AUTH_CACHE_LOCK = threading.Lock()
+USER_CACHE_TTL = 60.0
+
 CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "*").split(",") if origin.strip()]
 
 app.add_middleware(
@@ -50,15 +63,96 @@ DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 DB_FILE = "hms.db"
 USE_POSTGRES = bool(DATABASE_URL and psycopg2 is not None)
 
+# =====================================================================
+# PERSISTENT POSTGRESQL CONNECTION POOL & DROP-IN WRAPPER
+# =====================================================================
+pg_pool = None
+
+if USE_POSTGRES:
+    _db_url = DATABASE_URL
+    if _db_url.startswith("postgres://"):
+        _db_url = _db_url.replace("postgres://", "postgresql://", 1)
+    try:
+        pg_pool = psycopg2.pool.ThreadedConnectionPool(
+            minconn=3,
+            maxconn=20,
+            dsn=_db_url,
+            cursor_factory=RealDictCursor,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=5,
+        )
+        print("✅ PostgreSQL ThreadedConnectionPool Initialized (3-20 warm connections)")
+    except Exception as e:
+        print(f"⚠️ Connection pool init fallback: {e}")
+        pg_pool = None
+
+
+class PooledConnection:
+    """
+    Wraps a pooled psycopg2 connection so calling conn.close() returns
+    the connection to the pool in 0ms instead of closing the socket.
+    """
+    def __init__(self, raw_conn, connection_pool):
+        self._conn = raw_conn
+        self._pool = connection_pool
+        self._closed = False
+
+    def cursor(self, *args, **kwargs):
+        return self._conn.cursor(*args, **kwargs)
+
+    def commit(self):
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
+    def close(self):
+        if not self._closed and self._conn is not None:
+            self._closed = True
+            try:
+                self._pool.putconn(self._conn)
+            except Exception:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type:
+            self.rollback()
+        self.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
 
 def get_conn():
     if USE_POSTGRES:
+        if pg_pool is not None:
+            try:
+                raw_conn = pg_pool.getconn()
+                if raw_conn.closed != 0:
+                    pg_pool.putconn(raw_conn, close=True)
+                    raw_conn = pg_pool.getconn()
+                return PooledConnection(raw_conn, pg_pool)
+            except Exception as e:
+                print(f"⚠️ Pool getconn fallback: {e}")
         url = DATABASE_URL
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql://", 1)
         return psycopg2.connect(url, cursor_factory=RealDictCursor)
-    conn = sqlite3.connect(DB_FILE)
+
+    # High-concurrency SQLite with WAL mode & 64MB RAM cache
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False, timeout=20.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA cache_size=-64000;")
     return conn
 
 
@@ -68,6 +162,14 @@ def db_exec(conn, query: str, params: tuple = ()):
         query = query.replace("?", "%s")
     cur.execute(query, params)
     return cur
+
+
+def invalidate_user_cache(user_id: Optional[str] = None):
+    with _USER_AUTH_CACHE_LOCK:
+        if user_id:
+            _USER_AUTH_CACHE.pop(user_id.strip().upper(), None)
+        else:
+            _USER_AUTH_CACHE.clear()
 
 
 def create_session_token(user_id: str) -> str:
@@ -132,6 +234,7 @@ def upsert_user(conn, u: tuple):
                 """,
                 u,
             )
+    invalidate_user_cache(u[0])
 
 
 def upsert_club(conn, c: tuple):
@@ -286,6 +389,24 @@ def init_db():
     complaint_columns = {column[0] for column in db_exec(conn, "SELECT * FROM complaints LIMIT 0").description}
     if "wing" not in complaint_columns:
         db_exec(conn, "ALTER TABLE complaints ADD COLUMN wing TEXT")
+
+    # High-Speed B-Tree & Expression Indexes (accelerates UPPER/LOWER filters)
+    indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_users_upper_id ON users (UPPER(user_id))",
+        "CREATE INDEX IF NOT EXISTS idx_users_lower_email ON users (LOWER(email))",
+        "CREATE INDEX IF NOT EXISTS idx_users_role_hostel ON users (role, LOWER(hostel_block))",
+        "CREATE INDEX IF NOT EXISTS idx_complaints_student ON complaints (UPPER(student_id), created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_complaints_hostel ON complaints (LOWER(hostel_block), created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_complaints_cat ON complaints (UPPER(category), LOWER(routed_to))",
+        "CREATE INDEX IF NOT EXISTS idx_events_date_status ON events (date, status)",
+        "CREATE INDEX IF NOT EXISTS idx_events_club ON events (UPPER(club_id))",
+        "CREATE INDEX IF NOT EXISTS idx_notices_status ON notices (status, created_at)",
+    ]
+    for idx_sql in indexes:
+        try:
+            db_exec(conn, idx_sql)
+        except Exception:
+            pass
 
     default_users = [
         ("FOUNDER", DEFAULT_ADMIN_PASS, "Founder & Ad Admin", "Founder", "Platform Creator & Sponsor Manager", "SVNIT", "All", "-", "Admin", "+91-7906771779", "founder@svnit.ac.in", "Platform Admin", "10072007", ""),
@@ -529,14 +650,26 @@ def get_account_by_email(email: str):
     conn = get_conn()
     row = db_exec(conn, "SELECT * FROM users WHERE LOWER(email) = LOWER(?)", (email,)).fetchone()
     conn.close()
-    return row
+    return dict(row) if row else None
 
 
 def get_account_by_id(user_id: str):
+    uid = user_id.strip().upper()
+    now = time.time()
+    with _USER_AUTH_CACHE_LOCK:
+        cached = _USER_AUTH_CACHE.get(uid)
+        if cached and cached[0] > now:
+            return cached[1]
+
     conn = get_conn()
-    row = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (user_id.strip().upper(),)).fetchone()
+    row = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (uid,)).fetchone()
     conn.close()
-    return row
+    if row:
+        account_dict = dict(row)
+        with _USER_AUTH_CACHE_LOCK:
+            _USER_AUTH_CACHE[uid] = (now + USER_CACHE_TTL, account_dict)
+        return account_dict
+    return None
 
 
 def get_account_for_google_claims(claims: dict):
@@ -599,7 +732,8 @@ def get_account_for_google_claims(claims: dict):
         account = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (local_part,)).fetchone()
     conn.commit()
     conn.close()
-    return account
+    invalidate_user_cache(local_part)
+    return dict(account)
 
 
 def account_from_bearer(request: Request):
@@ -648,8 +782,127 @@ def root():
     return {
         "status": "online",
         "app": "svnitcampus",
-        "database_mode": "Cloud PostgreSQL (Permanent)" if USE_POSTGRES else "Local SQLite"
+        "database_mode": "Cloud PostgreSQL (Pooled)" if USE_POSTGRES else "Local SQLite (WAL)"
     }
+
+
+# =====================================================================
+# UNIFIED SINGLE-ROUNDTRIP BOOTSTRAP ENDPOINT
+# =====================================================================
+@app.get("/api/portal/bootstrap")
+def portal_bootstrap(request: Request, hostel_block: str = "All"):
+    """
+    Fetches all portal data in 1 pooled connection instead of 6 parallel HTTP calls.
+    """
+    account = request.state.user
+    role = account["role"]
+    uid = account["user_id"].upper()
+    h_block = account.get("hostel_block") or hostel_block or "All"
+
+    conn = get_conn()
+    try:
+        # 1. Complaints
+        base_query = """
+            SELECT complaints.*,
+                   COALESCE(NULLIF(complaints.wing, ''), users.wing, '') AS resolved_wing,
+                   COALESCE(users.phone, '') AS student_phone
+            FROM complaints
+            LEFT JOIN users ON UPPER(users.user_id) = UPPER(complaints.student_id)
+        """
+        if role == "Student":
+            c_rows = db_exec(conn, f"{base_query} WHERE UPPER(complaints.student_id) = ? ORDER BY complaints.created_at DESC", (uid,)).fetchall()
+        elif role == "Warden":
+            c_rows = db_exec(conn, f"{base_query} WHERE LOWER(complaints.hostel_block) = LOWER(?) ORDER BY complaints.created_at DESC", (h_block,)).fetchall()
+        elif role == "Staff":
+            dept_key = (account.get("department") or uid).strip().upper()
+            dept_row = db_exec(conn, "SELECT * FROM departments WHERE UPPER(id) = ?", (dept_key,)).fetchone()
+            if dept_row:
+                c_rows = db_exec(conn, f"{base_query} WHERE UPPER(complaints.category) = ? OR LOWER(complaints.routed_to) = LOWER(?) ORDER BY complaints.created_at DESC", (dept_key, dept_row["title"])).fetchall()
+            else:
+                c_rows = db_exec(conn, f"{base_query} WHERE UPPER(complaints.category) = ? ORDER BY complaints.created_at DESC", (dept_key,)).fetchall()
+        else:
+            c_rows = db_exec(conn, f"{base_query} ORDER BY complaints.created_at DESC").fetchall()
+
+        complaints = []
+        for r in c_rows:
+            item = dict(r)
+            item["wing"] = item.pop("resolved_wing", item.get("wing") or "")
+            item["phone"] = item.pop("student_phone", item.get("phone") or "")
+            item["student_phone"] = item["phone"]
+            complaints.append(item)
+
+        # 2. Departments
+        if h_block and h_block not in {"All", "Day Scholar"}:
+            d_rows = db_exec(
+                conn,
+                "SELECT departments.*, users.email AS login_email FROM departments LEFT JOIN users ON UPPER(users.user_id) = UPPER(departments.id) WHERE departments.type = 'Central' OR LOWER(departments.hostel_block) = LOWER(?)",
+                (h_block,)
+            ).fetchall()
+        else:
+            d_rows = db_exec(
+                conn,
+                "SELECT departments.*, users.email AS login_email FROM departments LEFT JOIN users ON UPPER(users.user_id) = UPPER(departments.id)"
+            ).fetchall()
+        departments = [dict(r) for r in d_rows]
+
+        # 3. Events
+        e_rows = db_exec(conn, "SELECT * FROM events ORDER BY date DESC").fetchall()
+        events = []
+        for r in e_rows:
+            d = dict(r)
+            d["custom_fields"] = json.loads(d["custom_fields"] or "[]")
+            d["rsvps"] = json.loads(d["rsvps"] or "[]")
+            d["feedbacks"] = json.loads(d["feedbacks"] or "[]")
+            d["ai_audit"] = json.loads(d["ai_audit"] or "{}") if d["ai_audit"] else None
+            events.append(d)
+
+        # 4. Clubs
+        cl_rows = db_exec(conn, "SELECT * FROM clubs ORDER BY club_id ASC").fetchall()
+        clubs = []
+        for r in cl_rows:
+            d = dict(r)
+            d["members"] = json.loads(d["members"] or "[]")
+            d["gallery"] = json.loads(d["gallery"] or "[]")
+            clubs.append(d)
+
+        # 5. Notices
+        if role == "Student":
+            n_rows = db_exec(conn, "SELECT * FROM notices WHERE status = 'Approved' ORDER BY created_at DESC").fetchall()
+        elif role == "ClubOrganizer":
+            n_rows = db_exec(conn, "SELECT * FROM notices WHERE UPPER(club_id) = ? ORDER BY created_at DESC", (uid,)).fetchall()
+        else:
+            n_rows = db_exec(conn, "SELECT * FROM notices ORDER BY created_at DESC").fetchall()
+        notices = []
+        for r in n_rows:
+            d = dict(r)
+            d["custom_fields"] = json.loads(d["custom_fields"] or "[]")
+            notices.append(d)
+
+        # 6. Active Ads
+        ad_rows = db_exec(conn, "SELECT * FROM ads ORDER BY created_at DESC").fetchall()
+        today = datetime.now().strftime("%Y-%m-%d")
+        ads = [dict(r) for r in ad_rows if not r["expires_at"] or r["expires_at"] >= today]
+
+        # 7. Hostel Students (for Warden / Dean / Founder)
+        students = []
+        if role in {"Warden", "Dean", "Founder"}:
+            if role == "Warden" and h_block != "All":
+                s_rows = db_exec(conn, "SELECT * FROM users WHERE role = 'Student' AND LOWER(hostel_block) = LOWER(?) ORDER BY user_id ASC", (h_block,)).fetchall()
+            else:
+                s_rows = db_exec(conn, "SELECT * FROM users WHERE role = 'Student' ORDER BY user_id ASC").fetchall()
+            students = [{k: v for k, v in dict(r).items() if k not in {"password", "dob"}} for r in s_rows]
+
+        return {
+            "complaints": complaints,
+            "departments": departments,
+            "events": events,
+            "clubs": clubs,
+            "notices": notices,
+            "ads": ads,
+            "students": students
+        }
+    finally:
+        conn.close()
 
 
 @app.post("/api/auth/login")
@@ -744,15 +997,17 @@ def update_student_profile(req: StudentProfileReq, request: Request):
             raise HTTPException(status_code=400, detail="Enter a valid room number.")
         title = "Verified Resident"
 
+    uid = account["user_id"].upper()
     conn = get_conn()
     db_exec(
         conn,
         "UPDATE users SET hostel_block = ?, wing = ?, room = ?, phone = ?, authority_title = ? WHERE UPPER(user_id) = ?",
-        (hostel, wing, room, phone, title, account["user_id"].upper())
+        (hostel, wing, room, phone, title, uid)
     )
-    updated = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (account["user_id"].upper(),)).fetchone()
+    updated = db_exec(conn, "SELECT * FROM users WHERE UPPER(user_id) = ?", (uid,)).fetchone()
     conn.commit()
     conn.close()
+    invalidate_user_cache(uid)
     user = dict(updated)
     user.pop("password", None)
     user.pop("dob", None)
@@ -829,6 +1084,7 @@ def list_departments(hostel_block: str = "All"):
     return [dict(row) for row in rows]
 
 
+@app.post("/api/departments")
 @app.post("/api/departments/create")
 def create_department(req: CreateDepartmentReq, request: Request):
     account = request.state.user
@@ -883,6 +1139,7 @@ def get_wardens():
     return [{k: v for k, v in dict(r).items() if k not in {"password", "dob"}} for r in rows]
 
 
+@app.post("/api/dean/update-warden")
 @app.post("/api/dean/create-warden")
 def create_or_update_warden(req: WardenCreateReq):
     uid = req.user_id.strip().upper().replace(" ", "_")
@@ -899,6 +1156,7 @@ def create_or_update_warden(req: WardenCreateReq):
     return {"success": True, "message": f"Warden Portal '{uid}' configured! Password: {pwd}"}
 
 
+@app.post("/api/unicore/clubs/create")
 @app.post("/api/founder/create-club")
 @app.post("/api/dean/create-club")
 def create_club(req: ClubCreateReq):
@@ -967,6 +1225,7 @@ def add_student_manual(req: StudentManualAddReq, request: Request):
         )
     conn.commit()
     conn.close()
+    invalidate_user_cache(uid)
     return {"success": True, "message": f"Student {req.full_name} ({uid}) saved in {hostel_block}."}
 
 
@@ -985,22 +1244,27 @@ def update_student_by_warden(req: StudentManualAddReq, request: Request):
     if not existing:
         conn.close()
         raise HTTPException(status_code=404, detail="Student record not found.")
+
+    full_name = (req.full_name or existing["full_name"] or uid).strip()
+    dept = (req.department or existing["department"] or "").strip()
+    yr = (req.year or existing["year"] or "1st Year").strip()
+
     db_exec(
         conn,
         "UPDATE users SET full_name = ?, hostel_block = ?, wing = ?, room = ?, department = ?, year = ?, phone = ? WHERE UPPER(user_id) = ?",
-        (req.full_name.strip(), new_hostel, new_wing, new_room, req.department.strip(), (req.year or "1st Year").strip(), (req.phone or "").strip(), uid)
+        (full_name, new_hostel, new_wing, new_room, dept, yr, (req.phone or "").strip(), uid)
     )
-    # Also update active complaints so the new hostel warden sees them
     db_exec(
         conn,
         "UPDATE complaints SET hostel_block = ?, wing = ?, room = ?, student_name = ? WHERE UPPER(student_id) = ? AND status != 'Completed'",
-        (new_hostel, new_wing, new_room, req.full_name.strip(), uid)
+        (new_hostel, new_wing, new_room, full_name, uid)
     )
     conn.commit()
     conn.close()
+    invalidate_user_cache(uid)
     return {
         "success": True,
-        "message": f"Updated {req.full_name} ({uid}) → {new_hostel} ({new_wing}, Room {new_room})."
+        "message": f"Updated {full_name} ({uid}) → {new_hostel} ({new_wing}, Room {new_room})."
     }
 
 
@@ -1033,6 +1297,7 @@ def upload_students_bulk(students: List[StudentManualAddReq], request: Request):
             added += 1
     conn.commit()
     conn.close()
+    invalidate_user_cache()
     return {"success": True, "message": f"Bulk Upload Complete: {added} added, {updated} updated!"}
 
 
@@ -1067,6 +1332,7 @@ def get_complaints(request: Request, wing: str = "", category: str = ""):
     for item in matched:
         item["wing"] = item.pop("resolved_wing", item.get("wing") or "")
         item["phone"] = item.pop("student_phone", item.get("phone") or "")
+        item["student_phone"] = item["phone"]
 
     if wing:
         matched = [c for c in matched if c.get("wing") == wing]
@@ -1102,19 +1368,25 @@ def create_complaint(req: ComplaintCreateReq, request: Request):
     return {"success": True, "ticket": {"ticket_id": ticket_id, "summary": req.summary, "status": "Pending"}}
 
 
+@app.post("/api/complaints/update")
 @app.post("/api/complaints/staff-resolve")
-def staff_resolve(req: StaffResolveReq, request: Request):
+async def staff_resolve(request: Request):
+    body = await request.json()
+    ticket_id = body.get("ticket_id", "")
+    status = body.get("status", "Awaiting Confirmation")
+    remark = body.get("staff_remark") or body.get("remark") or ""
     resolved_at = datetime.now().strftime("%Y-%m-%d, %I:%M %p")
+
     conn = get_conn()
     db_exec(
         conn,
-        "UPDATE complaints SET status = 'Awaiting Confirmation', staff_remark = ?, resolved_at = ? WHERE ticket_id = ?",
-        (req.staff_remark, resolved_at, req.ticket_id)
+        "UPDATE complaints SET status = ?, staff_remark = ?, resolved_at = ? WHERE ticket_id = ?",
+        (status, remark, resolved_at, ticket_id)
     )
     conn.commit()
-    row = db_exec(conn, "SELECT * FROM complaints WHERE ticket_id = ?", (req.ticket_id,)).fetchone()
+    row = db_exec(conn, "SELECT * FROM complaints WHERE ticket_id = ?", (ticket_id,)).fetchone()
     conn.close()
-    return {"success": True, "ticket": dict(row)}
+    return {"success": True, "ticket": dict(row) if row else {}}
 
 
 @app.post("/api/complaints/student-verify")
@@ -1125,7 +1397,7 @@ def student_verify(req: StudentVerifyReq, request: Request):
     conn.commit()
     row = db_exec(conn, "SELECT * FROM complaints WHERE ticket_id = ?", (req.ticket_id,)).fetchone()
     conn.close()
-    return {"success": True, "ticket": dict(row)}
+    return {"success": True, "ticket": dict(row) if row else {}}
 
 
 @app.get("/api/complaints/export-pdf", response_class=HTMLResponse)
@@ -1450,6 +1722,8 @@ def delete_notice(request: Request, notice_id: str = Query(...)):
     conn.commit()
     conn.close()
     return {"success": True, "message": "Notice permanently deleted from everywhere."}
+
+
 @app.post("/api/complaints/delete")
 def delete_complaint(ticket_id: str = Query(...), request: Request = None):
     conn = get_conn()

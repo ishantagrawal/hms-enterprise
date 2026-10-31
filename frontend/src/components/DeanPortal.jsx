@@ -78,49 +78,31 @@ export default function DeanPortal({ apiUrl }) {
     }
 
     try {
-      const [cRes, eRes, nRes, dRes, compRes, stRes] = await Promise.all([
-        apiFetch(`${apiUrl}/api/unicore/clubs`),
-        apiFetch(`${apiUrl}/api/unicore/events`),
-        apiFetch(`${apiUrl}/api/notices?role=Dean`),
-        apiFetch(`${apiUrl}/api/departments`),
-        apiFetch(`${apiUrl}/api/complaints?role=Dean`),
-        apiFetch(`${apiUrl}/api/warden/students?hostel_block=All`)
-      ]);
+      const res = await apiFetch(`${apiUrl}/api/portal/bootstrap?role=Dean&user_id=DEAN&hostel_block=All`);
+      if (res.ok) {
+        const d = await res.json();
+        setClubs(d.clubs || []);
+        setCached('dean_clubs', d.clubs || []);
+        setCached('clubs', d.clubs || []);
+        
+        setEvents(d.events || []);
+        setCached('dean_events', d.events || []);
+        setCached('events', d.events || []);
 
-      if (cRes.ok) {
-        const d = await cRes.json();
-        setClubs(d);
-        setCached('dean_clubs', d);
-        setCached('clubs', d);
-      }
-      if (eRes.ok) {
-        const d = await eRes.json();
-        setEvents(d);
-        setCached('dean_events', d);
-        setCached('events', d);
-      }
-      if (nRes.ok) {
-        const d = await nRes.json();
-        setNotices(d);
-        setCached('dean_notices', d);
-      }
-      if (dRes.ok) {
-        const d = await dRes.json();
-        setDepartments(d);
-        setCached('dean_depts', d);
-      }
-      if (compRes.ok) {
-        const d = await compRes.json();
-        setComplaints(d);
-        setCached('dean_complaints', d);
-      }
-      if (stRes.ok) {
-        const s = await stRes.json();
-        const arr = Array.isArray(s) ? s : [];
-        setStudents(arr);
-        setStudentsCount(arr.length);
-        setCached('dean_all_students', arr);
-        setCached('dean_student_count', arr.length);
+        setNotices(d.notices || []);
+        setCached('dean_notices', d.notices || []);
+
+        setDepartments(d.departments || []);
+        setCached('dean_depts', d.departments || []);
+
+        setComplaints(d.complaints || []);
+        setCached('dean_complaints', d.complaints || []);
+
+        const stArr = d.students || [];
+        setStudents(stArr);
+        setStudentsCount(stArr.length);
+        setCached('dean_all_students', stArr);
+        setCached('dean_student_count', stArr.length);
       }
     } catch (e) {
       console.error('Dean background sync error:', e);
@@ -245,7 +227,7 @@ export default function DeanPortal({ apiUrl }) {
       name: clubForm.name.trim(),
       email: clubForm.email.trim(),
       faculty_advisor: clubForm.faculty_advisor.trim() || 'Assigned by Dean SW Office',
-      head_coordinator: clubForm.head_coordinator.trim() || 'Student Coordinator',
+      head_coordinator: clubForm.head_coordinator.trim() || 'Student Convener',
       mission: clubForm.mission.trim() || 'Official Student Activity Center (SAC) Chapter at SVNIT Surat',
       members: [],
       gallery: []
@@ -260,7 +242,7 @@ export default function DeanPortal({ apiUrl }) {
     setPage('clubs_list');
 
     try {
-      await apiFetch(`${apiUrl}/api/unicore/clubs/create`, {
+      await apiFetch(`${apiUrl}/api/dean/create-club`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newClubObj)
@@ -277,10 +259,9 @@ export default function DeanPortal({ apiUrl }) {
     e.preventDefault();
     const newD = {
       id: deptForm.dept_id.trim().toUpperCase(),
-      dept_id: deptForm.dept_id.trim().toUpperCase(),
-      title: deptForm.name.trim(),
       name: deptForm.name.trim(),
-      email: deptForm.email.trim(),
+      title: deptForm.name.trim(),
+      email: deptForm.email ? deptForm.email.trim() : '',
       icon: deptForm.icon || '⚡',
       type: 'Central',
       hostel_block: 'All'
@@ -293,10 +274,17 @@ export default function DeanPortal({ apiUrl }) {
     setDeptForm({ dept_id: '', name: '', email: '', icon: '⚡' });
 
     try {
-      await apiFetch(`${apiUrl}/api/departments`, {
+      await apiFetch(`${apiUrl}/api/departments/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newD)
+        body: JSON.stringify({
+          dept_id: newD.id,
+          name: newD.name,
+          dept_type: 'Central',
+          hostel_block: 'All',
+          icon: newD.icon,
+          email: newD.email
+        })
       });
       loadDeanData();
     } catch (err) {
@@ -310,7 +298,7 @@ export default function DeanPortal({ apiUrl }) {
     e.preventDefault();
     setMsg(`✅ Updated Chief Warden credentials for ${wardenForm.hostel_block}!`);
     try {
-      await apiFetch(`${apiUrl}/api/dean/update-warden`, {
+      await apiFetch(`${apiUrl}/api/dean/create-warden`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(wardenForm)
@@ -1032,7 +1020,7 @@ export default function DeanPortal({ apiUrl }) {
                     <div className="ptm-list-row">
                       <div className="ptm-list-main">
                         <div className="ptm-list-title">🛠️ Logistics & Permissions Needed</div>
-                        <div className="ptm-list-sub">{selectedEvent.logistics || 'Standard Venue Setup'}</div>
+                        <div className="ptm-list-sub">{selectedEvent.logistics_needs || selectedEvent.logistics || 'Standard Venue Setup'}</div>
                       </div>
                     </div>
                   </div>
@@ -1333,7 +1321,7 @@ export default function DeanPortal({ apiUrl }) {
                         <div className="ptm-avatar-pastel">{d.icon || '⚡'}</div>
                         <div className="ptm-list-main">
                           <div className="ptm-list-title">{d.title}</div>
-                          <div className="ptm-list-sub">Login ID: {d.id} • Scope: All 9 SVNIT Hostels</div>
+                          <div className="ptm-list-sub">ID: {d.id} • Scope: All 9 SVNIT Hostels</div>
                         </div>
                       </div>
                     ))}

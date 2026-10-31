@@ -1,15 +1,20 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../api';
+import { getCached, setCached } from '../cache';
 
 export default function StudentPortal({ user, apiUrl }) {
+  const safeUser = user || {};
+  const cKey = `complaints_${safeUser.user_id}`;
+  const dKey = `departments_${safeUser.hostel_block}`;
+
   const [page, setPage] = useState('home');
-  const [dataLoading, setDataLoading] = useState(true);
-  const [complaints, setComplaints] = useState([]);
-  const [departments, setDepartments] = useState([]);
-  const [events, setEvents] = useState([]);
-  const [clubs, setClubs] = useState([]);
-  const [notices, setNotices] = useState([]);
-  const [ads, setAds] = useState([]);
+  const [dataLoading, setDataLoading] = useState(false);
+  const [complaints, setComplaints] = useState(() => getCached(cKey) || []);
+  const [departments, setDepartments] = useState(() => getCached(dKey) || []);
+  const [events, setEvents] = useState(() => getCached('events') || []);
+  const [clubs, setClubs] = useState(() => getCached('clubs') || []);
+  const [notices, setNotices] = useState(() => getCached('notices') || []);
+  const [ads, setAds] = useState(() => getCached('ads') || []);
   const [adIdx, setAdIdx] = useState(0);
   const [msg, setMsg] = useState(null);
 
@@ -31,36 +36,58 @@ export default function StudentPortal({ user, apiUrl }) {
   const [calMonth, setCalMonth] = useState(9);
   const [selectedDateStr, setSelectedDateStr] = useState('2026-10-28');
 
-  const isDayScholar = (user?.hostel_block || '').toLowerCase() === 'day scholar';
+  const isDayScholar = (safeUser.hostel_block || '').toLowerCase() === 'day scholar';
 
+  // Unified single-call bootstrap loader replacing 6 parallel requests
   const loadStudentData = useCallback(async () => {
+    const hasCache = Boolean(getCached(cKey) || getCached('events'));
+    if (!hasCache) {
+      setDataLoading(true);
+    }
+
     try {
-      const [cRes, dRes, eRes, clRes, nRes, adRes] = await Promise.all([
-        apiFetch(`${apiUrl}/api/complaints?role=Student&user_id=${user.user_id}`),
-        apiFetch(`${apiUrl}/api/departments?hostel_block=${encodeURIComponent(user.hostel_block || 'All')}`),
-        apiFetch(`${apiUrl}/api/unicore/events`),
-        apiFetch(`${apiUrl}/api/unicore/clubs`),
-        apiFetch(`${apiUrl}/api/notices?role=Student`),
-        apiFetch(`${apiUrl}/api/ads`)
-      ]);
-      if (cRes.ok) setComplaints(await cRes.json());
-      if (dRes.ok) {
-        const dList = await dRes.json();
-        setDepartments(dList);
-        if (dList.length > 0) setCategory(dList[0].id);
+      const res = await apiFetch(
+        `${apiUrl}/api/portal/bootstrap?role=Student&user_id=${encodeURIComponent(safeUser.user_id || '')}&hostel_block=${encodeURIComponent(safeUser.hostel_block || 'All')}`
+      );
+
+      if (res.ok) {
+        const d = await res.json();
+        
+        const fetchedComplaints = d.complaints || [];
+        setComplaints(fetchedComplaints);
+        setCached(cKey, fetchedComplaints);
+
+        const fetchedDepts = d.departments || [];
+        setDepartments(fetchedDepts);
+        setCached(dKey, fetchedDepts);
+        if (fetchedDepts.length > 0 && !category) setCategory(fetchedDepts[0].id);
+
+        const fetchedEvents = d.events || [];
+        setEvents(fetchedEvents);
+        setCached('events', fetchedEvents);
+
+        const fetchedClubs = d.clubs || [];
+        setClubs(fetchedClubs);
+        setCached('clubs', fetchedClubs);
+
+        const fetchedNotices = d.notices || [];
+        setNotices(fetchedNotices);
+        setCached('notices', fetchedNotices);
+
+        const fetchedAds = d.ads || [];
+        setAds(fetchedAds);
+        setCached('ads', fetchedAds);
       }
-      if (eRes.ok) setEvents(await eRes.json());
-      if (clRes.ok) setClubs(await clRes.json());
-      if (nRes.ok) setNotices(await nRes.json());
-      if (adRes.ok) setAds(await adRes.json());
     } catch (e) {
-      console.error(e);
+      console.error('Student bootstrap sync error:', e);
     } finally {
       setDataLoading(false);
     }
-  }, [apiUrl, user.user_id, user.hostel_block]);
+  }, [apiUrl, safeUser.user_id, safeUser.hostel_block, cKey, dKey, category]);
 
-  useEffect(() => { loadStudentData(); }, [loadStudentData]);
+  useEffect(() => {
+    loadStudentData();
+  }, [loadStudentData]);
 
   useEffect(() => {
     if (ads.length <= 1) return;
@@ -72,87 +99,140 @@ export default function StudentPortal({ user, apiUrl }) {
 
   const handleCreateComplaint = async (e) => {
     e.preventDefault();
-    if (submitting) return; // Prevent spam double-clicks
+    if (submitting) return;
     setSubmitting(true);
+
+    const tempTicket = {
+      ticket_id: `TKT-${Math.floor(Math.random() * 900 + 100)}`,
+      summary,
+      description,
+      status: 'Pending',
+      routed_to: category,
+      created_at: 'Just now',
+      wing: safeUser.wing || '',
+      room: safeUser.room || ''
+    };
+
+    const updated = [tempTicket, ...complaints];
+    setComplaints(updated);
+    setCached(cKey, updated);
+    const savedSummary = summary;
+    const savedDesc = description;
+    setSummary('');
+    setDescription('');
+    setMsg('✅ Grievance submitted!');
+    setPage('my_complaints');
+    setSubmitting(false);
+
     try {
-      const res = await apiFetch(`${apiUrl}/api/complaints`, {
+      await apiFetch(`${apiUrl}/api/complaints`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: user.user_id, category, summary, description })
+        body: JSON.stringify({
+          student_id: safeUser.user_id,
+          category,
+          summary: savedSummary,
+          description: savedDesc
+        })
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setMsg(`✅ Grievance ${data.ticket.ticket_id} submitted successfully!`);
-        setSummary('');
-        setDescription('');
-        await loadStudentData();
-        setPage('my_complaints');
-      } else {
-        setMsg(`❌ ${data.detail || 'Could not submit grievance.'}`);
-      }
+      loadStudentData();
     } catch (err) {
-      setMsg('❌ Network error. Please try again.');
-    } finally {
-      setSubmitting(false);
+      setMsg('❌ Network error syncing complaint.');
     }
   };
 
   const handleDeleteComplaint = async (ticketId, e) => {
     e.stopPropagation();
-    if (!window.confirm("Do you want to delete this duplicate or accidental complaint?")) return;
+    if (!window.confirm('Delete this duplicate or accidental complaint?')) return;
+
+    const updated = complaints.filter((c) => c.ticket_id !== ticketId);
+    setComplaints(updated);
+    setCached(cKey, updated);
+    setMsg('🗑️ Complaint deleted!');
+
     try {
-      const res = await apiFetch(`${apiUrl}/api/complaints/delete?ticket_id=${encodeURIComponent(ticketId)}`, {
+      await apiFetch(`${apiUrl}/api/complaints/delete?ticket_id=${encodeURIComponent(ticketId)}`, {
         method: 'POST'
       });
-      if (res.ok) {
-        setMsg('🗑️ Complaint deleted successfully.');
-        loadStudentData();
-      }
+      loadStudentData();
     } catch (err) {
-      setMsg('❌ Could not delete complaint.');
+      setMsg('❌ Could not sync deletion.');
+      loadStudentData();
     }
   };
 
   const handleVerify = async (ticketId, satisfied) => {
-    const res = await apiFetch(`${apiUrl}/api/complaints/student-verify`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticket_id: ticketId, satisfied })
-    });
-    if (res.ok) {
-      setMsg(satisfied ? '✅ Marked Resolved & Closed!' : '🔄 Reopened for maintenance!');
+    const nextStatus = satisfied ? 'Completed' : 'Reopened';
+    const updated = complaints.map((c) =>
+      c.ticket_id === ticketId ? { ...c, status: nextStatus } : c
+    );
+    setComplaints(updated);
+    setCached(cKey, updated);
+    setMsg(satisfied ? '✅ Marked Resolved & Closed!' : '🔄 Reopened for maintenance!');
+    setPage('my_complaints');
+
+    try {
+      await apiFetch(`${apiUrl}/api/complaints/student-verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticket_id: ticketId, satisfied })
+      });
       loadStudentData();
-      setPage('my_complaints');
+    } catch (err) {
+      setMsg('❌ Error syncing verification.');
     }
   };
 
   const handleRsvp = async (eventId) => {
-    const res = await apiFetch(`${apiUrl}/api/unicore/events/rsvp`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ event_id: eventId, student_id: user.user_id })
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setMsg(data.message);
-      setEvents(events.map((ev) => (ev.event_id === eventId ? { ...ev, rsvps: data.rsvps } : ev)));
-      setSelectedEvent((prev) => (prev ? { ...prev, rsvps: data.rsvps } : null));
+    const currentRsvps = selectedEvent?.rsvps || [];
+    const alreadyIn = currentRsvps.includes(safeUser.user_id);
+    const nextRsvps = alreadyIn
+      ? currentRsvps.filter((id) => id !== safeUser.user_id)
+      : [...currentRsvps, safeUser.user_id];
+
+    const updatedEvent = { ...selectedEvent, rsvps: nextRsvps };
+    setSelectedEvent(updatedEvent);
+    const updatedList = events.map((ev) => (ev.event_id === eventId ? updatedEvent : ev));
+    setEvents(updatedList);
+    setCached('events', updatedList);
+    setMsg(alreadyIn ? 'RSVP Cancelled' : '🎟️ RSVP Confirmed!');
+
+    try {
+      await apiFetch(`${apiUrl}/api/unicore/events/rsvp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event_id: eventId, student_id: safeUser.user_id })
+      });
+      loadStudentData();
+    } catch (err) {
+      console.error(err);
     }
   };
 
   const handleFeedback = async (e, eventId) => {
     e.preventDefault();
-    const res = await apiFetch(`${apiUrl}/api/unicore/events/feedback`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ event_id: eventId, student_id: user.user_id, rating: feedbackRating, review: feedbackReview })
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setMsg('⭐ Review submitted!');
-      setFeedbackReview('');
-      setSelectedEvent(data.event);
-      loadStudentData();
+    setMsg('⭐ Review submitted!');
+    const revText = feedbackReview;
+    setFeedbackReview('');
+
+    try {
+      const res = await apiFetch(`${apiUrl}/api/unicore/events/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event_id: eventId,
+          student_id: safeUser.user_id,
+          rating: feedbackRating,
+          review: revText
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSelectedEvent(data.event);
+        loadStudentData();
+      }
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -190,9 +270,6 @@ export default function StudentPortal({ user, apiUrl }) {
             <div style={{ fontWeight: 700, color: '#002970', fontSize: '14px', marginTop: '12px' }}>
               Loading your student portal...
             </div>
-            <div style={{ fontSize: '12px', color: '#6B7280', marginTop: '4px' }}>
-              Fetching campus events, clubs, and notices...
-            </div>
           </div>
         ) : (
           <>
@@ -202,14 +279,14 @@ export default function StudentPortal({ user, apiUrl }) {
                   <div className="ptm-mini-card" onClick={() => setPage('profile')}>
                     <div className="ptm-row-between">
                       <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>
-                        {isDayScholar ? 'Day Scholar' : user.hostel_block}
+                        {isDayScholar ? 'Day Scholar' : safeUser.hostel_block}
                       </span>
                       <span>{isDayScholar ? '🎒' : '🏠'}</span>
                     </div>
                     <div style={{ fontSize: '19px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>
-                      {isDayScholar ? 'Non-Hosteller' : `Room ${user.room}`}
+                      {isDayScholar ? 'Non-Hosteller' : `Room ${safeUser.room}`}
                     </div>
-                    <button className="ptm-mini-btn">{user.year || 'Resident'} • {user.user_id}</button>
+                    <button className="ptm-mini-btn">{safeUser.year || 'Resident'} • {safeUser.user_id}</button>
                   </div>
 
                   {!isDayScholar && (
@@ -303,7 +380,7 @@ export default function StudentPortal({ user, apiUrl }) {
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
                   <h1 className="ptm-page-title">Lodge Hostel Grievance</h1>
-                  <p className="ptm-page-sub">{user.hostel_block} • {user.wing} • Room {user.room}</p>
+                  <p className="ptm-page-sub">{safeUser.hostel_block} • {safeUser.wing} • Room {safeUser.room}</p>
                 </div>
                 <div className="ptm-card">
                   <form onSubmit={handleCreateComplaint} className="ptm-form-stack">
@@ -322,7 +399,7 @@ export default function StudentPortal({ user, apiUrl }) {
                       <textarea rows="3" className="ptm-input" placeholder="Describe the issue and preferred time..." value={description} onChange={(e) => setDescription(e.target.value)} required />
                     </div>
                     <button type="submit" className="ptm-btn-primary" disabled={submitting}>
-                      {submitting ? 'Submitting Grievance (Please Wait)...' : 'Submit Grievance'}
+                      {submitting ? 'Submitting Grievance...' : 'Submit Grievance'}
                     </button>
                   </form>
                 </div>
@@ -571,7 +648,7 @@ export default function StudentPortal({ user, apiUrl }) {
 
                   {selectedEvent.status !== 'Completed' ? (
                     <button className="ptm-btn-primary" style={{ marginTop: '14px' }} onClick={() => handleRsvp(selectedEvent.event_id)}>
-                      {selectedEvent.rsvps?.includes(user.user_id) ? '✅ You Are Attending (Tap to Cancel)' : '🎟️ Yes, I Am Attending (RSVP)'}
+                      {selectedEvent.rsvps?.includes(safeUser.user_id) ? '✅ You Are Attending (Tap to Cancel)' : '🎟️ Yes, I Am Attending (RSVP)'}
                     </button>
                   ) : (
                     <form onSubmit={(e) => handleFeedback(e, selectedEvent.event_id)} className="ptm-form-stack" style={{ marginTop: '16px' }}>
@@ -699,10 +776,10 @@ export default function StudentPortal({ user, apiUrl }) {
                 </div>
                 <div className="ptm-card">
                   <div className="ptm-list">
-                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Full Name & Roll No</div><div className="ptm-list-sub">{user.full_name} ({user.user_id})</div></div></div>
-                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Resident Status</div><div className="ptm-list-sub">{isDayScholar ? 'Day Scholar (Non-Hosteller)' : `${user.hostel_block}, ${user.wing}, Room ${user.room}`}</div></div></div>
-                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Department & Year</div><div className="ptm-list-sub">{user.department} • {user.year || 'Resident'}</div></div></div>
-                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Mobile</div><div className="ptm-list-sub">{user.phone || 'Not provided'}</div></div></div>
+                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Full Name & Roll No</div><div className="ptm-list-sub">{safeUser.full_name} ({safeUser.user_id})</div></div></div>
+                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Resident Status</div><div className="ptm-list-sub">{isDayScholar ? 'Day Scholar (Non-Hosteller)' : `${safeUser.hostel_block}, ${safeUser.wing}, Room ${safeUser.room}`}</div></div></div>
+                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Department & Year</div><div className="ptm-list-sub">{safeUser.department} • {safeUser.year || 'Resident'}</div></div></div>
+                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Mobile</div><div className="ptm-list-sub">{safeUser.phone || 'Not provided'}</div></div></div>
                   </div>
                 </div>
               </div>

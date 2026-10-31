@@ -1,243 +1,255 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../api';
+import { getCached, setCached } from '../cache';
 
 export default function ClubPortal({ user, apiUrl }) {
-  const [page, setPage] = useState('home');
-  const [dataLoading, setDataLoading] = useState(true);
-  const [clubs, setClubs] = useState([]);
-  const [events, setEvents] = useState([]);
-  const [notices, setNotices] = useState([]);
-  const [msg, setMsg] = useState(null);
-  const [selectedEvent, setSelectedEvent] = useState(null);
+  const safeUser = user || {};
+  const cid = safeUser.user_id || safeUser.club_id || 'ACM';
+  const cKey = `club_data_${cid}`;
 
+  const [page, setPage] = useState('home');
+  const [dataLoading, setDataLoading] = useState(false);
+  const [clubInfo, setClubInfo] = useState(() => getCached(cKey) || {});
+  const [events, setEvents] = useState(() => getCached('club_events') || []);
+  const [notices, setNotices] = useState(() => getCached('club_notices') || []);
+  const [msg, setMsg] = useState(null);
+
+  const [mission, setMission] = useState('');
+  const [deanInfo, setDeanInfo] = useState('');
   const [facultyAdvisor, setFacultyAdvisor] = useState('');
   const [headCoordinator, setHeadCoordinator] = useState('');
-  const [missionInput, setMissionInput] = useState('');
-  const [extraInfoInput, setExtraInfoInput] = useState('');
 
-  const [memberForm, setMemberForm] = useState({ name: '', roll: '', position: '', phone: '' });
+  const [mName, setMName] = useState('');
+  const [mRoll, setMRoll] = useState('');
+  const [mPos, setMPos] = useState('');
+  const [mPhone, setMPhone] = useState('');
+  const [mYear, setMYear] = useState('');
+  const [mDept, setMDept] = useState('');
 
-  const [eventForm, setEventForm] = useState({
-    title: '',
-    date: '2026-10-29',
-    start_time: '10:00',
-    end_time: '13:00',
-    venue: '',
-    description: '',
-    budget: '',
-    funding_source: '',
-    chief_guest: '',
-    expected_attendance: '',
-    logistics_needs: '',
-    image_url: '',
-    registration_link: ''
-  });
-  const [eventCustomFields, setEventCustomFields] = useState([]);
+  const [gType, setGType] = useState('Drive Folder');
+  const [gUrl, setGUrl] = useState('');
+  const [gCap, setGCap] = useState('');
 
-  const [noticeForm, setNoticeForm] = useState({
-    title: '',
-    message: '',
-    target_branch: 'All Branches',
-    target_year: 'All Years',
-    image_url: '',
-    registration_link: ''
-  });
-  const [noticeCustomFields, setNoticeCustomFields] = useState([]);
+  const [evTitle, setEvTitle] = useState('');
+  const [evDate, setEvDate] = useState('2026-10-28');
+  const [evStart, setEvStart] = useState('17:00');
+  const [evEnd, setEvEnd] = useState('20:00');
+  const [evVenue, setEvVenue] = useState('Old CRC, SVNIT');
+  const [evDesc, setEvDesc] = useState('');
+  const [evBudget, setEvBudget] = useState('₹10,000');
+  const [evSource, setEvSource] = useState('SAC Grant / Self');
+  const [evGuest, setEvGuest] = useState('');
+  const [evAttend, setEvAttend] = useState('150+');
+  const [evLogistics, setEvLogistics] = useState('Projector, Mic, Sound Setup');
+  const [evImg, setEvImg] = useState('');
+  const [evReg, setEvReg] = useState('');
 
-  const [galleryCaption, setGalleryCaption] = useState('');
-  const [galleryUrl, setGalleryUrl] = useState('');
+  const [notTitle, setNotTitle] = useState('');
+  const [notMsg, setNotMsg] = useState('');
+  const [notBranch, setNotBranch] = useState('All Branches');
+  const [notYear, setNotYear] = useState('All Years');
+  const [notImg, setNotImg] = useState('');
+  const [notReg, setNotReg] = useState('');
 
   const loadClubData = useCallback(async () => {
+    const hasCache = Boolean(getCached(cKey) || getCached('club_events'));
+    if (!hasCache) setDataLoading(true);
+
     try {
-      const [cRes, eRes, nRes] = await Promise.all([
-        apiFetch(`${apiUrl}/api/unicore/clubs`),
-        apiFetch(`${apiUrl}/api/unicore/events`),
-        apiFetch(`${apiUrl}/api/notices`)
-      ]);
-      if (cRes.ok) {
-        const cData = await cRes.json();
-        setClubs(cData);
-        const myC = cData.find((c) => c.club_id.toUpperCase() === user.user_id.toUpperCase());
-        if (myC) {
-          setFacultyAdvisor(myC.faculty_advisor || '');
-          setHeadCoordinator(myC.head_coordinator || '');
-          setMissionInput(myC.mission || '');
-          setExtraInfoInput(myC.extra_dean_info || '');
-        }
+      const res = await apiFetch(`${apiUrl}/api/portal/bootstrap?role=ClubOrganizer&user_id=${encodeURIComponent(cid)}&hostel_block=All`);
+      if (res.ok) {
+        const d = await res.json();
+        const foundClub = (d.clubs || []).find((c) => c.club_id.toUpperCase() === cid.toUpperCase()) || {};
+        setClubInfo(foundClub);
+        setCached(cKey, foundClub);
+        setMission(foundClub.mission || '');
+        setDeanInfo(foundClub.extra_dean_info || '');
+        setFacultyAdvisor(foundClub.faculty_advisor || '');
+        setHeadCoordinator(foundClub.head_coordinator || '');
+
+        const evs = (d.events || []).filter((e) => e.club_id.toUpperCase() === cid.toUpperCase());
+        setEvents(evs);
+        setCached('club_events', evs);
+
+        const nts = (d.notices || []).filter((n) => n.club_id.toUpperCase() === cid.toUpperCase());
+        setNotices(nts);
+        setCached('club_notices', nts);
       }
-      if (eRes.ok) setEvents(await eRes.json());
-      if (nRes.ok) setNotices(await nRes.json());
     } catch (e) {
-      console.error(e);
+      console.error('Club bootstrap sync error:', e);
     } finally {
       setDataLoading(false);
     }
-  }, [apiUrl, user.user_id]);
+  }, [apiUrl, cid, cKey]);
 
-  useEffect(() => { loadClubData(); }, [loadClubData]);
+  useEffect(() => {
+    loadClubData();
+  }, [loadClubData]);
 
-  const handleSaveInfo = async (e) => {
+  const handleUpdateInfo = async (e) => {
     e.preventDefault();
-    const res = await apiFetch(`${apiUrl}/api/unicore/clubs/update-info`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        club_id: user.user_id,
-        faculty_advisor: facultyAdvisor,
-        head_coordinator: headCoordinator,
-        mission: missionInput,
-        extra_dean_info: extraInfoInput
-      })
-    });
-    if (res.ok) {
-      setMsg('✅ Club profile saved!');
+    const updated = { ...clubInfo, mission, extra_dean_info: deanInfo, faculty_advisor: facultyAdvisor, head_coordinator: headCoordinator };
+    setClubInfo(updated);
+    setCached(cKey, updated);
+    setMsg('✅ Club profile updated!');
+
+    try {
+      await apiFetch(`${apiUrl}/api/unicore/clubs/update-info`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ club_id: cid, mission, extra_dean_info: deanInfo, faculty_advisor: facultyAdvisor, head_coordinator: headCoordinator })
+      });
       loadClubData();
+    } catch (err) {
+      setMsg('❌ Error syncing profile.');
     }
   };
 
   const handleAddMember = async (e) => {
     e.preventDefault();
-    const res = await apiFetch(`${apiUrl}/api/unicore/clubs/add-member`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ club_id: user.user_id, ...memberForm })
-    });
-    if (res.ok) {
-      setMsg(`✅ Added ${memberForm.name} as ${memberForm.position}!`);
-      setMemberForm({ name: '', roll: '', position: memberForm.position, phone: '' });
-      loadClubData();
-    }
-  };
+    const newMember = { name: mName, roll: mRoll.toUpperCase(), position: mPos, phone: mPhone, year: mYear, department: mDept };
+    const updatedMembers = [...(clubInfo.members || []), newMember];
+    const updatedClub = { ...clubInfo, members: updatedMembers };
+    setClubInfo(updatedClub);
+    setCached(cKey, updatedClub);
+    setMsg(`✅ Added ${mName} to committee!`);
+    setMName(''); setMRoll(''); setMPos(''); setMPhone(''); setMYear(''); setMDept('');
 
-  const handleRemoveMember = async (index) => {
-    const res = await apiFetch(`${apiUrl}/api/unicore/clubs/remove-member`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ club_id: user.user_id, index })
-    });
-    if (res.ok) loadClubData();
-  };
-
-  const handleProposeEvent = async (e) => {
-    e.preventDefault();
-    const res = await apiFetch(`${apiUrl}/api/unicore/events/propose`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...eventForm,
-        club_id: user.user_id,
-        submitted_by: headCoordinator || user.full_name,
-        custom_fields: eventCustomFields.filter((f) => f.label.trim() !== '')
-      })
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setMsg(`✅ ${data.message}`);
-      setEventForm({
-        title: '',
-        date: '2026-10-29',
-        start_time: '10:00',
-        end_time: '13:00',
-        venue: '',
-        description: '',
-        budget: '',
-        funding_source: '',
-        chief_guest: '',
-        expected_attendance: '',
-        logistics_needs: '',
-        image_url: '',
-        registration_link: ''
+    try {
+      await apiFetch(`${apiUrl}/api/unicore/clubs/add-member`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ club_id: cid, ...newMember })
       });
-      setEventCustomFields([]);
       loadClubData();
-      setPage('my_events');
+    } catch (err) {
+      setMsg('❌ Error adding member.');
     }
   };
 
-  const handleDeleteEvent = async (eventId, eventTitle, e) => {
-    if (e) e.stopPropagation();
-    if (!window.confirm(`Permanently delete event "${eventTitle}" from everywhere?`)) return;
-    const res = await apiFetch(`${apiUrl}/api/unicore/events/delete?event_id=${encodeURIComponent(eventId)}`, {
-      method: 'POST'
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setMsg(`🗑️ ${data.message}`);
-      setSelectedEvent(null);
-      loadClubData();
-      if (page === 'event_detail') setPage('my_events');
-    } else {
-      setMsg(`❌ ${data.detail || 'Could not delete event.'}`);
-    }
-  };
+  const handleRemoveMember = async (idx) => {
+    if (!window.confirm('Remove this committee member?')) return;
+    const updatedMembers = (clubInfo.members || []).filter((_, i) => i !== idx);
+    const updatedClub = { ...clubInfo, members: updatedMembers };
+    setClubInfo(updatedClub);
+    setCached(cKey, updatedClub);
+    setMsg('🗑️ Member removed.');
 
-  const handleProposeNotice = async (e) => {
-    e.preventDefault();
-    const res = await apiFetch(`${apiUrl}/api/notices/propose`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...noticeForm,
-        club_id: user.user_id,
-        custom_fields: noticeCustomFields.filter((f) => f.label.trim() !== '')
-      })
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setMsg(`📢 ${data.message}`);
-      setNoticeForm({ title: '', message: '', target_branch: 'All Branches', target_year: 'All Years', image_url: '', registration_link: '' });
-      setNoticeCustomFields([]);
+    try {
+      await apiFetch(`${apiUrl}/api/unicore/clubs/remove-member`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ club_id: cid, index: idx })
+      });
       loadClubData();
-      setPage('my_notices');
-    }
-  };
-
-  const handleDeleteNotice = async (noticeId, noticeTitle, e) => {
-    if (e) e.stopPropagation();
-    if (!window.confirm(`Permanently delete notice "${noticeTitle}" from everywhere?`)) return;
-    const res = await apiFetch(`${apiUrl}/api/notices/delete?notice_id=${encodeURIComponent(noticeId)}`, {
-      method: 'POST'
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setMsg(`🗑️ ${data.message}`);
-      loadClubData();
-    } else {
-      setMsg(`❌ ${data.detail || 'Could not delete notice.'}`);
+    } catch (err) {
+      console.error(err);
     }
   };
 
   const handleAddGallery = async (e) => {
     e.preventDefault();
-    if (!galleryUrl) return;
-    const res = await apiFetch(`${apiUrl}/api/unicore/clubs/add-gallery`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ club_id: user.user_id, media_type: 'link', media_url: galleryUrl, caption: galleryCaption })
-    });
-    if (res.ok) {
-      setMsg('📸 Photo / Drive Link added to gallery!');
-      setGalleryCaption('');
-      setGalleryUrl('');
+    const newMedia = { media_type: gType, media_url: gUrl, caption: gCap, timestamp: new Date().toISOString().split('T')[0] };
+    const updatedGallery = [newMedia, ...(clubInfo.gallery || [])];
+    const updatedClub = { ...clubInfo, gallery: updatedGallery };
+    setClubInfo(updatedClub);
+    setCached(cKey, updatedClub);
+    setMsg('✅ Media link added to gallery!');
+    setGUrl(''); setGCap('');
+
+    try {
+      await apiFetch(`${apiUrl}/api/unicore/clubs/add-gallery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ club_id: cid, media_type: gType, media_url: gUrl, caption: gCap })
+      });
       loadClubData();
+    } catch (err) {
+      console.error(err);
     }
   };
 
-  const myClub = clubs.find((c) => c.club_id.toUpperCase() === user.user_id.toUpperCase()) || {};
-  const myEvents = events.filter((e) => (e.club_id || '').toUpperCase() === (user.user_id || '').toUpperCase());
-  const myNotices = notices.filter((n) => (n.club_id || '').toUpperCase() === (user.user_id || '').toUpperCase());
+  const handleProposeEvent = async (e) => {
+    e.preventDefault();
+    setMsg('⚡ Event requisition submitted to Dean SW!');
+    const payload = {
+      club_id: cid, title: evTitle, date: evDate, start_time: evStart, end_time: evEnd, venue: evVenue,
+      submitted_by: safeUser.full_name || cid, description: evDesc, budget: evBudget, funding_source: evSource,
+      chief_guest: evGuest || 'None', expected_attendance: evAttend, logistics_needs: evLogistics, image_url: evImg, registration_link: evReg
+    };
+    setEvTitle(''); setEvDesc(''); setEvGuest(''); setEvImg(''); setEvReg('');
+    setPage('events');
+
+    try {
+      await apiFetch(`${apiUrl}/api/unicore/events/propose`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      loadClubData();
+    } catch (err) {
+      setMsg('❌ Error proposing event.');
+    }
+  };
+
+  const handleDeleteEvent = async (eventId) => {
+    if (!window.confirm('Delete this event?')) return;
+    const updated = events.filter((ev) => ev.event_id !== eventId);
+    setEvents(updated);
+    setCached('club_events', updated);
+    setMsg('🗑️ Event deleted!');
+
+    try {
+      await apiFetch(`${apiUrl}/api/unicore/events/delete?event_id=${encodeURIComponent(eventId)}`, { method: 'POST' });
+      loadClubData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleProposeNotice = async (e) => {
+    e.preventDefault();
+    setMsg('📢 Notice submitted to Dean SW!');
+    const payload = { club_id: cid, title: notTitle, message: notMsg, target_branch: notBranch, target_year: notYear, image_url: notImg, registration_link: notReg };
+    setNotTitle(''); setNotMsg(''); setNotImg(''); setNotReg('');
+    setPage('notices');
+
+    try {
+      await apiFetch(`${apiUrl}/api/notices/propose`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      loadClubData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteNotice = async (noticeId) => {
+    if (!window.confirm('Delete this notice?')) return;
+    const updated = notices.filter((n) => n.notice_id !== noticeId);
+    setNotices(updated);
+    setCached('club_notices', updated);
+    setMsg('🗑️ Notice deleted!');
+
+    try {
+      await apiFetch(`${apiUrl}/api/notices/delete?notice_id=${encodeURIComponent(noticeId)}`, { method: 'POST' });
+      loadClubData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   return (
     <div className="ptm-shell-layout">
       <aside className="ptm-sidebar-desktop">
-        <button className={`ptm-side-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}>🏠 Club Hub</button>
-        <button className={`ptm-side-btn ${page === 'info' ? 'active' : ''}`} onClick={() => setPage('info')}>ℹ️ Club Info & Advisor</button>
-        <button className={`ptm-side-btn ${page === 'members' ? 'active' : ''}`} onClick={() => setPage('members')}>👥 Custom Positions ({myClub.members?.length || 0})</button>
-        <button className={`ptm-side-btn ${page === 'propose_event' ? 'active' : ''}`} onClick={() => setPage('propose_event')}>🚀 Request Event to Dean</button>
-        <button className={`ptm-side-btn ${page === 'my_events' ? 'active' : ''}`} onClick={() => setPage('my_events')}>🎪 My Events ({myEvents.length})</button>
-        <button className={`ptm-side-btn ${page === 'propose_notice' ? 'active' : ''}`} onClick={() => setPage('propose_notice')}>📢 Post Student Notice</button>
-        <button className={`ptm-side-btn ${page === 'my_notices' ? 'active' : ''}`} onClick={() => setPage('my_notices')}>🗂️ My Notices ({myNotices.length})</button>
-        <button className={`ptm-side-btn ${page === 'gallery' ? 'active' : ''}`} onClick={() => setPage('gallery')}>📸 Media Links</button>
+        <button className={`ptm-side-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}>🏠 Club Home</button>
+        <button className={`ptm-side-btn ${page === 'profile' ? 'active' : ''}`} onClick={() => setPage('profile')}>✏️ Club Profile & Info</button>
+        <button className={`ptm-side-btn ${page === 'members' ? 'active' : ''}`} onClick={() => setPage('members')}>👥 Committee ({clubInfo.members?.length || 0})</button>
+        <button className={`ptm-side-btn ${page === 'gallery' ? 'active' : ''}`} onClick={() => setPage('gallery')}>📸 Media & Drive Links</button>
+        <button className={`ptm-side-btn ${page === 'events' ? 'active' : ''}`} onClick={() => setPage('events')}>🎪 Events ({events.length})</button>
+        <button className={`ptm-side-btn ${page === 'notices' ? 'active' : ''}`} onClick={() => setPage('notices')}>📢 Notice Board ({notices.length})</button>
       </aside>
 
       <div className="ptm-page-wrap">
@@ -246,137 +258,67 @@ export default function ClubPortal({ user, apiUrl }) {
         {dataLoading ? (
           <div className="ptm-wheel-box">
             <div className="ptm-spinner-wheel" />
-            <div style={{ fontWeight: 700, color: '#002970', fontSize: '14px', marginTop: '12px' }}>
-              Loading {user.user_id} Club Portal...
-            </div>
-            <div style={{ fontSize: '12px', color: '#6B7280', marginTop: '4px' }}>
-              Fetching club profile, committee roster, events, and notices...
-            </div>
+            <div style={{ fontWeight: 700, color: '#002970', fontSize: '14px', marginTop: '12px' }}>Loading {cid} Portal...</div>
           </div>
         ) : (
           <>
             {page === 'home' && (
               <div>
-                <div className="ptm-card">
-                  <span className="ptm-tag-pill">OFFICIAL CLUB PORTAL • {user.user_id}</span>
-                  <h2 style={{ margin: '8px 0 4px 0' }}>{myClub.name || user.full_name}</h2>
-                  <p className="ptm-list-sub">{myClub.mission}</p>
+                <div className="ptm-mini-grid">
+                  <div className="ptm-mini-card" onClick={() => setPage('events')}>
+                    <div className="ptm-row-between"><span style={{ fontWeight: 700, color: '#6B7280', fontSize: '12px' }}>Events Proposed</span><span>🎪</span></div>
+                    <div style={{ fontSize: '24px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>{events.length}</div>
+                    <button className="ptm-mini-btn">Manage Events →</button>
+                  </div>
+                  <div className="ptm-mini-card" onClick={() => setPage('members')}>
+                    <div className="ptm-row-between"><span style={{ fontWeight: 700, color: '#6B7280', fontSize: '12px' }}>Committee</span><span>👥</span></div>
+                    <div style={{ fontSize: '24px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>{clubInfo.members?.length || 0} Members</div>
+                    <button className="ptm-mini-btn">View Roster →</button>
+                  </div>
+                  <div className="ptm-mini-card" onClick={() => setPage('notices')}>
+                    <div className="ptm-row-between"><span style={{ fontWeight: 700, color: '#6B7280', fontSize: '12px' }}>Notices Sent</span><span>📢</span></div>
+                    <div style={{ fontSize: '24px', fontWeight: 800, color: '#0284C7', marginTop: '4px' }}>{notices.length}</div>
+                    <button className="ptm-mini-btn">View Notices →</button>
+                  </div>
                 </div>
 
                 <div className="ptm-card">
-                  <div className="ptm-section-title">Manage {user.user_id} Club</div>
+                  <div className="ptm-section-title">{clubInfo.name || cid} — Quick Actions</div>
                   <div className="ptm-icon-grid">
-                    <button className="ptm-icon-tile" onClick={() => setPage('info')}>
-                      <div className="ptm-icon-circle">ℹ️</div>
-                      <span className="ptm-icon-label">Club Info & Advisor</span>
-                    </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('members')}>
-                      <div className="ptm-icon-circle">👥</div>
-                      <span className="ptm-icon-label">Positions & Members</span>
-                    </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('propose_event')}>
-                      <div className="ptm-icon-circle">🚀</div>
-                      <span className="ptm-icon-label">Request Event to Dean</span>
-                    </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('propose_notice')}>
-                      <div className="ptm-icon-circle">📢</div>
-                      <span className="ptm-icon-label">Send Notice to Students</span>
-                    </button>
+                    <button className="ptm-icon-tile" onClick={() => setPage('new_event')}><div className="ptm-icon-circle">⚡</div><span className="ptm-icon-label">Propose Event</span></button>
+                    <button className="ptm-icon-tile" onClick={() => setPage('new_notice')}><div className="ptm-icon-circle">📢</div><span className="ptm-icon-label">Publish Notice</span></button>
+                    <button className="ptm-icon-tile" onClick={() => setPage('members')}><div className="ptm-icon-circle">👥</div><span className="ptm-icon-label">Add Member</span></button>
+                    <button className="ptm-icon-tile" onClick={() => setPage('gallery')}><div className="ptm-icon-circle">📸</div><span className="ptm-icon-label">Add Drive Link</span></button>
                   </div>
-                </div>
-
-                <div className="ptm-card">
-                  <div className="ptm-row-between" style={{ marginBottom: '10px', flexWrap: 'wrap' }}>
-                    <div className="ptm-section-title" style={{ margin: 0 }}>My Club Events ({myEvents.length})</div>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <button className="ptm-btn-secondary" onClick={() => setPage('my_notices')}>🗂️ Notices ({myNotices.length})</button>
-                      <button className="ptm-btn-secondary" onClick={() => setPage('gallery')}>📸 Add Drive Photos</button>
-                    </div>
-                  </div>
-                  {myEvents.length === 0 ? (
-                    <div className="ptm-list-sub">No events proposed yet.</div>
-                  ) : (
-                    <div className="ptm-list">
-                      {myEvents.map((ev) => (
-                        <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
-                          <div className="ptm-avatar-pastel">🎪</div>
-                          <div className="ptm-list-main">
-                            <div className="ptm-list-title">{ev.title}</div>
-                            <div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date} • 👥 {ev.rsvps?.length || 0} RSVPs</div>
-                            <span className="ptm-tag-pill">{ev.status}</span>
-                          </div>
-                          <button
-                            type="button"
-                            className="ptm-btn-danger"
-                            style={{ width: 'auto', padding: '6px 12px', fontSize: '12px' }}
-                            onClick={(e) => handleDeleteEvent(ev.event_id, ev.title, e)}
-                          >
-                            🗑️ Delete
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="ptm-card">
-                  <div className="ptm-row-between" style={{ marginBottom: '10px' }}>
-                    <div className="ptm-section-title" style={{ margin: 0 }}>My Club Notices ({myNotices.length})</div>
-                    <button className="ptm-btn-secondary" onClick={() => setPage('propose_notice')}>+ Post Notice</button>
-                  </div>
-                  {myNotices.length === 0 ? (
-                    <div className="ptm-list-sub">No notices posted by your club yet.</div>
-                  ) : (
-                    <div className="ptm-list">
-                      {myNotices.map((n) => (
-                        <div key={n.notice_id} className="ptm-list-row" style={{ cursor: 'default' }}>
-                          <div className="ptm-avatar-pastel">📢</div>
-                          <div className="ptm-list-main">
-                            <div className="ptm-list-title">{n.title}</div>
-                            <div className="ptm-list-sub">{n.message}</div>
-                            <span className="ptm-tag-pill">{n.status} • {n.target_year} ({n.target_branch})</span>
-                          </div>
-                          <button
-                            type="button"
-                            className="ptm-btn-danger"
-                            style={{ width: 'auto', padding: '6px 12px', fontSize: '12px' }}
-                            onClick={(e) => handleDeleteNotice(n.notice_id, n.title, e)}
-                          >
-                            🗑️ Delete
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
               </div>
             )}
 
-            {page === 'info' && (
+            {page === 'profile' && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">Club Info & Faculty Advisor</h1>
+                  <h1 className="ptm-page-title">Edit Club Profile & Dean Info</h1>
                 </div>
                 <div className="ptm-card">
-                  <form onSubmit={handleSaveInfo} className="ptm-form-stack">
+                  <form onSubmit={handleUpdateInfo} className="ptm-form-stack">
                     <div>
-                      <label className="ptm-label">Faculty Advisor Name & Department</label>
-                      <input type="text" className="ptm-input" placeholder="e.g. Dr. R. K. Gupta (Comp. Engg.)" value={facultyAdvisor} onChange={(e) => setFacultyAdvisor(e.target.value)} required />
+                      <label className="ptm-label">Faculty Advisor</label>
+                      <input type="text" className="ptm-input" value={facultyAdvisor} onChange={(e) => setFacultyAdvisor(e.target.value)} />
                     </div>
                     <div>
-                      <label className="ptm-label">Head Student Coordinator / Convener</label>
-                      <input type="text" className="ptm-input" placeholder="Full Name" value={headCoordinator} onChange={(e) => setHeadCoordinator(e.target.value)} required />
+                      <label className="ptm-label">Head Student Coordinator</label>
+                      <input type="text" className="ptm-input" value={headCoordinator} onChange={(e) => setHeadCoordinator(e.target.value)} />
                     </div>
                     <div>
-                      <label className="ptm-label">Club Bio & Mission</label>
-                      <textarea rows="3" className="ptm-input" value={missionInput} onChange={(e) => setMissionInput(e.target.value)} required />
+                      <label className="ptm-label">Club Mission & Description</label>
+                      <textarea rows="3" className="ptm-input" value={mission} onChange={(e) => setMission(e.target.value)} required />
                     </div>
                     <div>
-                      <label className="ptm-label">Additional Information for Dean</label>
-                      <textarea rows="2" className="ptm-input" value={extraInfoInput} onChange={(e) => setExtraInfoInput(e.target.value)} />
+                      <label className="ptm-label">Extra Notes for Dean SW Office</label>
+                      <textarea rows="3" className="ptm-input" placeholder="Achievements, upcoming fests, requirements..." value={deanInfo} onChange={(e) => setDeanInfo(e.target.value)} />
                     </div>
-                    <button type="submit" className="ptm-btn-primary">Save Club Profile</button>
+                    <button type="submit" className="ptm-btn-primary">💾 Save Profile</button>
                   </form>
                 </div>
               </div>
@@ -386,311 +328,37 @@ export default function ClubPortal({ user, apiUrl }) {
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">Custom Positions & Members</h1>
-                  <p className="ptm-page-sub">Type any custom position name and add one or multiple students to that position.</p>
+                  <h1 className="ptm-page-title">Committee Members Roster</h1>
                 </div>
                 <div className="ptm-card">
-                  <form onSubmit={handleAddMember} className="ptm-form-stack">
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Custom Position / Role Title</label>
-                        <input type="text" className="ptm-input" placeholder="e.g. Convener, Tech Head, PR Team" value={memberForm.position} onChange={(e) => setMemberForm({ ...memberForm, position: e.target.value })} required />
-                      </div>
-                      <div>
-                        <label className="ptm-label">Student Full Name</label>
-                        <input type="text" className="ptm-input" placeholder="Full Name" value={memberForm.name} onChange={(e) => setMemberForm({ ...memberForm, name: e.target.value })} required />
-                      </div>
-                    </div>
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Roll Number</label>
-                        <input type="text" className="ptm-input" placeholder="e.g. U24CS011" value={memberForm.roll} onChange={(e) => setMemberForm({ ...memberForm, roll: e.target.value })} required />
-                      </div>
-                      <div>
-                        <label className="ptm-label">Phone Number</label>
-                        <input type="text" className="ptm-input" placeholder="+91 9876543210" value={memberForm.phone} onChange={(e) => setMemberForm({ ...memberForm, phone: e.target.value })} />
-                      </div>
-                    </div>
-                    <button type="submit" className="ptm-btn-primary">+ Add Member to Position</button>
+                  <form onSubmit={handleAddMember} className="ptm-form-stack" style={{ marginBottom: '20px' }}>
+                    <div className="ptm-section-title">+ Add Committee Member</div>
+                    <input type="text" className="ptm-input" placeholder="Full Name" value={mName} onChange={(e) => setMName(e.target.value)} required />
+                    <input type="text" className="ptm-input" placeholder="Roll No (e.g. U26CE011)" value={mRoll} onChange={(e) => setMRoll(e.target.value)} required />
+                    <input type="text" className="ptm-input" placeholder="Position (e.g. Secretary, Convener)" value={mPos} onChange={(e) => setMPos(e.target.value)} required />
+                    <input type="text" className="ptm-input" placeholder="Mobile Number" value={mPhone} onChange={(e) => setMPhone(e.target.value)} />
+                    <button type="submit" className="ptm-btn-primary">Add Member</button>
                   </form>
-                </div>
 
-                <div className="ptm-card">
-                  <div className="ptm-section-title">Current Club Roster ({myClub.members?.length || 0})</div>
-                  {(!myClub.members || myClub.members.length === 0) ? (
-                    <div className="ptm-list-sub">No members added yet.</div>
-                  ) : (
-                    <div className="ptm-list">
-                      {myClub.members.map((m, idx) => (
+                  <div className="ptm-section-title">Current Roster ({clubInfo.members?.length || 0})</div>
+                  <div className="ptm-list">
+                    {(!clubInfo.members || clubInfo.members.length === 0) ? (
+                      <div className="ptm-list-sub">No committee members added yet.</div>
+                    ) : (
+                      clubInfo.members.map((m, idx) => (
                         <div key={idx} className="ptm-list-row">
-                          <div className="ptm-avatar-pastel" style={{ background: '#E0F2FE', color: '#002970' }}>
-                            {(m.name || 'MB').slice(0, 2).toUpperCase()}
-                          </div>
+                          <div className="ptm-avatar-pastel">{(m.name || 'MB').slice(0, 2)}</div>
                           <div className="ptm-list-main">
                             <div className="ptm-list-title">{m.name} ({m.roll})</div>
-                            <div className="ptm-list-sub">Position: <strong>{m.position}</strong> {m.phone && `• 📞 ${m.phone}`}</div>
+                            <div className="ptm-list-sub">{m.position} • 📞 {m.phone || 'N/A'}</div>
                           </div>
-                          <button className="ptm-btn-secondary" onClick={() => handleRemoveMember(idx)}>Remove</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {page === 'propose_event' && (
-              <div>
-                <div className="ptm-drill-header">
-                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">Request Event Permission from Dean</h1>
-                  <p className="ptm-page-sub">Write important event details above and attach your Google Drive poster / registration links below.</p>
-                </div>
-
-                <div className="ptm-card">
-                  <form onSubmit={handleProposeEvent} className="ptm-form-stack">
-                    <div>
-                      <label className="ptm-label">Event Name / Title</label>
-                      <input type="text" className="ptm-input" placeholder="e.g. Algothon 2026" value={eventForm.title} onChange={(e) => setEventForm({ ...eventForm, title: e.target.value })} required />
-                    </div>
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Manual Venue (Type Any Campus Location)</label>
-                        <input type="text" className="ptm-input" placeholder="e.g. SAC Amphitheatre, Old CRC Lawn" value={eventForm.venue} onChange={(e) => setEventForm({ ...eventForm, venue: e.target.value })} required />
-                      </div>
-                      <div>
-                        <label className="ptm-label">Event Date</label>
-                        <input type="date" className="ptm-input" value={eventForm.date} onChange={(e) => setEventForm({ ...eventForm, date: e.target.value })} required />
-                      </div>
-                    </div>
-                    <div className="ptm-grid-2">
-                      <div><label className="ptm-label">Start Time</label><input type="time" className="ptm-input" value={eventForm.start_time} onChange={(e) => setEventForm({ ...eventForm, start_time: e.target.value })} required /></div>
-                      <div><label className="ptm-label">End Time</label><input type="time" className="ptm-input" value={eventForm.end_time} onChange={(e) => setEventForm({ ...eventForm, end_time: e.target.value })} required /></div>
-                    </div>
-
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Estimated Budget (₹)</label>
-                        <input type="text" className="ptm-input" placeholder="e.g. ₹45,000" value={eventForm.budget} onChange={(e) => setEventForm({ ...eventForm, budget: e.target.value })} />
-                      </div>
-                      <div>
-                        <label className="ptm-label">Funding Source / Sponsors</label>
-                        <input type="text" className="ptm-input" placeholder="e.g. Institute SAC Grant + Sponsors" value={eventForm.funding_source} onChange={(e) => setEventForm({ ...eventForm, funding_source: e.target.value })} />
-                      </div>
-                    </div>
-
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Chief Guest / External Speakers</label>
-                        <input type="text" className="ptm-input" placeholder="Names & Designations" value={eventForm.chief_guest} onChange={(e) => setEventForm({ ...eventForm, chief_guest: e.target.value })} />
-                      </div>
-                      <div>
-                        <label className="ptm-label">Expected Student Attendance</label>
-                        <input type="text" className="ptm-input" placeholder="e.g. 400+ Students" value={eventForm.expected_attendance} onChange={(e) => setEventForm({ ...eventForm, expected_attendance: e.target.value })} />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="ptm-label">Logistics, Sound, Security & Permission Details</label>
-                      <input type="text" className="ptm-input" placeholder="e.g. 4 Wireless Mics, Projector, Late Night Hostel Entry Permission" value={eventForm.logistics_needs} onChange={(e) => setEventForm({ ...eventForm, logistics_needs: e.target.value })} />
-                    </div>
-
-                    <div>
-                      <label className="ptm-label">Important Event Description (Shown Above Links)</label>
-                      <textarea rows="4" className="ptm-input" placeholder="Write all important event rules, schedule, and instructions..." value={eventForm.description} onChange={(e) => setEventForm({ ...eventForm, description: e.target.value })} required />
-                    </div>
-
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Poster / Google Drive / Brochure Link (Shown Below Description)</label>
-                        <input type="url" className="ptm-input" placeholder="https://drive.google.com/..." value={eventForm.image_url} onChange={(e) => setEventForm({ ...eventForm, image_url: e.target.value })} />
-                      </div>
-                      <div>
-                        <label className="ptm-label">Google Form / Registration Link (Optional)</label>
-                        <input type="url" className="ptm-input" placeholder="https://docs.google.com/forms/..." value={eventForm.registration_link} onChange={(e) => setEventForm({ ...eventForm, registration_link: e.target.value })} />
-                      </div>
-                    </div>
-
-                    <div style={{ background: '#F8FAFC', padding: '14px', borderRadius: '14px', border: '1px solid #E2E8F0' }}>
-                      <div className="ptm-row-between" style={{ marginBottom: '10px' }}>
-                        <span className="ptm-label" style={{ margin: 0 }}>📌 Additional Custom Fields for Dean</span>
-                        <button
-                          type="button"
-                          className="ptm-btn-secondary"
-                          onClick={() => setEventCustomFields([...eventCustomFields, { label: '', value: '' }])}
-                        >
-                          + Add Custom Field
-                        </button>
-                      </div>
-                      {eventCustomFields.map((cf, idx) => (
-                        <div key={idx} className="ptm-grid-2" style={{ marginBottom: '8px' }}>
-                          <input
-                            type="text"
-                            className="ptm-input"
-                            placeholder="Field Name (e.g. Guest Room)"
-                            value={cf.label}
-                            onChange={(e) => {
-                              const copy = [...eventCustomFields];
-                              copy[idx].label = e.target.value;
-                              setEventCustomFields(copy);
-                            }}
-                          />
-                          <input
-                            type="text"
-                            className="ptm-input"
-                            placeholder="Details"
-                            value={cf.value}
-                            onChange={(e) => {
-                              const copy = [...eventCustomFields];
-                              copy[idx].value = e.target.value;
-                              setEventCustomFields(copy);
-                            }}
-                          />
-                        </div>
-                      ))}
-                    </div>
-
-                    <button type="submit" className="ptm-btn-primary">Submit Complete Event Dossier to Dean</button>
-                  </form>
-                </div>
-              </div>
-            )}
-
-            {page === 'propose_notice' && (
-              <div>
-                <div className="ptm-drill-header">
-                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">Send Notice / Announcement</h1>
-                  <p className="ptm-page-sub">Write important notice details first, then attach the Google Drive poster/image link and form link below.</p>
-                </div>
-                <div className="ptm-card">
-                  <form onSubmit={handleProposeNotice} className="ptm-form-stack">
-                    <div>
-                      <label className="ptm-label">Notice Headline</label>
-                      <input type="text" className="ptm-input" placeholder="e.g. Recruitment & Auditions Open for 1st Year" value={noticeForm.title} onChange={(e) => setNoticeForm({ ...noticeForm, title: e.target.value })} required />
-                    </div>
-                    <div>
-                      <label className="ptm-label">Important Written Notice Details (Shown First)</label>
-                      <textarea rows="4" className="ptm-input" placeholder="Write venue, timings, eligibility, and key instructions..." value={noticeForm.message} onChange={(e) => setNoticeForm({ ...noticeForm, message: e.target.value })} required />
-                    </div>
-                    <div className="ptm-grid-2">
-                      <div><label className="ptm-label">Target Year</label><input type="text" className="ptm-input" value={noticeForm.target_year} onChange={(e) => setNoticeForm({ ...noticeForm, target_year: e.target.value })} required /></div>
-                      <div><label className="ptm-label">Target Department / Branch</label><input type="text" className="ptm-input" value={noticeForm.target_branch} onChange={(e) => setNoticeForm({ ...noticeForm, target_branch: e.target.value })} required /></div>
-                    </div>
-                    <div className="ptm-grid-2">
-                      <div>
-                        <label className="ptm-label">Poster / Google Drive Image Link (Shown Below Description)</label>
-                        <input type="url" className="ptm-input" placeholder="https://drive.google.com/..." value={noticeForm.image_url} onChange={(e) => setNoticeForm({ ...noticeForm, image_url: e.target.value })} />
-                      </div>
-                      <div>
-                        <label className="ptm-label">Google Form / Registration Link (Optional)</label>
-                        <input type="url" className="ptm-input" placeholder="https://docs.google.com/forms/..." value={noticeForm.registration_link} onChange={(e) => setNoticeForm({ ...noticeForm, registration_link: e.target.value })} />
-                      </div>
-                    </div>
-                    <button type="submit" className="ptm-btn-primary">Submit Notice for Dean Approval</button>
-                  </form>
-                </div>
-              </div>
-            )}
-
-            {page === 'my_events' && (
-              <div>
-                <div className="ptm-drill-header">
-                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <div className="ptm-row-between">
-                    <h1 className="ptm-page-title">My Club Events ({myEvents.length})</h1>
-                    <button className="ptm-btn-secondary" onClick={() => setPage('propose_event')}>+ New Event</button>
-                  </div>
-                </div>
-                <div className="ptm-card">
-                  {myEvents.length === 0 ? (
-                    <div className="ptm-list-sub">No events created yet.</div>
-                  ) : (
-                    <div className="ptm-list">
-                      {myEvents.map((ev) => (
-                        <div key={ev.event_id} className="ptm-list-row" onClick={() => { setSelectedEvent(ev); setPage('event_detail'); }}>
-                          <div className="ptm-avatar-pastel">🎪</div>
-                          <div className="ptm-list-main">
-                            <div className="ptm-list-title">{ev.title}</div>
-                            <div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date} • 👥 {ev.rsvps?.length || 0} RSVPs</div>
-                            <span className="ptm-tag-pill">{ev.status}</span>
-                          </div>
-                          <button
-                            type="button"
-                            className="ptm-btn-danger"
-                            style={{ width: 'auto', padding: '6px 12px', fontSize: '12px' }}
-                            onClick={(e) => handleDeleteEvent(ev.event_id, ev.title, e)}
-                          >
-                            🗑️ Delete
+                          <button type="button" className="ptm-btn-danger" style={{ width: 'auto', padding: '6px 12px', fontSize: '11px' }} onClick={() => handleRemoveMember(idx)}>
+                            🗑️ Remove
                           </button>
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {page === 'my_notices' && (
-              <div>
-                <div className="ptm-drill-header">
-                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <div className="ptm-row-between">
-                    <h1 className="ptm-page-title">My Club Notices ({myNotices.length})</h1>
-                    <button className="ptm-btn-secondary" onClick={() => setPage('propose_notice')}>+ New Notice</button>
+                      ))
+                    )}
                   </div>
-                  <p className="ptm-page-sub">Deleting a notice removes it permanently from Student and Dean portals.</p>
-                </div>
-                <div className="ptm-card">
-                  {myNotices.length === 0 ? (
-                    <div className="ptm-list-sub">No notices posted by your club yet.</div>
-                  ) : (
-                    <div className="ptm-list">
-                      {myNotices.map((n) => (
-                        <div key={n.notice_id} className="ptm-list-row" style={{ cursor: 'default' }}>
-                          <div className="ptm-avatar-pastel">📢</div>
-                          <div className="ptm-list-main">
-                            <div className="ptm-list-title">{n.title}</div>
-                            <div className="ptm-list-sub">{n.message}</div>
-                            <span className="ptm-tag-pill">{n.status} • {n.target_year} • {n.target_branch}</span>
-                          </div>
-                          <button
-                            type="button"
-                            className="ptm-btn-danger"
-                            style={{ width: 'auto', padding: '6px 12px', fontSize: '12px' }}
-                            onClick={(e) => handleDeleteNotice(n.notice_id, n.title, e)}
-                          >
-                            🗑️ Delete
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {page === 'event_detail' && selectedEvent && (
-              <div>
-                <div className="ptm-drill-header">
-                  <button className="ptm-back-btn" onClick={() => setPage('my_events')}>←</button>
-                  <h1 className="ptm-page-title">{selectedEvent.title}</h1>
-                </div>
-                <div className="ptm-card">
-                  <p style={{ whiteSpace: 'pre-line' }}>{selectedEvent.description}</p>
-                  <div className="ptm-list">
-                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Status</div><div className="ptm-list-sub">{selectedEvent.status}</div></div></div>
-                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Venue & Date</div><div className="ptm-list-sub">{selectedEvent.venue} • {selectedEvent.date} ({selectedEvent.start_time} - {selectedEvent.end_time})</div></div></div>
-                    <div className="ptm-list-row"><div className="ptm-list-main"><div className="ptm-list-title">Confirmed Student RSVPs</div><div className="ptm-list-sub">{selectedEvent.rsvps?.length || 0} Students Attending</div></div></div>
-                  </div>
-                  <button
-                    type="button"
-                    className="ptm-btn-danger"
-                    style={{ marginTop: '16px' }}
-                    onClick={(e) => handleDeleteEvent(selectedEvent.event_id, selectedEvent.title, e)}
-                  >
-                    🗑️ Permanently Delete Event from Everywhere
-                  </button>
                 </div>
               </div>
             )}
@@ -699,36 +367,158 @@ export default function ClubPortal({ user, apiUrl }) {
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">Club Photo & Drive Gallery</h1>
+                  <h1 className="ptm-page-title">Club Media & Drive Archives</h1>
                 </div>
                 <div className="ptm-card">
-                  <form onSubmit={handleAddGallery} className="ptm-form-stack">
-                    <div>
-                      <label className="ptm-label">Google Drive Photo / Album Link</label>
-                      <input type="url" className="ptm-input" placeholder="https://drive.google.com/..." value={galleryUrl} onChange={(e) => setGalleryUrl(e.target.value)} required />
+                  <form onSubmit={handleAddGallery} className="ptm-form-stack" style={{ marginBottom: '20px' }}>
+                    <div className="ptm-section-title">+ Add Google Drive / Media Link</div>
+                    <select className="ptm-input" value={gType} onChange={(e) => setGType(e.target.value)}>
+                      <option value="Drive Folder">Google Drive Folder</option>
+                      <option value="Event Photos">Event Photos Link</option>
+                      <option value="YouTube Video">YouTube Highlights Video</option>
+                    </select>
+                    <input type="url" className="ptm-input" placeholder="https://drive.google.com/..." value={gUrl} onChange={(e) => setGUrl(e.target.value)} required />
+                    <input type="text" className="ptm-input" placeholder="Caption (e.g. DotSlash 2026 Hackathon Gallery)" value={gCap} onChange={(e) => setGCap(e.target.value)} required />
+                    <button type="submit" className="ptm-btn-primary">Add Link</button>
+                  </form>
+
+                  <div className="ptm-section-title">Saved Media Links</div>
+                  <div className="ptm-list">
+                    {(!clubInfo.gallery || clubInfo.gallery.length === 0) ? (
+                      <div className="ptm-list-sub">No media links uploaded yet.</div>
+                    ) : (
+                      clubInfo.gallery.map((g, idx) => (
+                        <div key={idx} className="ptm-list-row">
+                          <div className="ptm-avatar-pastel">📸</div>
+                          <div className="ptm-list-main">
+                            <div className="ptm-list-title">{g.caption}</div>
+                            <div className="ptm-list-sub">{g.media_type} • {g.timestamp}</div>
+                          </div>
+                          <a href={g.media_url} target="_blank" rel="noreferrer" className="ptm-btn-secondary" style={{ textDecoration: 'none', width: 'auto', padding: '6px 12px' }}>
+                            Open ↗
+                          </a>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {page === 'events' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+                  <div className="ptm-row-between">
+                    <h1 className="ptm-page-title">Event Requisitions ({events.length})</h1>
+                    <button className="ptm-btn-secondary" onClick={() => setPage('new_event')}>+ Propose Event</button>
+                  </div>
+                </div>
+                <div className="ptm-card">
+                  {events.length === 0 ? (
+                    <div className="ptm-list-sub">No events proposed yet.</div>
+                  ) : (
+                    <div className="ptm-list">
+                      {events.map((ev) => (
+                        <div key={ev.event_id} className="ptm-list-row">
+                          <div className="ptm-avatar-pastel">🎪</div>
+                          <div className="ptm-list-main">
+                            <div className="ptm-list-title">{ev.title}</div>
+                            <div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date} ({ev.start_time} - {ev.end_time})</div>
+                            <span className="ptm-tag-pill">👥 {ev.rsvps?.length || 0} RSVPs • {ev.status}</span>
+                          </div>
+                          <button type="button" className="ptm-btn-danger" style={{ width: 'auto', padding: '6px 12px', fontSize: '11px' }} onClick={() => handleDeleteEvent(ev.event_id)}>
+                            🗑️ Delete
+                          </button>
+                        </div>
+                      ))}
                     </div>
-                    <div>
-                      <label className="ptm-label">Caption / Event Name</label>
-                      <input type="text" className="ptm-input" placeholder="e.g. Orientation Day 2026 Photos" value={galleryCaption} onChange={(e) => setGalleryCaption(e.target.value)} required />
+                  )}
+                </div>
+              </div>
+            )}
+
+            {page === 'new_event' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+                  <h1 className="ptm-page-title">Propose Event to Dean SW</h1>
+                </div>
+                <div className="ptm-card">
+                  <form onSubmit={handleProposeEvent} className="ptm-form-stack">
+                    <div><label className="ptm-label">Event Title</label><input type="text" className="ptm-input" placeholder="e.g. TRIVENTURE 2026" value={evTitle} onChange={(e) => setEvTitle(e.target.value)} required /></div>
+                    <div className="ptm-grid-2">
+                      <div><label className="ptm-label">Date</label><input type="date" className="ptm-input" value={evDate} onChange={(e) => setEvDate(e.target.value)} required /></div>
+                      <div><label className="ptm-label">Venue</label><input type="text" className="ptm-input" value={evVenue} onChange={(e) => setEvVenue(e.target.value)} required /></div>
                     </div>
-                    <button type="submit" className="ptm-btn-primary">Save Gallery Link</button>
+                    <div className="ptm-grid-2">
+                      <div><label className="ptm-label">Start Time</label><input type="text" className="ptm-input" value={evStart} onChange={(e) => setEvStart(e.target.value)} required /></div>
+                      <div><label className="ptm-label">End Time</label><input type="text" className="ptm-input" value={evEnd} onChange={(e) => setEvEnd(e.target.value)} required /></div>
+                    </div>
+                    <div><label className="ptm-label">Description & Agenda</label><textarea rows="3" className="ptm-input" placeholder="Event details..." value={evDesc} onChange={(e) => setEvDesc(e.target.value)} required /></div>
+                    <div className="ptm-grid-2">
+                      <div><label className="ptm-label">Estimated Budget</label><input type="text" className="ptm-input" value={evBudget} onChange={(e) => setEvBudget(e.target.value)} /></div>
+                      <div><label className="ptm-label">Expected Attendance</label><input type="text" className="ptm-input" value={evAttend} onChange={(e) => setEvAttend(e.target.value)} /></div>
+                    </div>
+                    <div><label className="ptm-label">Poster Image / Drive URL (Optional)</label><input type="url" className="ptm-input" placeholder="https://..." value={evImg} onChange={(e) => setEvImg(e.target.value)} /></div>
+                    <div><label className="ptm-label">Registration Form Link (Optional)</label><input type="url" className="ptm-input" placeholder="https://forms.gle/..." value={evReg} onChange={(e) => setEvReg(e.target.value)} /></div>
+                    <button type="submit" className="ptm-btn-primary">Submit Requisition to Dean SW</button>
                   </form>
                 </div>
-                <div className="ptm-card">
-                  <div className="ptm-list">
-                    {myClub.gallery?.map((g, i) => (
-                      <div key={i} className="ptm-list-row">
-                        <div className="ptm-avatar-pastel">📸</div>
-                        <div className="ptm-list-main">
-                          <div className="ptm-list-title">{g.caption}</div>
-                          <div className="ptm-list-sub">{g.timestamp}</div>
-                        </div>
-                        <a href={g.media_url} target="_blank" rel="noreferrer" className="ptm-btn-secondary" style={{ textDecoration: 'none' }}>
-                          Open ↗
-                        </a>
-                      </div>
-                    ))}
+              </div>
+            )}
+
+            {page === 'notices' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+                  <div className="ptm-row-between">
+                    <h1 className="ptm-page-title">Notice Board ({notices.length})</h1>
+                    <button className="ptm-btn-secondary" onClick={() => setPage('new_notice')}>+ Publish Notice</button>
                   </div>
+                </div>
+                <div className="ptm-card">
+                  {notices.length === 0 ? (
+                    <div className="ptm-list-sub">No notices published yet.</div>
+                  ) : (
+                    <div className="ptm-list">
+                      {notices.map((n) => (
+                        <div key={n.notice_id} className="ptm-list-row">
+                          <div className="ptm-avatar-pastel">📢</div>
+                          <div className="ptm-list-main">
+                            <div className="ptm-list-title">{n.title}</div>
+                            <div className="ptm-list-sub">{n.message}</div>
+                            <span className="ptm-tag-pill">{n.status} • {n.target_year} ({n.target_branch})</span>
+                          </div>
+                          <button type="button" className="ptm-btn-danger" style={{ width: 'auto', padding: '6px 12px', fontSize: '11px' }} onClick={() => handleDeleteNotice(n.notice_id)}>
+                            🗑️ Delete
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {page === 'new_notice' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+                  <h1 className="ptm-page-title">Publish Notice to Students</h1>
+                </div>
+                <div className="ptm-card">
+                  <form onSubmit={handleProposeNotice} className="ptm-form-stack">
+                    <div><label className="ptm-label">Notice Title</label><input type="text" className="ptm-input" placeholder="e.g. Hackathon Registrations Open" value={notTitle} onChange={(e) => setNotTitle(e.target.value)} required /></div>
+                    <div><label className="ptm-label">Notice Message</label><textarea rows="3" className="ptm-input" placeholder="Detailed announcement..." value={notMsg} onChange={(e) => setNotMsg(e.target.value)} required /></div>
+                    <div className="ptm-grid-2">
+                      <div><label className="ptm-label">Target Year</label><input type="text" className="ptm-input" value={notYear} onChange={(e) => setNotYear(e.target.value)} /></div>
+                      <div><label className="ptm-label">Target Branch</label><input type="text" className="ptm-input" value={notBranch} onChange={(e) => setNotBranch(e.target.value)} /></div>
+                    </div>
+                    <div><label className="ptm-label">Poster Image / Drive Link (Optional)</label><input type="url" className="ptm-input" placeholder="https://..." value={notImg} onChange={(e) => setNotImg(e.target.value)} /></div>
+                    <div><label className="ptm-label">Registration / Form Link (Optional)</label><input type="url" className="ptm-input" placeholder="https://..." value={notReg} onChange={(e) => setNotReg(e.target.value)} /></div>
+                    <button type="submit" className="ptm-btn-primary">Submit Notice for Approval</button>
+                  </form>
                 </div>
               </div>
             )}
@@ -738,9 +528,9 @@ export default function ClubPortal({ user, apiUrl }) {
 
       <nav className="ptm-bottom-nav">
         <button className={`ptm-bnav-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}><span>🏠</span><span>Home</span></button>
-        <button className={`ptm-bnav-btn ${page === 'my_events' ? 'active' : ''}`} onClick={() => setPage('my_events')}><span>🎪</span><span>Events</span></button>
-        <button className={`ptm-bnav-btn ${page === 'propose_event' ? 'active' : ''}`} onClick={() => setPage('propose_event')}><span>🚀</span><span>Propose</span></button>
-        <button className={`ptm-bnav-btn ${page === 'my_notices' ? 'active' : ''}`} onClick={() => setPage('my_notices')}><span>🗂️</span><span>Notices</span></button>
+        <button className={`ptm-bnav-btn ${page === 'events' ? 'active' : ''}`} onClick={() => setPage('events')}><span>🎪</span><span>Events</span></button>
+        <button className={`ptm-bnav-btn ${page === 'notices' ? 'active' : ''}`} onClick={() => setPage('notices')}><span>📢</span><span>Notices</span></button>
+        <button className={`ptm-bnav-btn ${page === 'profile' ? 'active' : ''}`} onClick={() => setPage('profile')}><span>✏️</span><span>Profile</span></button>
       </nav>
     </div>
   );
