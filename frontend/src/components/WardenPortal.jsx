@@ -27,6 +27,8 @@ export default function WardenPortal({ user, apiUrl }) {
   const [students, setStudents] = useState(() => getCached(sKey) || []);
   const [complaints, setComplaints] = useState(() => getCached(cKey) || []);
   const [departments, setDepartments] = useState(() => getCached(dKey) || []);
+  const [profileRequests, setProfileRequests] = useState([]);
+  const [reviewingRequestId, setReviewingRequestId] = useState(null);
   const [msg, setMsg] = useState(null);
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -57,10 +59,11 @@ export default function WardenPortal({ user, apiUrl }) {
     }
 
     try {
-      const [sRes, cRes, dRes] = await Promise.all([
+      const [sRes, cRes, dRes, profileRes] = await Promise.all([
         apiFetch(`${apiUrl}/api/warden/students?hostel_block=${encodeURIComponent(hostelBlock)}`),
         apiFetch(`${apiUrl}/api/complaints?role=Warden&hostel_block=${encodeURIComponent(hostelBlock)}`),
-        apiFetch(`${apiUrl}/api/departments?hostel_block=${encodeURIComponent(hostelBlock)}`)
+        apiFetch(`${apiUrl}/api/departments?hostel_block=${encodeURIComponent(hostelBlock)}`),
+        apiFetch(`${apiUrl}/api/warden/profile-requests`)
       ]);
 
       if (sRes.ok) {
@@ -77,6 +80,9 @@ export default function WardenPortal({ user, apiUrl }) {
         const d = await dRes.json();
         setDepartments(d);
         setCached(dKey, d);
+      }
+      if (profileRes.ok) {
+        setProfileRequests(await profileRes.json());
       }
     } catch (e) {
       console.error('Warden sync error:', e);
@@ -132,6 +138,36 @@ export default function WardenPortal({ user, apiUrl }) {
     } catch (err) {
       setMsg('❌ Error syncing student update.');
       loadWardenData();
+    }
+  };
+
+  const handleReviewProfileRequest = async (profileRequest, decision) => {
+    if (reviewingRequestId) return;
+    setReviewingRequestId(profileRequest.request_id);
+    try {
+      const res = await apiFetch(`${apiUrl}/api/warden/profile-requests/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request_id: profileRequest.request_id, decision })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.detail || 'Could not review this profile request.');
+
+      setProfileRequests((current) => current.filter((item) => item.request_id !== profileRequest.request_id));
+      if (decision === 'approved') {
+        const updatedStudents = students.map((student) => student.user_id.toUpperCase() === profileRequest.student_id.toUpperCase()
+          ? { ...student, ...profileRequest.requested_changes }
+          : student);
+        setStudents(updatedStudents);
+        setCached(sKey, updatedStudents);
+      }
+      setMsg(decision === 'approved'
+        ? `Approved profile changes for ${profileRequest.full_name}.`
+        : `Rejected profile changes for ${profileRequest.full_name}.`);
+    } catch (error) {
+      setMsg(error.message || 'Could not review this profile request.');
+    } finally {
+      setReviewingRequestId(null);
     }
   };
 
@@ -276,6 +312,7 @@ export default function WardenPortal({ user, apiUrl }) {
   };
 
   const pendingCount = complaints.filter((c) => c.status !== 'Completed').length;
+  const profileRequestCount = profileRequests.length;
 
   return (
     <div className="ptm-shell-layout">
@@ -283,6 +320,7 @@ export default function WardenPortal({ user, apiUrl }) {
         <button className={`ptm-side-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}>🏠 Warden Home</button>
         <button className={`ptm-side-btn ${page === 'add_student' ? 'active' : ''}`} onClick={() => setPage('add_student')}>➕ Add / Upload Students</button>
         <button className={`ptm-side-btn ${page === 'directory' || page === 'edit_student' ? 'active' : ''}`} onClick={() => setPage('directory')}>🎓 Student Directory ({students.length})</button>
+        <button className={`ptm-side-btn ${page === 'profile_requests' ? 'active' : ''}`} onClick={() => setPage('profile_requests')}>🪪 Profile Requests ({profileRequestCount})</button>
         <button className={`ptm-side-btn ${page === 'wings' ? 'active' : ''}`} onClick={() => setPage('wings')}>🛠️ Hostel Maintenance Wings</button>
         <button className={`ptm-side-btn ${page === 'complaints' || page === 'ticket_detail' ? 'active' : ''}`} onClick={() => setPage('complaints')}>💬 Hostel Complaints ({complaints.length})</button>
         <button className={`ptm-side-btn ${page === 'register' ? 'active' : ''}`} onClick={() => setPage('register')}>📋 Complaint Register</button>
@@ -329,6 +367,14 @@ export default function WardenPortal({ user, apiUrl }) {
                     <div style={{ fontSize: '20px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>Print Register</div>
                     <button className="ptm-mini-btn">Export Landscape PDF →</button>
                   </div>
+                  <div className="ptm-mini-card" onClick={() => setPage('profile_requests')}>
+                    <div className="ptm-row-between">
+                      <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>Profile Changes</span>
+                      <span>🪪</span>
+                    </div>
+                    <div style={{ fontSize: '22px', fontWeight: 800, color: profileRequestCount ? '#D97706' : '#002970', marginTop: '4px' }}>{profileRequestCount} Pending</div>
+                    <button className="ptm-mini-btn">Review student requests →</button>
+                  </div>
                 </div>
 
                 <div className="ptm-card">
@@ -350,7 +396,58 @@ export default function WardenPortal({ user, apiUrl }) {
                       <div className="ptm-icon-circle">🛠️</div>
                       <span className="ptm-icon-label">Maintenance Wings</span>
                     </button>
+                    <button className="ptm-icon-tile" onClick={() => setPage('profile_requests')}>
+                      <div className="ptm-icon-circle">
+                        🪪
+                        {profileRequestCount > 0 && <span className="ptm-tile-badge">{profileRequestCount}</span>}
+                      </div>
+                      <span className="ptm-icon-label">Profile Requests</span>
+                    </button>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {page === 'profile_requests' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+                  <h1 className="ptm-page-title">Student Profile Requests</h1>
+                  <p className="ptm-page-sub">{hostelBlock} · {profileRequestCount} awaiting review</p>
+                </div>
+                <div className="ptm-card">
+                  {profileRequestCount === 0 ? (
+                    <div className="ptm-list-sub">No profile change requests are waiting for review.</div>
+                  ) : (
+                    <div className="ptm-list">
+                      {profileRequests.map((item) => {
+                        const fieldLabels = { room: 'Room', wing: 'Wing', phone: 'Mobile' };
+                        const currentValues = { room: item.current_room, wing: item.current_wing, phone: item.current_phone };
+                        return (
+                          <article className="ptm-profile-request" key={item.request_id}>
+                            <div className="ptm-list-title">{item.full_name} ({item.student_id})</div>
+                            <div className="ptm-list-sub">{item.hostel_block} · Requested {new Date(item.created_at).toLocaleString()}</div>
+                            <div className="ptm-profile-request-changes">
+                              {Object.entries(item.requested_changes || {}).map(([field, value]) => (
+                                <div className="ptm-profile-request-change" key={field}>
+                                  <span>{fieldLabels[field] || field}</span>
+                                  <span>{currentValues[field] || 'Not set'} → <strong>{value}</strong></span>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="ptm-profile-request-actions">
+                              <button type="button" className="ptm-btn-primary" onClick={() => handleReviewProfileRequest(item, 'approved')} disabled={reviewingRequestId === item.request_id}>
+                                {reviewingRequestId === item.request_id ? 'Saving…' : 'Approve changes'}
+                              </button>
+                              <button type="button" className="ptm-btn-danger" onClick={() => handleReviewProfileRequest(item, 'rejected')} disabled={reviewingRequestId === item.request_id}>
+                                Reject
+                              </button>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
             )}

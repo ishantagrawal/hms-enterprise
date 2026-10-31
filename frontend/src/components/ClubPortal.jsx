@@ -29,6 +29,10 @@ export default function ClubPortal({ user, apiUrl }) {
   const [gType, setGType] = useState('Drive Folder');
   const [gUrl, setGUrl] = useState('');
   const [gCap, setGCap] = useState('');
+  const [selectedPhotoEvent, setSelectedPhotoEvent] = useState(null);
+  const [eventAlbumUrl, setEventAlbumUrl] = useState('');
+  const [eventAlbumCaption, setEventAlbumCaption] = useState('');
+  const [albumSubmitting, setAlbumSubmitting] = useState(false);
 
   const [evTitle, setEvTitle] = useState('');
   const [evDate, setEvDate] = useState('2026-10-28');
@@ -205,6 +209,53 @@ export default function ClubPortal({ user, apiUrl }) {
     } catch (err) {
       console.error(err);
     }
+  };
+
+  const handleOpenEventPhotos = (event) => {
+    setSelectedPhotoEvent(event);
+    setEventAlbumUrl('');
+    setEventAlbumCaption('');
+    setPage('event_photos');
+  };
+
+  const handleAddEventPhotoAlbum = async (e) => {
+    e.preventDefault();
+    if (!selectedPhotoEvent || albumSubmitting) return;
+    setAlbumSubmitting(true);
+    try {
+      const res = await apiFetch(`${apiUrl}/api/unicore/events/photo-albums`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event_id: selectedPhotoEvent.event_id,
+          album_url: eventAlbumUrl,
+          caption: eventAlbumCaption
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.detail || 'Could not publish this photo album.');
+      const updatedEvent = {
+        ...selectedPhotoEvent,
+        photo_albums: [data.album, ...(selectedPhotoEvent.photo_albums || [])]
+      };
+      setSelectedPhotoEvent(updatedEvent);
+      setEvents((current) => current.map((event) => event.event_id === updatedEvent.event_id ? updatedEvent : event));
+      setCached('club_events', events.map((event) => event.event_id === updatedEvent.event_id ? updatedEvent : event));
+      setEventAlbumUrl('');
+      setEventAlbumCaption('');
+      setMsg('Event photo album published for students.');
+    } catch (error) {
+      setMsg(error.message || 'Could not publish this photo album.');
+    } finally {
+      setAlbumSubmitting(false);
+    }
+  };
+
+  const summarizeFeedback = (event) => {
+    const feedbacks = event.feedbacks || [];
+    if (feedbacks.length === 0) return null;
+    const average = (feedbacks.reduce((total, item) => total + Number(item.rating || 0), 0) / feedbacks.length).toFixed(1);
+    return { feedbacks, average };
   };
 
   const handleProposeNotice = async (e) => {
@@ -419,17 +470,99 @@ export default function ClubPortal({ user, apiUrl }) {
                     <div className="ptm-list-sub">No events proposed yet.</div>
                   ) : (
                     <div className="ptm-list">
-                      {events.map((ev) => (
+                      {events.map((ev) => {
+                        const feedbackSummary = summarizeFeedback(ev);
+                        return (
                         <div key={ev.event_id} className="ptm-list-row">
                           <div className="ptm-avatar-pastel">🎪</div>
                           <div className="ptm-list-main">
                             <div className="ptm-list-title">{ev.title}</div>
                             <div className="ptm-list-sub">📍 {ev.venue} • 📅 {ev.date} ({ev.start_time} - {ev.end_time})</div>
                             <span className="ptm-tag-pill">👥 {ev.rsvps?.length || 0} RSVPs • {ev.status}</span>
+                            {feedbackSummary ? (
+                              <div className="ptm-event-feedback-summary">
+                                <strong>⭐ {feedbackSummary.average}/5</strong>
+                                <span>{feedbackSummary.feedbacks.length} anonymous reviews</span>
+                                {feedbackSummary.feedbacks.map((feedback, index) => (
+                                  <p key={`${ev.event_id}-review-${index}`}>“{feedback.review}”</p>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="ptm-list-sub">Feedback summary will appear after students submit reviews.</div>
+                            )}
                           </div>
-                          <button type="button" className="ptm-btn-danger" style={{ width: 'auto', padding: '6px 12px', fontSize: '11px' }} onClick={() => handleDeleteEvent(ev.event_id)}>
-                            🗑️ Delete
-                          </button>
+                          <div className="ptm-event-organizer-actions">
+                            <button
+                              type="button"
+                              className="ptm-btn-secondary"
+                              style={{ width: 'auto', padding: '6px 12px', fontSize: '11px' }}
+                              onClick={() => handleOpenEventPhotos(ev)}
+                              disabled={ev.status !== 'Completed'}
+                            >
+                              📸 {ev.status === 'Completed' ? 'Manage photos' : 'Photos after event'}
+                            </button>
+                            <button type="button" className="ptm-btn-danger" style={{ width: 'auto', padding: '6px 12px', fontSize: '11px' }} onClick={() => handleDeleteEvent(ev.event_id)}>
+                              🗑️ Delete
+                            </button>
+                          </div>
+                        </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {page === 'event_photos' && selectedPhotoEvent && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('events')}>←</button>
+                  <h1 className="ptm-page-title">{selectedPhotoEvent.title} photos</h1>
+                  <p className="ptm-page-sub">Publish a Google Drive album link for students who attended or viewed this event.</p>
+                </div>
+                <div className="ptm-card">
+                  <form onSubmit={handleAddEventPhotoAlbum} className="ptm-form-stack">
+                    <label className="ptm-label">Google Drive album URL
+                      <input
+                        type="url"
+                        className="ptm-input"
+                        placeholder="https://drive.google.com/drive/folders/..."
+                        value={eventAlbumUrl}
+                        onChange={(e) => setEventAlbumUrl(e.target.value)}
+                        required
+                      />
+                    </label>
+                    <label className="ptm-label">Album caption
+                      <input
+                        type="text"
+                        className="ptm-input"
+                        placeholder="Event highlights"
+                        maxLength={120}
+                        value={eventAlbumCaption}
+                        onChange={(e) => setEventAlbumCaption(e.target.value)}
+                        required
+                      />
+                    </label>
+                    <button type="submit" className="ptm-btn-primary" disabled={albumSubmitting}>
+                      {albumSubmitting ? 'Publishing…' : 'Publish photo album'}
+                    </button>
+                  </form>
+                </div>
+                <div className="ptm-card">
+                  <div className="ptm-section-title">Published event albums</div>
+                  {!selectedPhotoEvent.photo_albums?.length ? (
+                    <div className="ptm-list-sub">No photo albums are shared for this event yet.</div>
+                  ) : (
+                    <div className="ptm-list">
+                      {selectedPhotoEvent.photo_albums.map((album) => (
+                        <div className="ptm-list-row" key={album.album_id}>
+                          <div className="ptm-avatar-pastel">📸</div>
+                          <div className="ptm-list-main">
+                            <div className="ptm-list-title">{album.caption}</div>
+                            <div className="ptm-list-sub">{new Date(album.created_at).toLocaleDateString()}</div>
+                          </div>
+                          <a href={album.album_url} target="_blank" rel="noreferrer" className="ptm-btn-secondary" style={{ textDecoration: 'none' }}>Open ↗</a>
                         </div>
                       ))}
                     </div>

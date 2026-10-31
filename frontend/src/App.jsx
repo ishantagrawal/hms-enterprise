@@ -1,13 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import DeanPortal from './components/DeanPortal';
-import WardenPortal from './components/WardenPortal';
-import ClubPortal from './components/ClubPortal';
-import StudentPortal from './components/StudentPortal';
-import StaffPortal from './components/StaffPortal';
-import FounderPortal from './components/FounderPortal';
+import React, { Suspense, lazy, useState, useEffect, useCallback } from 'react';
 import { apiFetch, API_URL } from './api';
 
 window.GLOBAL_SILICON_VALLEY_CSS = '';
+
+const DeanPortal = lazy(() => import('./components/DeanPortal'));
+const WardenPortal = lazy(() => import('./components/WardenPortal'));
+const ClubPortal = lazy(() => import('./components/ClubPortal'));
+const StudentPortal = lazy(() => import('./components/StudentPortal'));
+const StaffPortal = lazy(() => import('./components/StaffPortal'));
+const FounderPortal = lazy(() => import('./components/FounderPortal'));
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '312566505039-bvh0tfh4gao8bi6jqs65fkgni7pbn5bn.apps.googleusercontent.com';
 
@@ -266,6 +267,14 @@ export default function App() {
     }
   };
 
+  const handleStudentProfileRefresh = useCallback((updatedUser) => {
+    setUser((currentUser) => {
+      const mergedUser = { ...currentUser, ...updatedUser };
+      localStorage.setItem('hms_user', JSON.stringify(mergedUser));
+      return mergedUser;
+    });
+  }, []);
+
   const handleLogout = () => {
     localStorage.removeItem('hms_user');
     localStorage.removeItem('hms_google_credential');
@@ -467,12 +476,19 @@ export default function App() {
           </header>
 
           <main className="ptm-main-container">
-            {isFounder && <FounderPortal apiUrl={API_URL} onLogout={handleLogout} />}
-            {user.role === 'Dean' && <DeanPortal user={user} apiUrl={API_URL} />}
-            {user.role === 'Student' && <StudentPortal user={user} apiUrl={API_URL} />}
-            {user.role === 'Warden' && <WardenPortal user={user} apiUrl={API_URL} />}
-            {user.role === 'ClubOrganizer' && <ClubPortal user={user} apiUrl={API_URL} />}
-            {user.role === 'Staff' && <StaffPortal user={user} apiUrl={API_URL} />}
+            <Suspense fallback={
+              <div className="ptm-wheel-box" role="status">
+                <div className="ptm-spinner-wheel" />
+                <div style={{ fontWeight: 700, color: '#002970', marginTop: '12px' }}>Opening your portal…</div>
+              </div>
+            }>
+              {isFounder && <FounderPortal apiUrl={API_URL} onLogout={handleLogout} />}
+              {user.role === 'Dean' && <DeanPortal user={user} apiUrl={API_URL} />}
+              {user.role === 'Student' && <StudentPortal user={user} apiUrl={API_URL} onUserUpdate={handleStudentProfileRefresh} />}
+              {user.role === 'Warden' && <WardenPortal user={user} apiUrl={API_URL} />}
+              {user.role === 'ClubOrganizer' && <ClubPortal user={user} apiUrl={API_URL} />}
+              {user.role === 'Staff' && <StaffPortal user={user} apiUrl={API_URL} />}
+            </Suspense>
           </main>
 
           {showProfile && !studentProfileIncomplete && (
@@ -608,8 +624,6 @@ export default function App() {
 }
 
 const PAYTM_APPLE_CSS = `
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap');
-
   * {
     box-sizing: border-box;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
@@ -621,6 +635,7 @@ const PAYTM_APPLE_CSS = `
     padding: 0;
     width: 100%;
     overflow-x: hidden;
+    overscroll-behavior-x: none;
     background: #F5F7FA;
     color: #111827;
     font-size: 14px;
@@ -685,7 +700,7 @@ const PAYTM_APPLE_CSS = `
     box-shadow: 0 2px 8px rgba(0, 41, 112, 0.18);
   }
 
-  .ptm-root { min-height: 100vh; display: flex; flex-direction: column; background: #F5F7FA; }
+  .ptm-root { min-height: 100vh; min-height: 100svh; display: flex; flex-direction: column; background: #F5F7FA; }
   .ptm-profile-trigger { padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
   .ptm-modal-backdrop { position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(15, 23, 42, 0.62); }
   .ptm-modal-card { position: relative; width: min(100%, 520px); max-height: min(90vh, 760px); overflow-y: auto; padding: 24px; border-radius: 20px; background: #FFFFFF; color: #111827; box-shadow: 0 24px 70px rgba(0, 0, 0, 0.25); }
@@ -713,7 +728,7 @@ const PAYTM_APPLE_CSS = `
   .ptm-login-heading { margin: 0 0 4px 0; font-size: 22px; font-weight: 800; color: #111827; }
   .ptm-login-sub { margin: 0 0 16px 0; font-size: 13px; color: #6B7280; }
   .ptm-alert-error { background: #FEF2F2; border: 1px solid #FECACA; color: #DC2626; padding: 12px; border-radius: 12px; font-size: 13px; font-weight: 600; margin-bottom: 16px; }
-  .ptm-main-container { flex: 1; width: 100%; max-width: 1280px; margin: 0 auto; padding: 14px 12px 92px 12px; }
+  .ptm-main-container { flex: 1; width: 100%; max-width: 1280px; margin: 0 auto; padding: 14px 12px calc(92px + env(safe-area-inset-bottom)); }
   .ptm-shell-layout { display: grid; grid-template-columns: 250px 1fr; gap: 20px; align-items: start; }
   .ptm-sidebar-desktop { background: #FFFFFF; border: 1px solid #EAEEF4; border-radius: 18px; padding: 12px; position: sticky; top: 76px; display: flex; flex-direction: column; gap: 4px; box-shadow: 0 2px 8px rgba(0, 41, 112, 0.03); }
   .ptm-side-btn { width: 100%; background: transparent; border: none; border-radius: 12px; padding: 11px 14px; text-align: left; font-size: 13.5px; font-weight: 600; color: #4B5563; cursor: pointer; display: flex; align-items: center; justify-content: space-between; transition: 0.15s; }
@@ -763,17 +778,61 @@ const PAYTM_APPLE_CSS = `
   .ptm-cal-event-chip { font-size: 9.5px; font-weight: 700; background: #002970; color: #FFFFFF; padding: 2px 4px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .ptm-row-between { display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; flex-wrap: wrap; }
   .ptm-toast { background: #002970; color: #FFFFFF; padding: 12px 16px; border-radius: 12px; font-size: 13px; font-weight: 600; margin-bottom: 14px; cursor: pointer; }
-  .ptm-bottom-nav { display: none; position: fixed; bottom: 0; left: 0; right: 0; height: 64px; background: #FFFFFF; border-top: 1px solid #E5E7EB; justify-content: space-around; align-items: center; z-index: 150; }
+  .ptm-sync-note { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 10px 12px; border: 1px solid #BFDBFE; border-radius: 12px; background: #EFF6FF; color: #1E40AF; font-size: 12px; font-weight: 600; }
+  .ptm-sync-note.error { border-color: #FECACA; background: #FEF2F2; color: #991B1B; }
+  .ptm-sync-retry { flex-shrink: 0; border: 0; background: transparent; color: #1D4ED8; font-weight: 800; cursor: pointer; }
+  .ptm-chat-room { display: flex; flex-direction: column; min-height: min(62svh, 620px); gap: 12px; }
+  .ptm-chat-status { display: flex; align-items: center; gap: 8px; color: #475569; font-size: 12px; font-weight: 700; }
+  .ptm-chat-indicator { width: 9px; height: 9px; border-radius: 50%; background: #F59E0B; flex-shrink: 0; }
+  .ptm-chat-indicator.connected { background: #16A34A; }
+  .ptm-chat-room-label { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ptm-chat-messages { display: flex; flex: 1; flex-direction: column; gap: 10px; min-height: 220px; max-height: 55svh; overflow-y: auto; padding: 12px; border: 1px solid #E2E8F0; border-radius: 14px; background: #F8FAFC; overscroll-behavior: contain; }
+  .ptm-chat-empty { margin: auto; color: #64748B; font-size: 13px; text-align: center; }
+  .ptm-chat-message { max-width: 88%; padding: 9px 11px; border: 1px solid #E2E8F0; border-radius: 14px 14px 14px 4px; background: #FFFFFF; overflow-wrap: anywhere; }
+  .ptm-chat-message.mine { align-self: flex-end; border-color: #BFDBFE; border-radius: 14px 14px 4px 14px; background: #EFF6FF; }
+  .ptm-chat-message-meta { display: flex; align-items: center; gap: 10px; color: #475569; font-size: 11px; }
+  .ptm-chat-message-meta time { color: #94A3B8; }
+  .ptm-chat-message p { margin: 4px 0 0; color: #1F2937; font-size: 13px; white-space: pre-wrap; }
+  .ptm-chat-compose { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+  .ptm-chat-compose .ptm-btn-primary { width: auto; min-width: 76px; }
+  .ptm-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  .ptm-event-action-card { margin-top: 16px; background: #F8FAFC; }
+  .ptm-event-feedback-summary { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; padding: 10px; border-radius: 10px; background: #F8FAFC; color: #475569; font-size: 12px; }
+  .ptm-event-feedback-summary strong { color: #92400E; }
+  .ptm-event-feedback-summary p { margin: 4px 0 0; color: #334155; font-style: italic; overflow-wrap: anywhere; }
+  .ptm-event-organizer-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+  .ptm-profile-request { padding: 14px 0; border-bottom: 1px solid #E2E8F0; }
+  .ptm-profile-request:last-child { border-bottom: 0; }
+  .ptm-profile-request-changes { display: grid; gap: 6px; margin-top: 12px; }
+  .ptm-profile-request-change { display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px; border-radius: 9px; background: #F8FAFC; color: #64748B; font-size: 12px; }
+  .ptm-profile-request-change strong { color: #1D4ED8; }
+  .ptm-profile-request-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+  .ptm-bottom-nav { display: none; position: fixed; bottom: 0; left: 0; right: 0; height: calc(64px + env(safe-area-inset-bottom)); padding: 0 4px env(safe-area-inset-bottom); background: rgba(255, 255, 255, 0.96); border-top: 1px solid #E5E7EB; justify-content: space-around; align-items: center; z-index: 150; backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
   .ptm-bnav-btn { background: none; border: none; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; font-weight: 600; color: #6B7280; cursor: pointer; flex: 1; }
   .ptm-bnav-btn.active { color: #002970; font-weight: 800; }
+  .ptm-bnav-btn:focus-visible, .ptm-back-btn:focus-visible, .ptm-side-btn:focus-visible, .ptm-icon-tile:focus-visible { outline: 3px solid #38BDF8; outline-offset: 2px; }
+  .ptm-btn-primary:disabled, .ptm-btn-secondary:disabled, .ptm-btn-danger:disabled { cursor: wait; opacity: 0.7; }
 
   @media (max-width: 900px) {
     .ptm-shell-layout { grid-template-columns: 1fr; }
     .ptm-sidebar-desktop { display: none; }
     .ptm-bottom-nav { display: flex; }
+    .ptm-main-container { padding: 12px 12px calc(76px + env(safe-area-inset-bottom)); }
+    .ptm-page-wrap { max-width: none; }
+    .ptm-input { font-size: 16px; }
+    .ptm-bnav-btn { min-height: 44px; }
   }
-  @media (max-width: 420px) {
+  @media (max-width: 540px) {
     .ptm-hide-xs { display: none; }
     .ptm-cal-cell { height: 54px; }
+    .ptm-main-container { padding-left: 10px; padding-right: 10px; }
+    .ptm-card { padding: 14px; border-radius: 16px; }
+    .ptm-icon-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .ptm-icon-tile { min-height: 78px; justify-content: center; }
+    .ptm-page-title { font-size: 20px; overflow-wrap: anywhere; }
+    .ptm-list-row { gap: 8px; }
+    .ptm-status-badge { white-space: normal; text-align: center; }
+    .ptm-event-organizer-actions { max-width: 112px; }
+    .ptm-profile-request-change { flex-direction: column; gap: 2px; }
   }
 `;

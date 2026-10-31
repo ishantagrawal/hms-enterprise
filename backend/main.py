@@ -1,17 +1,21 @@
 import os
+import asyncio
 import hmac
 import hashlib
 import base64
 import json
+import logging
 import random
 import re
 import sqlite3
 import threading
 import time
+import uuid
 from html import escape as html_escape
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
-from fastapi import FastAPI, HTTPException, Query, Request
+from urllib.parse import urlparse
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -30,6 +34,7 @@ except ImportError:
     RealDictCursor = None
 
 app = FastAPI(title="svnitcampus - Production Backend")
+logger = logging.getLogger(__name__)
 
 # Compress payloads > 500 bytes by ~80% for fast campus Wi-Fi transfer
 app.add_middleware(GZipMiddleware, minimum_size=500)
@@ -382,6 +387,39 @@ def init_db():
             expires_at TEXT
         )
     ''')
+    db_exec(conn, '''
+        CREATE TABLE IF NOT EXISTS event_chat_messages (
+            message_id TEXT PRIMARY KEY,
+            event_id TEXT NOT NULL,
+            student_id TEXT NOT NULL,
+            student_name TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    ''')
+    db_exec(conn, '''
+        CREATE TABLE IF NOT EXISTS event_photo_albums (
+            album_id TEXT PRIMARY KEY,
+            event_id TEXT NOT NULL,
+            club_id TEXT NOT NULL,
+            album_url TEXT NOT NULL,
+            caption TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    ''')
+    db_exec(conn, '''
+        CREATE TABLE IF NOT EXISTS student_profile_requests (
+            request_id TEXT PRIMARY KEY,
+            student_id TEXT NOT NULL,
+            hostel_block TEXT NOT NULL,
+            requested_changes TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            reviewed_at TEXT NOT NULL,
+            reviewed_by TEXT NOT NULL,
+            review_remark TEXT NOT NULL
+        )
+    ''')
 
     user_columns = {column[0] for column in db_exec(conn, "SELECT * FROM users LIMIT 0").description}
     if "wing" not in user_columns:
@@ -401,6 +439,10 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_events_date_status ON events (date, status)",
         "CREATE INDEX IF NOT EXISTS idx_events_club ON events (UPPER(club_id))",
         "CREATE INDEX IF NOT EXISTS idx_notices_status ON notices (status, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_event_chat_event_created ON event_chat_messages (event_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_event_albums_event ON event_photo_albums (event_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_profile_requests_hostel_status ON student_profile_requests (LOWER(hostel_block), status, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_profile_requests_student_status ON student_profile_requests (UPPER(student_id), status, created_at)",
     ]
     for idx_sql in indexes:
         try:
@@ -589,9 +631,26 @@ class EventRsvpReq(BaseModel):
 
 class EventFeedbackReq(BaseModel):
     event_id: str
-    student_id: str
     rating: int
     review: str
+
+class EventPhotoAlbumReq(BaseModel):
+    event_id: str
+    album_url: str
+    caption: str
+
+class EventChatTicketReq(BaseModel):
+    event_id: str
+
+class StudentProfileChangeReq(BaseModel):
+    room: Optional[str] = None
+    wing: Optional[str] = None
+    phone: Optional[str] = None
+
+class ProfileRequestReviewReq(BaseModel):
+    request_id: str
+    decision: str
+    remark: Optional[str] = ""
 
 class NoticeCreateReq(BaseModel):
     club_id: str
@@ -758,6 +817,61 @@ def account_from_bearer(request: Request):
     return account
 
 
+def _encode_event_chat_ticket(user_id: str, event_id: str) -> str:
+    payload = json.dumps(
+        {"user_id": user_id.upper(), "event_id": event_id, "expires": int(time.time()) + 300},
+        separators=(",", ":"),
+    ).encode()
+    encoded = base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    signature = hmac.new(AUTH_SECRET.encode(), encoded.encode(), hashlib.sha256).hexdigest()
+    return f"{encoded}.{signature}"
+
+
+def _decode_event_chat_ticket(ticket: str) -> Optional[Dict[str, str]]:
+    try:
+        encoded, signature = ticket.split(".", 1)
+        expected = hmac.new(AUTH_SECRET.encode(), encoded.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            return None
+        payload = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        data = json.loads(payload)
+        if int(data.get("expires", 0)) < int(time.time()):
+            return None
+        if not data.get("user_id") or not data.get("event_id"):
+            return None
+        return {"user_id": str(data["user_id"]).upper(), "event_id": str(data["event_id"])}
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def _can_access_event_chat(account: Dict, event: Dict) -> bool:
+    if account["role"] == "Student":
+        return event["status"] in {"Approved", "Completed"}
+    return (
+        account["role"] == "ClubOrganizer"
+        and str(event["club_id"]).upper() == str(account["user_id"]).upper()
+    )
+
+
+def _event_feedback_without_identity(feedbacks: List[Dict]) -> List[Dict]:
+    return [
+        {"rating": item.get("rating"), "review": item.get("review", "")}
+        for item in feedbacks
+        if isinstance(item, dict)
+    ]
+
+
+EVENT_CHAT_CONNECTIONS: Dict[str, set] = {}
+
+
+def _get_event_for_chat(event_id: str):
+    conn = get_conn()
+    try:
+        return db_exec(conn, "SELECT * FROM events WHERE event_id = ?", (event_id,)).fetchone()
+    finally:
+        conn.close()
+
+
 @app.middleware("http")
 async def require_authentication(request: Request, call_next):
     open_paths = {
@@ -847,13 +961,32 @@ def portal_bootstrap(request: Request, hostel_block: str = "All"):
 
         # 3. Events
         e_rows = db_exec(conn, "SELECT * FROM events ORDER BY date DESC").fetchall()
+        album_rows = db_exec(
+            conn,
+            "SELECT album_id, event_id, album_url, caption, created_at FROM event_photo_albums ORDER BY created_at DESC"
+        ).fetchall()
+        albums_by_event: Dict[str, List[Dict]] = {}
+        for album_row in album_rows:
+            album = dict(album_row)
+            albums_by_event.setdefault(album["event_id"], []).append(album)
+
         events = []
         for r in e_rows:
             d = dict(r)
             d["custom_fields"] = json.loads(d["custom_fields"] or "[]")
             d["rsvps"] = json.loads(d["rsvps"] or "[]")
-            d["feedbacks"] = json.loads(d["feedbacks"] or "[]")
+            raw_feedbacks = json.loads(d["feedbacks"] or "[]")
+            d["feedback_submitted"] = (
+                role == "Student"
+                and any(
+                    str(item.get("student_id", "")).upper() == uid
+                    for item in raw_feedbacks
+                    if isinstance(item, dict)
+                )
+            )
+            d["feedbacks"] = _event_feedback_without_identity(raw_feedbacks)
             d["ai_audit"] = json.loads(d["ai_audit"] or "{}") if d["ai_audit"] else None
+            d["photo_albums"] = albums_by_event.get(d["event_id"], [])
             events.append(d)
 
         # 4. Clubs
@@ -978,9 +1111,31 @@ def update_student_profile(req: StudentProfileReq, request: Request):
     account = request.state.user
     if account["role"] != "Student":
         raise HTTPException(status_code=403, detail="Only student profiles can be updated here.")
+    conn = get_conn()
+    existing = db_exec(
+        conn,
+        "SELECT hostel_block, wing, room, phone FROM users WHERE UPPER(user_id) = ? AND role = 'Student'",
+        (account["user_id"].upper(),),
+    ).fetchone()
+    if not existing:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Student record not found.")
+    needs_setup = (
+        not existing["hostel_block"]
+        or not existing["phone"]
+        or (
+            (existing["hostel_block"] or "").strip().lower() != "day scholar"
+            and (not existing["wing"] or not existing["room"])
+        )
+    )
+    if not needs_setup:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Use a warden-approved profile change request to update your details.")
+
     hostel = req.hostel_block.strip()
     phone = req.phone.strip()
     if not re.fullmatch(r"\+?[0-9][0-9\s()-]{7,17}", phone):
+        conn.close()
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit mobile number.")
 
     if hostel.lower() == "day scholar":
@@ -992,13 +1147,14 @@ def update_student_profile(req: StudentProfileReq, request: Request):
         wing = (req.wing or "").strip()
         room = (req.room or "").strip()
         if wing not in {f"Wing {letter}" for letter in "ABCDEFGH"}:
+            conn.close()
             raise HTTPException(status_code=400, detail="Select a valid hostel wing (Wing A to Wing H).")
         if not room or len(room) > 20:
+            conn.close()
             raise HTTPException(status_code=400, detail="Enter a valid room number.")
         title = "Verified Resident"
 
     uid = account["user_id"].upper()
-    conn = get_conn()
     db_exec(
         conn,
         "UPDATE users SET hostel_block = ?, wing = ?, room = ?, phone = ?, authority_title = ? WHERE UPPER(user_id) = ?",
@@ -1012,6 +1168,188 @@ def update_student_profile(req: StudentProfileReq, request: Request):
     user.pop("password", None)
     user.pop("dob", None)
     return {"success": True, "user": user}
+
+
+@app.get("/api/profile/requests")
+def get_student_profile_requests(request: Request):
+    account = request.state.user
+    if account["role"] != "Student":
+        raise HTTPException(status_code=403, detail="Only students can view their profile requests.")
+    conn = get_conn()
+    try:
+        rows = db_exec(
+            conn,
+            "SELECT * FROM student_profile_requests WHERE UPPER(student_id) = ? ORDER BY created_at DESC",
+            (account["user_id"].upper(),),
+        ).fetchall()
+        profile = dict(db_exec(
+            conn,
+            "SELECT user_id, full_name, role, authority_title, institute_id, hostel_block, wing, room, phone, year, department, email FROM users WHERE UPPER(user_id) = ?",
+            (account["user_id"].upper(),),
+        ).fetchone())
+        return {
+            "requests": [
+            {**dict(row), "requested_changes": json.loads(row["requested_changes"] or "{}")}
+            for row in rows
+            ],
+            "profile": profile,
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/api/profile/requests")
+def create_student_profile_request(req: StudentProfileChangeReq, request: Request):
+    account = request.state.user
+    if account["role"] != "Student":
+        raise HTTPException(status_code=403, detail="Only students can request profile changes.")
+
+    conn = get_conn()
+    try:
+        student = db_exec(
+            conn,
+            "SELECT * FROM users WHERE UPPER(user_id) = ? AND role = 'Student'",
+            (account["user_id"].upper(),),
+        ).fetchone()
+        if not student:
+            raise HTTPException(status_code=404, detail="Student record not found.")
+
+        changes = {}
+        if req.room is not None:
+            room = req.room.strip()
+            if not room or len(room) > 20:
+                raise HTTPException(status_code=400, detail="Enter a valid room number.")
+            if room != (student["room"] or ""):
+                changes["room"] = room
+        if req.wing is not None:
+            wing = req.wing.strip()
+            if wing not in {f"Wing {letter}" for letter in "ABCDEFGH"}:
+                raise HTTPException(status_code=400, detail="Select a valid hostel wing (Wing A to Wing H).")
+            if (student["hostel_block"] or "").strip().lower() == "day scholar":
+                raise HTTPException(status_code=400, detail="Day Scholars do not have a hostel wing.")
+            if wing != (student["wing"] or ""):
+                changes["wing"] = wing
+        if req.phone is not None:
+            phone = req.phone.strip()
+            if not re.fullmatch(r"\+?[0-9][0-9\s()-]{7,17}", phone):
+                raise HTTPException(status_code=400, detail="Enter a valid mobile number.")
+            if phone != (student["phone"] or ""):
+                changes["phone"] = phone
+        if not changes:
+            raise HTTPException(status_code=400, detail="Enter at least one profile change that differs from your current information.")
+
+        pending = db_exec(
+            conn,
+            "SELECT request_id FROM student_profile_requests WHERE UPPER(student_id) = ? AND status = 'Pending' LIMIT 1",
+            (account["user_id"].upper(),),
+        ).fetchone()
+        if pending:
+            raise HTTPException(status_code=409, detail="You already have a pending profile change request.")
+
+        request_id = f"PR-{uuid.uuid4().hex[:12].upper()}"
+        created_at = datetime.now().isoformat(timespec="seconds")
+        db_exec(
+            conn,
+            "INSERT INTO student_profile_requests (request_id, student_id, hostel_block, requested_changes, status, created_at, reviewed_at, reviewed_by, review_remark) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (request_id, student["user_id"], student["hostel_block"], json.dumps(changes), "Pending", created_at, "", "", ""),
+        )
+        conn.commit()
+        return {
+            "success": True,
+            "request": {
+                "request_id": request_id,
+                "student_id": student["user_id"],
+                "hostel_block": student["hostel_block"],
+                "requested_changes": changes,
+                "status": "Pending",
+                "created_at": created_at,
+            },
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/api/warden/profile-requests")
+def get_warden_profile_requests(request: Request):
+    account = request.state.user
+    if account["role"] != "Warden":
+        raise HTTPException(status_code=403, detail="Only wardens can review student profile requests.")
+    conn = get_conn()
+    try:
+        rows = db_exec(
+            conn,
+            """
+            SELECT profile_requests.*, users.full_name, users.room AS current_room,
+                   users.wing AS current_wing, users.phone AS current_phone
+            FROM student_profile_requests AS profile_requests
+            JOIN users ON UPPER(users.user_id) = UPPER(profile_requests.student_id)
+            WHERE LOWER(profile_requests.hostel_block) = LOWER(?)
+              AND LOWER(users.hostel_block) = LOWER(?)
+              AND profile_requests.status = 'Pending'
+            ORDER BY profile_requests.created_at ASC
+            """,
+            (account["hostel_block"], account["hostel_block"]),
+        ).fetchall()
+        return [
+            {**dict(row), "requested_changes": json.loads(row["requested_changes"] or "{}")}
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
+@app.post("/api/warden/profile-requests/review")
+def review_student_profile_request(req: ProfileRequestReviewReq, request: Request):
+    account = request.state.user
+    if account["role"] != "Warden":
+        raise HTTPException(status_code=403, detail="Only wardens can review student profile requests.")
+    decision = req.decision.strip().lower()
+    if decision not in {"approved", "rejected"}:
+        raise HTTPException(status_code=400, detail="Choose approve or reject.")
+
+    conn = get_conn()
+    try:
+        row = db_exec(
+            conn,
+            """
+            SELECT profile_requests.*
+            FROM student_profile_requests AS profile_requests
+            JOIN users ON UPPER(users.user_id) = UPPER(profile_requests.student_id)
+            WHERE profile_requests.request_id = ?
+              AND LOWER(profile_requests.hostel_block) = LOWER(?)
+              AND LOWER(users.hostel_block) = LOWER(?)
+            """,
+            (req.request_id, account["hostel_block"], account["hostel_block"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Profile request not found for your hostel.")
+        if row["status"] != "Pending":
+            raise HTTPException(status_code=409, detail="This profile request has already been reviewed.")
+
+        changes = json.loads(row["requested_changes"] or "{}")
+        if decision == "approved":
+            allowed_fields = {"room", "wing", "phone"}
+            if not changes or not set(changes).issubset(allowed_fields):
+                raise HTTPException(status_code=400, detail="This profile request contains invalid changes.")
+            columns = ", ".join(f"{field} = ?" for field in changes)
+            db_exec(
+                conn,
+                f"UPDATE users SET {columns} WHERE UPPER(user_id) = ?",
+                (*changes.values(), row["student_id"].upper()),
+            )
+
+        reviewed_at = datetime.now().isoformat(timespec="seconds")
+        db_exec(
+            conn,
+            "UPDATE student_profile_requests SET status = ?, reviewed_at = ?, reviewed_by = ?, review_remark = ? WHERE request_id = ?",
+            (decision.title(), reviewed_at, account["user_id"], (req.remark or "").strip()[:500], req.request_id),
+        )
+        conn.commit()
+        if decision == "approved":
+            invalidate_user_cache(row["student_id"])
+        return {"success": True, "status": decision.title(), "request_id": req.request_id}
+    finally:
+        conn.close()
 
 
 @app.get("/api/ads")
@@ -1551,11 +1889,20 @@ def get_events():
     rows = db_exec(conn, "SELECT * FROM events ORDER BY date DESC").fetchall()
     conn.close()
     result = []
+    album_rows = db_exec(
+        conn,
+        "SELECT album_id, event_id, album_url, caption, created_at FROM event_photo_albums ORDER BY created_at DESC"
+    ).fetchall()
+    albums_by_event: Dict[str, List[Dict]] = {}
+    for album_row in album_rows:
+        album = dict(album_row)
+        albums_by_event.setdefault(album["event_id"], []).append(album)
     for r in rows:
         d = dict(r)
         d["custom_fields"] = json.loads(d["custom_fields"] or "[]")
         d["rsvps"] = json.loads(d["rsvps"] or "[]")
-        d["feedbacks"] = json.loads(d["feedbacks"] or "[]")
+        d["feedbacks"] = _event_feedback_without_identity(json.loads(d["feedbacks"] or "[]"))
+        d["photo_albums"] = albums_by_event.get(d["event_id"], [])
         d["ai_audit"] = json.loads(d["ai_audit"] or "{}") if d["ai_audit"] else None
         result.append(d)
     return result
@@ -1635,28 +1982,176 @@ def rsvp_event(req: EventRsvpReq, request: Request):
 
 @app.post("/api/unicore/events/feedback")
 def submit_event_feedback(req: EventFeedbackReq, request: Request):
+    account = request.state.user
+    if account["role"] != "Student":
+        raise HTTPException(status_code=403, detail="Only students can submit event feedback.")
+    if req.rating < 1 or req.rating > 5:
+        raise HTTPException(status_code=400, detail="Choose a rating from 1 to 5.")
+    review = req.review.strip()
+    if not review or len(review) > 2000:
+        raise HTTPException(status_code=400, detail="Feedback must be between 1 and 2,000 characters.")
+
     conn = get_conn()
-    row = db_exec(conn, "SELECT * FROM events WHERE event_id = ?", (req.event_id,)).fetchone()
-    if not row:
+    try:
+        row = db_exec(conn, "SELECT * FROM events WHERE event_id = ?", (req.event_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Event not found")
+        if row["status"] != "Completed":
+            raise HTTPException(status_code=409, detail="Feedback is available after the event is completed.")
+        feedbacks = json.loads(row["feedbacks"] or "[]")
+        student_id = account["user_id"].upper()
+        if any(str(feedback.get("student_id", "")).upper() == student_id for feedback in feedbacks if isinstance(feedback, dict)):
+            raise HTTPException(status_code=409, detail="You have already submitted feedback for this event.")
+        feedbacks.append({"student_id": student_id, "rating": req.rating, "review": review})
+        all_r = [feedback["rating"] for feedback in feedbacks]
+        avg_r = round(sum(all_r) / len(all_r), 1)
+        rsvps = json.loads(row["rsvps"] or "[]")
+        ai_audit = {"total_attendees": len(rsvps), "average_rating": avg_r, "sentiment": "Positive" if avg_r >= 4 else "Constructive"}
+        db_exec(conn, "UPDATE events SET feedbacks = ?, ai_audit = ? WHERE event_id = ?", (json.dumps(feedbacks), json.dumps(ai_audit), req.event_id))
+        conn.commit()
+        row = db_exec(conn, "SELECT * FROM events WHERE event_id = ?", (req.event_id,)).fetchone()
+        res = dict(row)
+        res["custom_fields"] = json.loads(res["custom_fields"] or "[]")
+        res["rsvps"] = json.loads(res["rsvps"] or "[]")
+        res["feedbacks"] = _event_feedback_without_identity(json.loads(res["feedbacks"] or "[]"))
+        res["ai_audit"] = json.loads(res["ai_audit"] or "{}")
+        return {"success": True, "event": res}
+    finally:
         conn.close()
-        raise HTTPException(status_code=404, detail="Event not found")
-    feedbacks = json.loads(row["feedbacks"] or "[]")
-    student_id = request.state.user["user_id"].upper()
-    feedbacks.append({"student_id": student_id, "rating": req.rating, "review": req.review.strip()})
-    all_r = [f["rating"] for f in feedbacks]
-    avg_r = round(sum(all_r) / len(all_r), 1)
-    rsvps = json.loads(row["rsvps"] or "[]")
-    ai_audit = {"total_attendees": len(rsvps), "average_rating": avg_r, "sentiment": "Positive" if avg_r >= 4 else "Constructive"}
-    db_exec(conn, "UPDATE events SET feedbacks = ?, ai_audit = ? WHERE event_id = ?", (json.dumps(feedbacks), json.dumps(ai_audit), req.event_id))
-    conn.commit()
-    row = db_exec(conn, "SELECT * FROM events WHERE event_id = ?", (req.event_id,)).fetchone()
-    conn.close()
-    res = dict(row)
-    res["custom_fields"] = json.loads(res["custom_fields"] or "[]")
-    res["rsvps"] = json.loads(res["rsvps"] or "[]")
-    res["feedbacks"] = json.loads(res["feedbacks"] or "[]")
-    res["ai_audit"] = json.loads(res["ai_audit"] or "{}")
-    return {"success": True, "event": res}
+
+
+@app.post("/api/unicore/events/photo-albums")
+def add_event_photo_album(req: EventPhotoAlbumReq, request: Request):
+    account = request.state.user
+    if account["role"] != "ClubOrganizer":
+        raise HTTPException(status_code=403, detail="Only the event's club organizer can add its photo album.")
+
+    album_url = req.album_url.strip()
+    parsed_url = urlparse(album_url)
+    if parsed_url.scheme != "https" or (parsed_url.hostname or "").lower() != "drive.google.com":
+        raise HTTPException(status_code=400, detail="Use a secure Google Drive album link.")
+    caption = req.caption.strip()
+    if not caption or len(caption) > 120:
+        raise HTTPException(status_code=400, detail="Enter an album caption up to 120 characters.")
+
+    conn = get_conn()
+    try:
+        event = db_exec(conn, "SELECT * FROM events WHERE event_id = ?", (req.event_id,)).fetchone()
+        if not event:
+            raise HTTPException(status_code=404, detail="Event not found.")
+        if str(event["club_id"]).upper() != account["user_id"].upper():
+            raise HTTPException(status_code=403, detail="You can only add photos to your club's events.")
+        if event["status"] != "Completed":
+            raise HTTPException(status_code=409, detail="Photo albums can be published after the event is completed.")
+
+        album = {
+            "album_id": f"ALB-{uuid.uuid4().hex[:12].upper()}",
+            "event_id": req.event_id,
+            "album_url": album_url,
+            "caption": caption,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        db_exec(
+            conn,
+            "INSERT INTO event_photo_albums (album_id, event_id, club_id, album_url, caption, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (album["album_id"], req.event_id, account["user_id"], album_url, caption, album["created_at"]),
+        )
+        conn.commit()
+        return {"success": True, "album": album}
+    finally:
+        conn.close()
+
+
+@app.post("/api/unicore/events/chat-ticket")
+def create_event_chat_ticket(req: EventChatTicketReq, request: Request):
+    account = request.state.user
+    event = _get_event_for_chat(req.event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found.")
+    if not _can_access_event_chat(account, event):
+        raise HTTPException(status_code=403, detail="This event chat is not available to your account.")
+    return {"ticket": _encode_event_chat_ticket(account["user_id"], req.event_id)}
+
+
+@app.websocket("/api/unicore/events/chat/{event_id}")
+async def event_chat(websocket: WebSocket, event_id: str):
+    ticket_data = _decode_event_chat_ticket(websocket.query_params.get("ticket", ""))
+    if not ticket_data or ticket_data["event_id"] != event_id:
+        await websocket.close(code=1008, reason="Invalid or expired chat ticket.")
+        return
+
+    account = get_account_by_id(ticket_data["user_id"])
+    event = _get_event_for_chat(event_id)
+    if not account or not event or not _can_access_event_chat(account, event):
+        await websocket.close(code=1008, reason="Event chat access denied.")
+        return
+
+    await websocket.accept()
+    conn = get_conn()
+    try:
+        rows = db_exec(
+            conn,
+            "SELECT message_id, event_id, student_name, message, created_at FROM event_chat_messages WHERE event_id = ? ORDER BY created_at DESC LIMIT 100",
+            (event_id,),
+        ).fetchall()
+        history = [dict(row) for row in reversed(rows)]
+    finally:
+        conn.close()
+
+    room_connections = EVENT_CHAT_CONNECTIONS.setdefault(event_id, set())
+    room_connections.add(websocket)
+    try:
+        await websocket.send_json({"type": "history", "messages": history})
+    except (WebSocketDisconnect, OSError, RuntimeError):
+        room_connections.discard(websocket)
+        if not room_connections:
+            EVENT_CHAT_CONNECTIONS.pop(event_id, None)
+        return
+    try:
+        while True:
+            payload = await websocket.receive_json()
+            message = payload.get("message", "") if isinstance(payload, dict) else ""
+            if not isinstance(message, str):
+                await websocket.send_json({"type": "error", "message": "Messages must be text."})
+                continue
+            message = message.strip()
+            if not message or len(message) > 1000:
+                await websocket.send_json({"type": "error", "message": "Messages must be between 1 and 1,000 characters."})
+                continue
+
+            created_at = datetime.now().astimezone().isoformat(timespec="microseconds")
+            chat_message = {
+                "message_id": uuid.uuid4().hex,
+                "event_id": event_id,
+                "student_name": account.get("full_name") or account["user_id"],
+                "message": message,
+                "created_at": created_at,
+            }
+            message_conn = get_conn()
+            try:
+                db_exec(
+                    message_conn,
+                    "INSERT INTO event_chat_messages (message_id, event_id, student_id, student_name, message, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (chat_message["message_id"], event_id, account["user_id"], chat_message["student_name"], message, created_at),
+                )
+                message_conn.commit()
+            finally:
+                message_conn.close()
+
+            expired_connections = []
+            for connection in tuple(room_connections):
+                try:
+                    await connection.send_json({"type": "message", "message": chat_message})
+                except (WebSocketDisconnect, OSError, RuntimeError):
+                    expired_connections.append(connection)
+            for connection in expired_connections:
+                room_connections.discard(connection)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        room_connections.discard(websocket)
+        if not room_connections:
+            EVENT_CHAT_CONNECTIONS.pop(event_id, None)
 
 
 @app.get("/api/notices")
