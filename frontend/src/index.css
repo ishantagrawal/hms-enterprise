@@ -1,0 +1,168 @@
+:root {
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: #111827;
+  background: #f5f7fa;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  touch-action: manipulation;
+}
+
+.leave-pass-guard-card {
+  overflow: hidden;
+  border: 2px solid #16A34A;
+  border-radius: 14px;
+  background: #FFFFFF;
+}
+
+.leave-pass-approval-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  background: #047857;
+  color: #FFFFFF;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.leave-pass-approval-banner time {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.leave-pass-live-dot {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  border-radius: 50%;
+  background: #86EFAC;
+  box-shadow: 0 0 0 0 rgba(134, 239, 172, 0.8);
+  animation: leavePassPulse 1.5s infinite;
+}
+
+.leave-pass-guard-content {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+}
+
+.leave-pass-type {
+  color: #065F46;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+
+.leave-pass-student-name {
+  color: #111827;
+  font-size: clamp(22px, 5vw, 30px);
+  font-weight: 800;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.leave-pass-detail {
+  color: #1F2937;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.leave-pass-validity {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.leave-pass-validity > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: #F0FDF4;
+}
+
+.leave-pass-validity span {
+  color: #166534;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.leave-pass-validity strong {
+  overflow-wrap: anywhere;
+  color: #111827;
+}
+
+.leave-pass-return-action,
+.leave-pass-returned {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+@keyframes leavePassPulse {
+  70% {
+    box-shadow: 0 0 0 8px rgba(134, 239, 172, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(134, 239, 172, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (max-width: 520px) {
+  .leave-pass-approval-banner {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    font-size: 13px;
+  }
+
+  .leave-pass-approval-banner time {
+    margin-left: 22px;
+  }
+
+  .leave-pass-validity {
+    grid-template-columns: 1fr;
+  }
+}

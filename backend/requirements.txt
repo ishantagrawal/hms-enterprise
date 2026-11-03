@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+pydantic
+psycopg2-binary
+python-multipart
+google-auth[requests]
+webauthn>=2.7,<3
+tzdata>=2024.1
+cryptography>=43,<47
+deepface>=0.0.93,<0.1.0
+opencv-contrib-python-headless>=4.10,<6
+werkzeug>=3,<4
