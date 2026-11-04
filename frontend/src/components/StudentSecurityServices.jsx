@@ -593,7 +593,7 @@ export function StudentBiometricAttendancePanel({
     onLogsChange?.(next);
   }, [cacheKey, onLogsChange]);
 
-  const registerAndLock = async () => {
+  const registerAndLock = async (disclosureAlreadyAccepted = false) => {
     if (!enrollmentOpen) {
       setError('Ask your Warden to unlock the 2-minute enrollment window first.');
       return;
@@ -602,7 +602,7 @@ export function StudentBiometricAttendancePanel({
       setError('Review and confirm face verification consent before enrolling.');
       return;
     }
-    if (!disclosureAccepted) {
+    if (!disclosureAccepted && !disclosureAlreadyAccepted) {
       setDisclosureAction(() => registerAndLock);
       return;
     }
@@ -655,8 +655,8 @@ export function StudentBiometricAttendancePanel({
     }
   };
 
-  const markWithBeacon = async () => {
-    if (!disclosureAccepted) {
+  const markWithBeacon = async (disclosureAlreadyAccepted = false) => {
+    if (!disclosureAccepted && !disclosureAlreadyAccepted) {
       setDisclosureAction(() => markWithBeacon);
       return;
     }
@@ -758,7 +758,12 @@ export function StudentBiometricAttendancePanel({
           <div className="ptm-card">
             <div className="ptm-section-title">Before camera and Bluetooth access</div>
             <p className="ptm-list-sub">Camera is used strictly for 1:1 liveness attendance verification. Bluetooth is used strictly to verify indoor hostel wing proximity. No background tracking is performed.</p>
-            <button type="button" className="ptm-btn-primary" onClick={() => { const action = disclosureAction; setDisclosureAccepted(true); setDisclosureAction(null); action(); }}>I understand and continue</button>
+            <button type="button" className="ptm-btn-primary" onClick={() => {
+              const action = disclosureAction;
+              setDisclosureAccepted(true);
+              setDisclosureAction(null);
+              action(true);
+            }}>I understand and continue</button>
             <button type="button" className="ptm-btn-secondary" onClick={() => setDisclosureAction(null)}>Cancel</button>
           </div>
         </div>
