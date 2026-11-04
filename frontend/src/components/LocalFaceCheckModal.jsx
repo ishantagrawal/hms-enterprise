@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { verifyLocalBlinkGesture } from '../utils/faceBiometrics';
+import { captureLivenessEmbedding } from '../utils/faceEmbedding';
 import './LocalFaceCheckModal.css';
 
-export default function LocalFaceCheckModal({ onResult, purpose = 'attendance' }) {
+export default function LocalFaceCheckModal({ onResult, purpose = 'attendance', challenge }) {
   const videoRef = useRef(null);
   const onResultRef = useRef(onResult);
   const [status, setStatus] = useState('Requesting camera permission…');
@@ -32,10 +33,18 @@ export default function LocalFaceCheckModal({ onResult, purpose = 'attendance' }
         }
         videoElement.srcObject = stream;
         await videoElement.play();
-        await verifyLocalBlinkGesture(videoElement, setStatus, controller.signal);
+        const liveness = purpose === 'attendance'
+          ? await captureLivenessEmbedding(videoElement, setStatus, controller.signal, challenge)
+          : await verifyLocalBlinkGesture(videoElement, setStatus, controller.signal);
         if (active) {
           if (!videoElement.videoWidth || !videoElement.videoHeight) {
             throw new Error('The camera did not provide a usable face frame. Try again.');
+          }
+          if (purpose === 'attendance') {
+            stream.getTracks().forEach((track) => track.stop());
+            videoElement.srcObject = null;
+            onResultRef.current({ success: true, ...liveness });
+            return;
           }
           const canvas = document.createElement('canvas');
           canvas.width = videoElement.videoWidth;
@@ -64,14 +73,14 @@ export default function LocalFaceCheckModal({ onResult, purpose = 'attendance' }
       stream?.getTracks().forEach((track) => track.stop());
       if (videoElement) videoElement.srcObject = null;
     };
-  }, []);
+  }, [challenge, purpose]);
 
   return (
     <div className="ptm-face-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="ptm-face-check-title">
       <section className="ptm-face-modal">
         <h2 id="ptm-face-check-title">{purpose === 'enrollment' ? 'Enroll face verification' : 'Verify your identity'}</h2>
         <p>
-          Center your face and blink both eyes once. One frame will be sent over the secure connection for
+          Center your face and blink both eyes once. {purpose === 'attendance' ? 'Your 128D face embedding stays on this device.' : 'One enrollment frame is sent over the secure connection for'}
           {purpose === 'enrollment'
             ? ' enrollment and stored encrypted for future 1:1 checks.'
             : ' a 1:1 check against your encrypted enrollment reference; the live frame is not retained.'}

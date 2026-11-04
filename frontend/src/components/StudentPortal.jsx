@@ -19,7 +19,6 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
       ? 'attendance'
       : 'home'
   ));
-  const [developerSimulateBeacon, setDeveloperSimulateBeacon] = useState(false);
   usePortalBackNavigation(page, setPage);
   const [dataLoading, setDataLoading] = useState(false);
   const leavePassVersionRef = useRef(0);
@@ -1071,8 +1070,6 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
                 user={safeUser}
                 hostels={hostelConfig}
                 initialLogs={attendanceLogs}
-                developerSimulateBeacon={developerSimulateBeacon}
-                onDeveloperSimulateBeaconChange={setDeveloperSimulateBeacon}
                 onLogsChange={(next) => updateAttendanceLogs(next, true)}
                 onUserUpdate={onUserUpdate}
               />

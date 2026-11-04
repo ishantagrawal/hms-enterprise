@@ -152,21 +152,21 @@ The Founder enables `attendance` and `gate_outpass` per college. Before taking
 attendance, each Warden configures the hostel's attendance start/end times and
 the advertised BLE beacon name for each wing. Wardens can start a new roll call
 as often as needed during that window; each start creates a distinct session.
-Students scan for the assigned beacon for up to three seconds, complete the
-local blink interaction, and send one camera frame to `/api/attendance/verify-identity`.
-The backend performs a strict 1:1 Facenet comparison against the enrolled
-reference before recording attendance. The older client-only
+Students collect at least three advertisements from the assigned beacon for
+1.5 seconds, complete a short-lived flash/blink/head-gesture challenge, and
+send only a normalized 128-float on-device embedding to
+`/api/attendance/verify-identity`. The backend performs a cosine comparison
+against the encrypted 128D enrollment vector. The older client-only
 `/api/attendance/mark` path is disabled. Android and iOS builds use passive BLE
 scanning and request camera/Bluetooth access through the operating system.
 Attendance requires an active Warden roll call. Wardens can add reasoned
 manual exceptions for students who cannot use their camera or device.
 
-The enrollment flow requires explicit student confirmation. The server stores
-one encrypted enrollment reference image; live attendance frames are compared
-in memory and are not persisted. A random device possession token is kept in
-app preferences; it is not hardware-backed and can be copied or reset. The
-server stores only its SHA-256 hash. BLE device names and RSSI can also be
-spoofed; face matching is not a guarantee of liveness or fraud prevention.
+The enrollment flow requires explicit student confirmation. DeepFace is used
+only once during enrollment to create an encrypted 128D reference vector.
+Regular attendance never uploads a camera frame. Android enrollment registers
+a StrongBox-first P-256 signing key (TEE fallback); the server stores the
+public key and verifies each canonical attendance payload.
 
 The backend is pinned to Python 3.11.9 in `.python-version`. DeepFace's
 headless OpenCV contrib package provides the OpenCV API without GUI libraries
@@ -204,17 +204,17 @@ single-use, RETURN requires OUT first, and scans outside the approved window
 are rejected.
 
 The Warden opens a two-minute device-enrollment window for a resident. The
-student registers the app-stored device token during that window. The Warden
-can enable a per-hostel Test Mode toggle for supervised testing; simulated
-beacons bypass physical proximity and must be disabled for real roll calls.
-The student portal's temporary Developer Test Mode checkbox submits the fixed
-`WING-D-BEACON` / `-50 dBm` mock through the same server-side face verification
-and attendance API; it remains subject to the Warden's server-side Test Mode
-setting.
+student registers the app-stored device token during that window. Production
+attendance accepts only a signed `HMS-<WING_ID>-<8_CHAR_HMAC>` beacon within
+the current rolling time window and stronger than -80 dBm. Student-controlled
+beacon simulation is not available; supervised test overrides must be
+explicitly scoped and time-limited by an authorized Warden.
 
 The Face Landmarker model and required WebAssembly runtimes are bundled under
-`frontend/public/models/` for offline use in native builds. Cache Storage keeps
-the model available after its first load in supported browsers.
+`frontend/public/models/` for offline use in native builds. Supply the
+quantized MobileFaceNet ONNX asset as
+`frontend/public/models/mobilefacenet.onnx` (or set
+`VITE_FACE_EMBEDDING_MODEL_URL`) before release.
 
 Digital leave requests support Day Outpass and Home Leave (up to 30 calendar
 days). Wardens review requests, can call the listed parent/guardian number, and

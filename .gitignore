@@ -9,3 +9,5 @@ node_modules/
 *.sqlite*
 *.jks
 *.keystore
+local.properties
+android/app/release/

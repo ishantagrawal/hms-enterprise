@@ -3,6 +3,7 @@ import { apiFetch, API_URL } from './api';
 import { DashboardCardSkeleton, GridCardSkeleton } from './components/SkeletonLoader';
 import { signInWithNativeGoogle, usesNativeGoogleSignIn } from './auth/googleSignIn';
 import { CapacitorUpdater } from '@capgo/capacitor-updater';
+import PrivacyAndDataDeletion from './components/PrivacyAndDataDeletion';
 
 window.GLOBAL_SILICON_VALLEY_CSS = '';
 
@@ -15,7 +16,7 @@ const GateSecurityPortal = lazy(() => import('./components/CampusSecurity').then
 const loadStudentPortal = () => import('./components/StudentPortal');
 const StudentPortal = lazy(loadStudentPortal);
 
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '312566505039-bvh0tfh4gao8bi6jqs65fkgni7pbn5bn.apps.googleusercontent.com';
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
 function ProfileRow({ label, value }) {
   return (
@@ -40,6 +41,13 @@ function profileDraftFromUser(user) {
 }
 
 export default function App() {
+  if (window.location.pathname === '/privacy-and-data-deletion') {
+    return <PrivacyAndDataDeletion />;
+  }
+  return <AuthenticatedApp />;
+}
+
+function AuthenticatedApp() {
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
   const [loginError, setLoginError] = useState(null);

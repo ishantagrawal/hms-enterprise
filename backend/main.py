@@ -14,6 +14,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from io import BytesIO
 from contextlib import asynccontextmanager
 from html import escape as html_escape
 from datetime import datetime, time as datetime_time, timedelta, timezone
@@ -45,6 +46,9 @@ import google.auth.exceptions
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2 import id_token
 from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.exceptions import InvalidSignature
 
 try:
     import psycopg2
@@ -73,23 +77,46 @@ async def app_lifespan(application: FastAPI):
             pass
 
 
-app = FastAPI(title="svnitcampus - Production Backend", lifespan=app_lifespan)
+ENVIRONMENT = os.getenv("ENV", os.getenv("ENVIRONMENT", "development")).strip().lower()
+IS_PRODUCTION = ENVIRONMENT == "production"
+REQUIRED_PRODUCTION_ENV = ("DATABASE_URL", "JWT_SECRET", "FACE_ENCRYPTION_KEY", "BEACON_HMAC_SECRETS_JSON")
+if IS_PRODUCTION:
+    missing_environment = [name for name in REQUIRED_PRODUCTION_ENV if not os.getenv(name, "").strip()]
+    if missing_environment:
+        raise RuntimeError(
+            "Missing required production environment variables: "
+            + ", ".join(missing_environment)
+        )
+
+app = FastAPI(
+    title="svnitcampus - Production Backend",
+    lifespan=app_lifespan,
+    docs_url=None if IS_PRODUCTION else "/docs",
+    redoc_url=None if IS_PRODUCTION else "/redoc",
+    openapi_url=None if IS_PRODUCTION else "/openapi.json",
+)
 logger = logging.getLogger(__name__)
 
 # Compress payloads > 500 bytes by ~80% for fast campus Wi-Fi transfer
 app.add_middleware(GZipMiddleware, minimum_size=500)
 
-GOOGLE_CLIENT_ID = os.getenv(
-    "GOOGLE_CLIENT_ID",
-    "312566505039-bvh0tfh4gao8bi6jqs65fkgni7pbn5bn.apps.googleusercontent.com",
-)
-AUTH_SECRET = os.getenv("AUTH_SECRET", "").strip()
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+if IS_PRODUCTION and not GOOGLE_CLIENT_ID:
+    raise RuntimeError("GOOGLE_CLIENT_ID must be configured in production.")
+AUTH_SECRET = (os.getenv("JWT_SECRET") or os.getenv("AUTH_SECRET") or "").strip()
 if AUTH_SECRET and len(AUTH_SECRET) < 32:
     raise RuntimeError("AUTH_SECRET must contain at least 32 characters.")
-if not AUTH_SECRET and os.getenv("DATABASE_URL", "").strip():
+if not AUTH_SECRET and IS_PRODUCTION:
     raise RuntimeError("AUTH_SECRET must be configured when DATABASE_URL is set.")
 AUTH_SECRET = AUTH_SECRET or secrets.token_urlsafe(48)
 FACE_ENCRYPTION_KEY = os.getenv("FACE_ENCRYPTION_KEY", "").strip()
+BEACON_HMAC_SECRETS_JSON = os.getenv("BEACON_HMAC_SECRETS_JSON", "").strip()
+try:
+    BEACON_HMAC_SECRETS = json.loads(BEACON_HMAC_SECRETS_JSON or "{}")
+except json.JSONDecodeError as error:
+    raise RuntimeError("BEACON_HMAC_SECRETS_JSON must be valid JSON.") from error
+if not isinstance(BEACON_HMAC_SECRETS, dict):
+    raise RuntimeError("BEACON_HMAC_SECRETS_JSON must be a JSON object.")
 DEFAULT_ADMIN_PASS = ""
 PASSWORD_HASH_PREFIX = "pbkdf2_sha256$"
 PASSWORD_HASH_ITERATIONS = 600_000
@@ -117,7 +144,11 @@ ACTIVE_COLLEGE_ID = contextvars.ContextVar("active_college_id", default="SVNIT")
 _TENANT_CACHE: Dict[str, tuple] = {}
 _TENANT_CACHE_LOCK = threading.Lock()
 
-CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "*").split(",") if origin.strip()]
+CORS_ORIGINS = [
+    "https://svnitcampus.in",
+    "https://localhost",
+    "capacitor://localhost",
+]
 
 app.add_middleware(
     CORSMiddleware,
@@ -126,6 +157,37 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+RATE_LIMITS = {
+    "/api/auth/": (10, 60),
+    "/api/biometric/register": (5, 300),
+    "/api/biometric/beacon-mark": (12, 60),
+    "/api/attendance/verify-identity": (12, 60),
+}
+_RATE_LIMIT_STATE = {}
+_RATE_LIMIT_LOCK = threading.Lock()
+
+
+@app.middleware("http")
+async def rate_limit_sensitive_routes(request: Request, call_next):
+    limit_config = next(
+        ((limit, window) for path, (limit, window) in RATE_LIMITS.items()
+         if request.url.path.startswith(path)),
+        None,
+    )
+    if limit_config:
+        limit, window = limit_config
+        authorization = request.headers.get("authorization", "")
+        identity = f"user:{hashlib.sha256(authorization.encode()).hexdigest()}" if authorization else f"ip:{request.client.host if request.client else 'unknown'}"
+        key = (request.url.path, identity)
+        now = time.monotonic()
+        with _RATE_LIMIT_LOCK:
+            timestamps = [stamp for stamp in _RATE_LIMIT_STATE.get(key, []) if now - stamp < window]
+            if len(timestamps) >= limit:
+                return JSONResponse(status_code=429, content={"detail": "Too many requests. Try again later."})
+            timestamps.append(now)
+            _RATE_LIMIT_STATE[key] = timestamps
+    return await call_next(request)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 DB_FILE = os.getenv("DB_FILE", "hms.db")
@@ -250,6 +312,14 @@ def db_exec(conn, query: str, params: tuple = ()):
         query = query.replace("?", "%s")
     cur.execute(query, params)
     return cur
+
+
+def db_fetchone(conn, query: str, params: tuple = ()):
+    cursor = db_exec(conn, query, params)
+    try:
+        return cursor.fetchone()
+    finally:
+        cursor.close()
 
 
 def invalidate_user_cache(user_id: Optional[str] = None):
@@ -679,6 +749,18 @@ def init_db():
         )
     ''')
     db_exec(conn, '''
+        CREATE TABLE IF NOT EXISTS attendance_challenges (
+            college_id TEXT NOT NULL,
+            nonce TEXT NOT NULL,
+            student_id TEXT NOT NULL,
+            colors_json TEXT NOT NULL,
+            gesture TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            consumed_at TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (college_id, nonce)
+        )
+    ''')
+    db_exec(conn, '''
         CREATE TABLE IF NOT EXISTS attendance_logs (
             college_id TEXT NOT NULL DEFAULT 'SVNIT',
             log_id TEXT NOT NULL,
@@ -694,6 +776,17 @@ def init_db():
             rssi INTEGER,
             verified_method TEXT NOT NULL DEFAULT '',
             PRIMARY KEY (college_id, log_id)
+        )
+    ''')
+    db_exec(conn, '''
+        CREATE TABLE IF NOT EXISTS warden_test_overrides (
+            college_id TEXT NOT NULL,
+            override_id TEXT NOT NULL,
+            student_id TEXT NOT NULL,
+            wing TEXT NOT NULL,
+            enabled_by TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            PRIMARY KEY (college_id, override_id)
         )
     ''')
     db_exec(conn, '''
@@ -915,8 +1008,11 @@ def init_db():
         ("device_hardware_id", "TEXT NOT NULL DEFAULT ''"),
         ("device_token_hash", "TEXT NOT NULL DEFAULT ''"),
         ("face_reference_encrypted", "TEXT NOT NULL DEFAULT ''"),
+        ("face_embedding_encrypted", "TEXT NOT NULL DEFAULT ''"),
+        ("device_public_key", "TEXT NOT NULL DEFAULT ''"),
         ("face_enrolled_at", "TEXT NOT NULL DEFAULT ''"),
         ("enroll_window_until", "INTEGER NOT NULL DEFAULT 0"),
+        ("consent_withdrawn_at", "TEXT NOT NULL DEFAULT ''"),
     ):
         if column_name not in user_columns:
             db_exec(conn, f"ALTER TABLE users ADD COLUMN {column_name} {column_definition}")
@@ -1567,6 +1663,7 @@ class DeviceBindingRegisterReq(BaseModel):
     device_binding_token: str
     reference_image_base64: str = Field(min_length=100, max_length=6_000_000)
     consent_confirmed: bool
+    device_public_key: str = Field(min_length=80, max_length=4096)
 
 class DeviceBeaconMarkReq(BaseModel):
     model_config = {"extra": "forbid"}
@@ -1574,8 +1671,18 @@ class DeviceBeaconMarkReq(BaseModel):
     device_binding_token: str
     wing_beacon_id: str
     rssi: int
+    raw_rotating_payload_hex: str = Field(default="", max_length=512)
+    rssi_samples: List[int] = Field(default_factory=list, min_length=3, max_length=20)
     simulated: bool = False
-    live_image_base64: str = Field(min_length=100, max_length=6_000_000)
+    embedding: List[float] = Field(min_length=128, max_length=128)
+    challenge_nonce: str = Field(min_length=20, max_length=128)
+    blink_ear_curve: List[float] = Field(min_length=3, max_length=120)
+    yaw_delta: float
+    head_gesture: str
+    rgb_reflection_delta: float
+    rgb_reflection_samples: List[List[float]] = Field(min_length=2, max_length=2)
+    signed_timestamp: int
+    signature: str = Field(min_length=80, max_length=1024)
 
 class LeaveApplyReq(BaseModel):
     leave_type: str
@@ -1611,7 +1718,7 @@ class DeviceLeaveReturnReq(BaseModel):
     wing_beacon_id: str
     rssi: int
     simulated: bool = False
-    liveness_passed: bool
+    live_image_base64: str = Field(min_length=100, max_length=6_000_000)
 
 
 def verify_google_credential(credential: str) -> dict:
@@ -1804,8 +1911,6 @@ async def require_authentication(request: Request, call_next):
         "/api/hostels",
         "/api/hostels/config",
         "/api/tenant",
-        "/api/complaints/export-pdf",
-        "/api/unicore/events/export-pdf"
     }
     if not request.url.path.startswith("/api/") or request.method == "OPTIONS":
         return await call_next(request)
@@ -3304,6 +3409,8 @@ def validate_leave_return_request(conn, request_body, request: Request, for_upda
         )
     if not -127 <= request_body.rssi <= 0:
         raise HTTPException(status_code=400, detail="Beacon RSSI must be between -127 and 0 dBm.")
+    if request_body.rssi <= -80:
+        raise HTTPException(status_code=403, detail="The beacon signal is too weak for return verification.")
 
     hostel = attendance_config_for_hostel(student["hostel_block"] or "")
     if not hostel:
@@ -3315,8 +3422,20 @@ def validate_leave_return_request(conn, request_body, request: Request, for_upda
         raise HTTPException(status_code=409, detail=f"Your Warden has not configured the {student['wing']} beacon yet.")
     if request_body.wing_beacon_id != expected_beacon:
         raise HTTPException(status_code=403, detail="The detected beacon does not match your assigned hostel wing.")
-    if request_body.simulated and not bool(hostel.get("attendance_test_mode")):
-        raise HTTPException(status_code=403, detail="Simulated BLE return verification is disabled by your Warden.")
+    if not re.fullmatch(r"HMS-[A-Za-z0-9_-]+-[A-Fa-f0-9]{8}", request_body.wing_beacon_id):
+        raise HTTPException(status_code=403, detail="The beacon identity is not a valid HMS beacon.")
+    wing_id = request_body.wing_beacon_id.split("-", 2)[1]
+    secret = BEACON_HMAC_SECRETS.get(wing_id)
+    if not isinstance(secret, str) or not any(
+        hmac.compare_digest(
+            request_body.wing_beacon_id.rsplit("-", 1)[-1].lower(),
+            hmac.new(secret.encode(), f"{wing_id}:{slot}".encode(), hashlib.sha256).hexdigest()[:8].lower(),
+        )
+        for slot in (int(time.time() // 600) - 1, int(time.time() // 600), int(time.time() // 600) + 1)
+    ):
+        raise HTTPException(status_code=403, detail="The beacon signature is invalid or expired.")
+    if request_body.simulated:
+        raise HTTPException(status_code=403, detail="Simulated BLE return verification is not available to students.")
     zone = ZoneInfo(request.state.tenant["timezone"])
     if leave_pass["from_date"] and datetime.now(zone).date().isoformat() < leave_pass["from_date"]:
         raise HTTPException(status_code=403, detail="Return verification is not available before the approved leave starts.")
@@ -3370,9 +3489,10 @@ def mark_leave_return(req: DeviceLeaveReturnReq, request: Request):
         raise HTTPException(status_code=403, detail="Only students can confirm their return.")
     conn = get_conn()
     try:
-        leave_pass, _ = validate_leave_return_request(conn, req, request, for_update=True)
-        if not req.liveness_passed:
-            raise HTTPException(status_code=403, detail="Complete the on-device blink check before confirming your return.")
+        leave_pass, student = validate_leave_return_request(conn, req, request, for_update=True)
+        if not student["face_reference_encrypted"] or not _verify_face_image(req.live_image_base64, student["face_reference_encrypted"]):
+            raise HTTPException(status_code=403, detail="Server-side liveness and face verification failed.")
+        req.live_image_base64 = ""
 
         zone = ZoneInfo(request.state.tenant["timezone"])
         now_str = datetime.now(zone).strftime("%Y-%m-%d %H:%M")
@@ -3810,7 +3930,8 @@ def student_biometric_record(conn, user_id: str, for_update: bool = False):
         f"""
         SELECT user_id, full_name, role, hostel_block, wing, room, phone,
                biometric_status, biometric_cred_id, device_hardware_id,
-               device_token_hash, face_reference_encrypted, face_enrolled_at,
+               device_token_hash, face_reference_encrypted, face_embedding_encrypted,
+               device_public_key, face_enrolled_at,
                enroll_window_until
         FROM users
         WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'{suffix}
@@ -3845,6 +3966,7 @@ def get_student_biometric_status(request: Request):
             "biometric_cred_id": student["biometric_cred_id"],
             "enroll_window_until": int(student["enroll_window_until"] or 0),
             "face_enrolled": bool(student["face_reference_encrypted"]),
+            "embedding_enrolled": bool(student["face_embedding_encrypted"]),
         }
     finally:
         conn.close()
@@ -3867,10 +3989,13 @@ def _decode_face_image(image_base64: str):
         import numpy as np
     except ImportError as error:
         raise HTTPException(status_code=503, detail="Server-side face verification dependencies are unavailable.") from error
+    image_stream = BytesIO(image_bytes)
     try:
-        image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+        image = cv2.imdecode(np.frombuffer(image_stream.getbuffer(), dtype=np.uint8), cv2.IMREAD_COLOR)
     except cv2.error as error:
         raise HTTPException(status_code=400, detail="The uploaded face image could not be decoded.") from error
+    finally:
+        image_stream.close()
     if image is None:
         raise HTTPException(status_code=400, detail="The uploaded face image could not be decoded.")
     height, width = image.shape[:2]
@@ -3907,6 +4032,68 @@ def _encrypt_face_reference(image_base64: str) -> str:
         return encrypted.decode("ascii")
     finally:
         del image
+
+
+def _embedding_cipher():
+    return _face_reference_cipher()
+
+
+def _compute_enrollment_embedding(image_base64: str) -> str:
+    image = None
+    embedding = None
+    try:
+        image = _decode_face_image(image_base64)
+        from deepface import DeepFace
+        result = DeepFace.represent(
+            img_path=image,
+            model_name="Facenet",
+            enforce_detection=True,
+            normalization="base",
+        )
+        candidate = result[0]["embedding"] if isinstance(result, list) else result["embedding"]
+        import numpy as np
+        vector = np.asarray(candidate, dtype=np.float32).reshape(-1)
+        if vector.size != 128 or not np.isfinite(vector).all():
+            raise HTTPException(status_code=400, detail="The enrollment model did not produce a valid 128D face vector.")
+        norm = float(np.linalg.norm(vector))
+        if not 0.9 <= norm <= 1.1:
+            vector = vector / norm
+        return _embedding_cipher().encrypt(vector.tobytes()).decode("ascii")
+    except ImportError as error:
+        raise HTTPException(status_code=503, detail="Enrollment face model dependencies are unavailable.") from error
+    except (KeyError, TypeError, ValueError, ZeroDivisionError) as error:
+        raise HTTPException(status_code=400, detail="A single usable face is required for enrollment.") from error
+    finally:
+        image = None
+        embedding = None
+
+
+def _verify_embedding(embedding, encrypted_reference: str) -> bool:
+    reference_bytes = b""
+    candidate = reference = None
+    try:
+        import numpy as np
+        candidate = np.asarray(embedding, dtype=np.float32)
+        if candidate.shape != (128,) or not np.isfinite(candidate).all():
+            raise HTTPException(status_code=400, detail="Embedding must contain exactly 128 finite numbers.")
+        candidate_norm = float(np.linalg.norm(candidate))
+        if not 0.95 <= candidate_norm <= 1.05:
+            raise HTTPException(status_code=400, detail="Embedding L2 norm is invalid.")
+        reference_bytes = _embedding_cipher().decrypt(encrypted_reference.encode("ascii"))
+        reference = np.frombuffer(reference_bytes, dtype=np.float32)
+        if reference.shape != (128,) or not np.isfinite(reference).all():
+            raise HTTPException(status_code=503, detail="The enrolled face vector is unavailable.")
+        reference_norm = float(np.linalg.norm(reference))
+        if reference_norm == 0:
+            raise HTTPException(status_code=503, detail="The enrolled face vector is invalid.")
+        distance = 1.0 - float(np.dot(candidate, reference) / (candidate_norm * reference_norm))
+        return math.isfinite(distance) and distance <= 0.30
+    except InvalidToken as error:
+        raise HTTPException(status_code=503, detail="The enrolled face vector is unavailable.") from error
+    finally:
+        candidate = None
+        reference = None
+        reference_bytes = b""
 
 
 def _verify_face_image(live_image_base64: str, encrypted_reference: str) -> bool:
@@ -3976,7 +4163,8 @@ def unlock_student_biometric(req: BiometricUnlockReq, request: Request):
             UPDATE users
             SET biometric_status = 'Enrollment Unlocked', biometric_cred_id = '',
                 device_hardware_id = '', device_token_hash = '',
-                face_reference_encrypted = '', face_enrolled_at = '', enroll_window_until = ?
+                face_reference_encrypted = '', face_embedding_encrypted = '',
+                device_public_key = '', face_enrolled_at = '', enroll_window_until = ?
             WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'
             """,
             (until, ACTIVE_COLLEGE_ID.get(), student_id),
@@ -4007,7 +4195,14 @@ def register_device_binding(req: DeviceBindingRegisterReq, request: Request):
     if not re.fullmatch(r"[a-f0-9]{64}", token):
         raise HTTPException(status_code=400, detail="The device binding token must be a 256-bit hexadecimal token.")
     token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
+    try:
+        public_key = serialization.load_der_public_key(base64.b64decode(req.device_public_key))
+    except (ValueError, TypeError, base64.binascii.Error) as error:
+        raise HTTPException(status_code=400, detail="The device public key is invalid.") from error
+    if not isinstance(public_key, ec.EllipticCurvePublicKey) or public_key.curve.name != "secp256r1":
+        raise HTTPException(status_code=400, detail="Only a P-256 device public key is supported.")
     encrypted_reference = _encrypt_face_reference(req.reference_image_base64)
+    encrypted_embedding = _compute_enrollment_embedding(req.reference_image_base64)
     req.reference_image_base64 = ""
     conn = get_conn()
     try:
@@ -4021,13 +4216,16 @@ def register_device_binding(req: DeviceBindingRegisterReq, request: Request):
             UPDATE users
             SET biometric_status = 'Locked', device_token_hash = ?,
                 biometric_cred_id = '', device_hardware_id = '',
-                face_reference_encrypted = ?, face_enrolled_at = ?, enroll_window_until = 0
+                face_reference_encrypted = ?, face_embedding_encrypted = ?,
+                device_public_key = ?, face_enrolled_at = ?, enroll_window_until = 0
             WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'
               AND biometric_status = 'Enrollment Unlocked' AND enroll_window_until >= ?
             """,
             (
                 token_hash,
                 encrypted_reference,
+                encrypted_embedding,
+                req.device_public_key,
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 ACTIVE_COLLEGE_ID.get(),
                 account["user_id"].upper(),
@@ -4042,10 +4240,46 @@ def register_device_binding(req: DeviceBindingRegisterReq, request: Request):
             "enroll_window_until": 0,
             "device_binding_ready": True,
             "face_enrolled": True,
+            "embedding_enrolled": True,
         }
     except DB_INTEGRITY_ERRORS as error:
         conn.rollback()
         raise HTTPException(status_code=409, detail="This device binding is already registered to another student.") from error
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@app.delete("/api/biometric/revoke-and-delete")
+def revoke_and_delete_biometric(request: Request):
+    account = request.state.user
+    if account.get("role") != "Student":
+        raise HTTPException(status_code=403, detail="Only students can withdraw their biometric consent.")
+    conn = get_conn()
+    try:
+        student = student_biometric_record(conn, account["user_id"], for_update=True)
+        if not student:
+            raise HTTPException(status_code=404, detail="Student record not found.")
+        deleted_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        db_exec(
+            conn,
+            """
+            UPDATE users
+            SET biometric_status = 'Not Enrolled',
+                biometric_cred_id = '', device_hardware_id = '',
+                device_token_hash = '', face_reference_encrypted = '',
+                face_embedding_encrypted = '', device_public_key = '',
+                face_enrolled_at = '', enroll_window_until = 0,
+                consent_withdrawn_at = ?
+            WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'
+            """,
+            (deleted_at, ACTIVE_COLLEGE_ID.get(), account["user_id"].upper()),
+        )
+        conn.commit()
+        invalidate_user_cache(account["user_id"])
+        return {"success": True, "biometric_status": "Not Enrolled", "consent_withdrawn_at": deleted_at}
     except Exception:
         conn.rollback()
         raise
@@ -4273,8 +4507,16 @@ def verify_device_binding(student, device_binding_token: str):
 
 
 def verify_device_beacon(student, req, hostel):
+    if len(req.rssi_samples) < 3 or any(not -127 <= sample <= 0 for sample in req.rssi_samples):
+        raise HTTPException(status_code=400, detail="At least three valid beacon RSSI samples are required.")
+    if any(sample > -40 or sample < -90 for sample in req.rssi_samples):
+        raise HTTPException(status_code=403, detail="Beacon RSSI samples are outside the trusted proximity range.")
+    if len(set(req.rssi_samples)) == 1:
+        raise HTTPException(status_code=403, detail="Beacon samples are too static to verify a live advertisement.")
     if not -127 <= req.rssi <= 0:
         raise HTTPException(status_code=400, detail="Beacon RSSI must be between -127 and 0 dBm.")
+    if req.rssi <= -80:
+        raise HTTPException(status_code=403, detail="The beacon signal is too weak for attendance verification.")
     if str(student["hostel_block"] or "").casefold() == "day scholar":
         raise HTTPException(status_code=403, detail="Beacon attendance is available only to hostel residents.")
     if not student["wing"]:
@@ -4285,9 +4527,62 @@ def verify_device_beacon(student, req, hostel):
         raise HTTPException(status_code=409, detail=f"Your Warden has not configured the {student['wing']} beacon yet.")
     if req.wing_beacon_id != expected_beacon:
         raise HTTPException(status_code=403, detail="The detected beacon does not match your assigned hostel wing.")
+    if not re.fullmatch(r"HMS-[A-Za-z0-9_-]+-[A-Fa-f0-9]{8}", req.wing_beacon_id):
+        raise HTTPException(status_code=403, detail="The beacon identity is not a valid HMS beacon.")
+    wing_id = req.wing_beacon_id.split("-", 2)[1]
+    secret = BEACON_HMAC_SECRETS.get(wing_id)
+    if not isinstance(secret, str) or not secret:
+        raise HTTPException(status_code=403, detail="The beacon is not registered for this wing.")
+    valid_name = any(hmac.compare_digest(
+        req.wing_beacon_id.rsplit("-", 1)[-1].lower(),
+        hmac.new(secret.encode("utf-8"), f"{wing_id}:{slot}".encode("utf-8"), hashlib.sha256).hexdigest()[:8].lower(),
+    ) for slot in (int(time.time() // 600) - 1, int(time.time() // 600), int(time.time() // 600) + 1))
+    payload = req.raw_rotating_payload_hex.strip().lower()
+    if payload and (len(payload) not in (8, 16) or not re.fullmatch(r"[0-9a-f]+", payload)):
+        raise HTTPException(status_code=400, detail="The rotating beacon payload must be 4 or 8 bytes of hexadecimal data.")
+    valid_payload = not payload or any(hmac.compare_digest(
+        payload,
+        hmac.new(secret.encode("utf-8"), str(slot).encode("ascii"), hashlib.sha256).hexdigest()[:len(payload)],
+    ) for slot in (int(time.time() // 60) - 1, int(time.time() // 60), int(time.time() // 60) + 1))
+    if not valid_name or not valid_payload:
+        raise HTTPException(status_code=403, detail="The beacon signature is invalid or expired.")
     if req.simulated:
-        if not bool(hostel.get("attendance_test_mode")):
-            raise HTTPException(status_code=403, detail="Simulated BLE attendance is disabled by your Warden.")
+        conn = get_conn()
+        try:
+            override = db_fetchone(
+                conn,
+                """
+                SELECT 1 FROM warden_test_overrides
+                WHERE college_id = ? AND UPPER(student_id) = ? AND LOWER(wing) = LOWER(?)
+                  AND expires_at > ?
+                """,
+                (ACTIVE_COLLEGE_ID.get(), student["user_id"].upper(), student["wing"],
+                 datetime.now(timezone.utc).isoformat()),
+            )
+        finally:
+            conn.close()
+        if not override:
+            raise HTTPException(status_code=403, detail="Test mode requires an active Warden override for this student.")
+
+
+def verify_device_signature(student, req):
+    if not student["device_public_key"]:
+        raise HTTPException(status_code=401, detail="This device has no registered hardware signing key.")
+    if abs(int(time.time()) - req.signed_timestamp) > 30:
+        raise HTTPException(status_code=401, detail="The device attendance signature has expired.")
+    canonical = json.dumps({
+        "student_id": student["user_id"].upper(),
+        "timestamp": req.signed_timestamp,
+        "challenge_nonce": req.challenge_nonce,
+        "beacon_payload": req.raw_rotating_payload_hex.lower(),
+        "embedding": req.embedding,
+    }, sort_keys=True, separators=(",", ":"))
+    try:
+        public_key = serialization.load_der_public_key(base64.b64decode(student["device_public_key"]))
+        signature = base64.b64decode(req.signature, validate=True)
+        public_key.verify(signature, canonical.encode("utf-8"), ec.ECDSA(hashes.SHA256()))
+    except (ValueError, TypeError, base64.binascii.Error, InvalidSignature) as error:
+        raise HTTPException(status_code=401, detail="The device attendance signature is invalid.") from error
 
 
 def attendance_beacon_challenge_purpose(student, req, attendance_date: str) -> str:
@@ -4313,6 +4608,33 @@ def attendance_beacon_mark_options(req: AttendanceBeaconOptionsReq, request: Req
     raise HTTPException(status_code=410, detail="Passkey attendance is disabled. Use server-side face verification.")
 
 
+@app.get("/api/attendance/challenge")
+def attendance_challenge(request: Request):
+    account = request.state.user
+    if account.get("role") != "Student":
+        raise HTTPException(status_code=403, detail="Only students can request an attendance challenge.")
+    nonce = secrets.token_urlsafe(32)
+    colors = [random.choice(["#00FFFF", "#FFBF00", "#FF00FF", "#00FF66"]), random.choice(["#FFBF00", "#00FFFF", "#3366FF", "#FF3366"])]
+    while colors[1] == colors[0]:
+        colors[1] = random.choice(["#00FFFF", "#FFBF00", "#FF00FF", "#00FF66", "#3366FF", "#FF3366"])
+    gesture = random.choice(["TILT_LEFT", "TILT_RIGHT", "NOD"])
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=30)
+    conn = get_conn()
+    try:
+        db_exec(conn, "DELETE FROM attendance_challenges WHERE college_id = ? AND (expires_at <= ? OR consumed_at <> '')",
+                (ACTIVE_COLLEGE_ID.get(), datetime.now(timezone.utc).isoformat()))
+        db_exec(conn, """
+            INSERT INTO attendance_challenges
+                (college_id, nonce, student_id, colors_json, gesture, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (ACTIVE_COLLEGE_ID.get(), nonce, account["user_id"].upper(), json.dumps(colors),
+              gesture, expires_at.isoformat(timespec="seconds")))
+        conn.commit()
+        return {"challenge_nonce": nonce, "colors": colors, "gesture": gesture, "expires_at": expires_at.isoformat()}
+    finally:
+        conn.close()
+
+
 @app.post("/api/attendance/mark")
 def mark_beacon_attendance(req: DeviceBeaconMarkReq, request: Request):
     del req, request
@@ -4336,8 +4658,40 @@ def verify_identity_and_mark_attendance(req: DeviceBeaconMarkReq, request: Reque
         if not hostel:
             raise HTTPException(status_code=404, detail="Your hostel does not have attendance settings.")
         verify_device_beacon(student, req, hostel)
-        if not student["face_reference_encrypted"]:
+        if not student["face_embedding_encrypted"]:
             raise HTTPException(status_code=403, detail="Enroll face verification during the Warden-authorized setup window.")
+        challenge = db_fetchone(
+            conn,
+            """SELECT colors_json, gesture, expires_at FROM attendance_challenges
+               WHERE college_id = ? AND nonce = ? AND UPPER(student_id) = ?
+                 AND consumed_at = ''""",
+            (ACTIVE_COLLEGE_ID.get(), req.challenge_nonce, student["user_id"].upper()),
+        )
+        if not challenge or datetime.fromisoformat(challenge["expires_at"]) <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=403, detail="The attendance liveness challenge is missing or expired.")
+        if req.head_gesture != challenge["gesture"] or req.yaw_delta < 0.08:
+            raise HTTPException(status_code=401, detail="The required head gesture was not completed.")
+        reflection_samples = req.rgb_reflection_samples
+        if (
+            len(reflection_samples) != 2
+            or any(len(sample) != 3 or any(not math.isfinite(value) for value in sample) for sample in reflection_samples)
+            or not math.isfinite(req.rgb_reflection_delta)
+            or req.rgb_reflection_delta < 0.08
+        ):
+            raise HTTPException(status_code=401, detail="The screen-flash reflection could not be verified.")
+        expected_colors = json.loads(challenge["colors_json"])
+        expected_delta = []
+        for color in expected_colors:
+            rgb = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+            total = sum(rgb) or 1
+            expected_delta.append([channel / total for channel in rgb])
+        expected_vector = [expected_delta[0][index] - expected_delta[1][index] for index in range(3)]
+        observed_vector = [reflection_samples[0][index] - reflection_samples[1][index] for index in range(3)]
+        if sum(left * right for left, right in zip(expected_vector, observed_vector)) <= 0:
+            raise HTTPException(status_code=401, detail="The screen-flash reflection does not match the challenge colors.")
+        if min(req.blink_ear_curve) >= 0.20:
+            raise HTTPException(status_code=401, detail="A complete blink was not detected.")
+        verify_device_signature(student, req)
         attendance_date = attendance_window_date(hostel, request.state.tenant["timezone"])
         now_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
         session = db_exec(
@@ -4352,12 +4706,7 @@ def verify_identity_and_mark_attendance(req: DeviceBeaconMarkReq, request: Reque
         ).fetchone()
         if not session:
             raise HTTPException(status_code=409, detail="Your Warden has not started an active roll call for this hostel.")
-        live_image_base64 = req.live_image_base64
-        try:
-            identity_verified = _verify_face_image(live_image_base64, student["face_reference_encrypted"])
-        finally:
-            live_image_base64 = ""
-            req.live_image_base64 = ""
+        identity_verified = _verify_embedding(req.embedding, student["face_embedding_encrypted"])
         if not identity_verified:
             raise HTTPException(
                 status_code=401,
@@ -4402,6 +4751,9 @@ def verify_identity_and_mark_attendance(req: DeviceBeaconMarkReq, request: Reque
                 req.rssi,
             ),
         )
+        conn.commit()
+        db_exec(conn, "UPDATE attendance_challenges SET consumed_at = ? WHERE college_id = ? AND nonce = ?",
+                (now_utc, ACTIVE_COLLEGE_ID.get(), req.challenge_nonce))
         conn.commit()
         return {
             "success": True,
@@ -5623,6 +5975,8 @@ def create_complaint(req: ComplaintCreateReq, request: Request):
 @app.post("/api/complaints/update")
 @app.post("/api/complaints/staff-resolve")
 async def staff_resolve(request: Request):
+    if request.state.user.get("role") not in {"Warden", "Dean", "Founder", "Staff"}:
+        raise HTTPException(status_code=403, detail="Staff authorization is required.")
     body = await request.json()
     ticket_id = body.get("ticket_id", "")
     status = body.get("status", "Awaiting Confirmation")
@@ -5632,11 +5986,11 @@ async def staff_resolve(request: Request):
     conn = get_conn()
     db_exec(
         conn,
-        "UPDATE complaints SET status = ?, staff_remark = ?, resolved_at = ? WHERE ticket_id = ?",
-        (status, remark, resolved_at, ticket_id)
+        "UPDATE complaints SET status = ?, staff_remark = ?, resolved_at = ? WHERE college_id = ? AND ticket_id = ?",
+        (status, remark, resolved_at, ACTIVE_COLLEGE_ID.get(), ticket_id)
     )
     conn.commit()
-    row = db_exec(conn, "SELECT * FROM complaints WHERE ticket_id = ?", (ticket_id,)).fetchone()
+    row = db_exec(conn, "SELECT * FROM complaints WHERE college_id = ? AND ticket_id = ?", (ACTIVE_COLLEGE_ID.get(), ticket_id)).fetchone()
     conn.close()
     return {"success": True, "ticket": dict(row) if row else {}}
 
@@ -5645,20 +5999,26 @@ async def staff_resolve(request: Request):
 def student_verify(req: StudentVerifyReq, request: Request):
     new_status = "Completed" if req.satisfied else "Reopened"
     conn = get_conn()
-    db_exec(conn, "UPDATE complaints SET status = ? WHERE ticket_id = ?", (new_status, req.ticket_id))
+    db_exec(
+        conn,
+        "UPDATE complaints SET status = ? WHERE college_id = ? AND ticket_id = ? AND UPPER(student_id) = ?",
+        (new_status, ACTIVE_COLLEGE_ID.get(), req.ticket_id, request.state.user["user_id"].upper()),
+    )
     conn.commit()
-    row = db_exec(conn, "SELECT * FROM complaints WHERE ticket_id = ?", (req.ticket_id,)).fetchone()
+    row = db_exec(conn, "SELECT * FROM complaints WHERE college_id = ? AND ticket_id = ? AND UPPER(student_id) = ?", (ACTIVE_COLLEGE_ID.get(), req.ticket_id, request.state.user["user_id"].upper())).fetchone()
     conn.close()
     return {"success": True, "ticket": dict(row) if row else {}}
 
 
 @app.get("/api/complaints/export-pdf", response_class=HTMLResponse)
-def export_pdf(hostel_block: str = "All"):
+def export_pdf(hostel_block: str = "All", request: Request = None):
+    if request.state.user.get("role") not in {"Warden", "Dean", "Founder", "Staff"}:
+        raise HTTPException(status_code=403, detail="Staff authorization is required.")
     conn = get_conn()
     if hostel_block != "All":
-        rows = db_exec(conn, "SELECT * FROM complaints WHERE LOWER(hostel_block) = LOWER(?)", (hostel_block,)).fetchall()
+        rows = db_exec(conn, "SELECT * FROM complaints WHERE college_id = ? AND LOWER(hostel_block) = LOWER(?)", (ACTIVE_COLLEGE_ID.get(), hostel_block)).fetchall()
     else:
-        rows = db_exec(conn, "SELECT * FROM complaints").fetchall()
+        rows = db_exec(conn, "SELECT * FROM complaints WHERE college_id = ?", (ACTIVE_COLLEGE_ID.get(),)).fetchall()
     conn.close()
     tr_html = "".join([
         f"<tr><td>{html_escape(str(c['ticket_id'] or ''))}</td><td>{html_escape(str(c['student_name'] or ''))} ({html_escape(str(c['student_id'] or ''))})</td><td>{html_escape(str(c['hostel_block'] or ''))} ({html_escape(str(c['room'] or ''))})</td><td>{html_escape(str(c['routed_to'] or ''))}</td><td>{html_escape(str(c['summary'] or ''))}</td><td>{html_escape(str(c['status'] or ''))}</td><td>{html_escape(str(c['created_at'] or ''))}</td></tr>"
@@ -5678,7 +6038,9 @@ def export_pdf(hostel_block: str = "All"):
 
 
 @app.get("/api/unicore/events/export-pdf", response_class=HTMLResponse)
-def export_events_pdf(year: str = "2026", club_id: str = "All"):
+def export_events_pdf(year: str = "2026", club_id: str = "All", request: Request = None):
+    if request.state.user.get("role") not in {"Dean", "Founder", "Staff"}:
+        raise HTTPException(status_code=403, detail="Dean or staff authorization is required.")
     conn = get_conn()
     rows = db_exec(conn, "SELECT * FROM events WHERE date LIKE ? AND (status = 'Approved' OR status = 'Completed')", (f"{year}%",)).fetchall()
     conn.close()
@@ -5853,7 +6215,9 @@ def propose_event(req: EventRequisitionReq, request: Request):
 
 
 @app.post("/api/unicore/events/approve")
-def approve_event(event_id: str = Query(...), action: str = Query(...)):
+def approve_event(event_id: str = Query(...), action: str = Query(...), request: Request = None):
+    if request.state.user.get("role") not in {"Dean", "Founder"}:
+        raise HTTPException(status_code=403, detail="Dean authorization is required.")
     conn = get_conn()
     db_exec(conn, "UPDATE events SET status = ? WHERE event_id = ?", (action, event_id))
     conn.commit()
@@ -6032,7 +6396,9 @@ def propose_notice(req: NoticeCreateReq, request: Request):
 
 
 @app.post("/api/notices/approve")
-def approve_notice(notice_id: str = Query(...), action: str = Query(...)):
+def approve_notice(notice_id: str = Query(...), action: str = Query(...), request: Request = None):
+    if request.state.user.get("role") not in {"Dean", "Founder"}:
+        raise HTTPException(status_code=403, detail="Dean authorization is required.")
     conn = get_conn()
     db_exec(conn, "UPDATE notices SET status = ? WHERE notice_id = ?", (action, notice_id))
     conn.commit()

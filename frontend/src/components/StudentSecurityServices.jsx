@@ -3,12 +3,20 @@ import { BleClient, ScanMode } from '@capacitor-community/bluetooth-le';
 import { apiFetch } from '../api';
 import { getCached, setCached } from '../cache';
 import { getDeviceBindingToken, getOrCreateDeviceBindingToken } from '../utils/deviceBinding';
+import { getHardwarePublicKey, signAttendancePayload } from '../utils/hardwareAuth';
 import LocalFaceCheckModal from './LocalFaceCheckModal';
 import { ListRowSkeleton } from './SkeletonLoader';
 
 async function responseData(response, fallback) {
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.detail || fallback);
+  if (!response.ok) {
+    const detail = Array.isArray(data.detail)
+      ? data.detail.map((item) => typeof item === 'object' ? (item.msg || item.message || JSON.stringify(item)) : String(item)).join('; ')
+      : typeof data.detail === 'object' && data.detail !== null
+        ? (data.detail.msg || data.detail.message || JSON.stringify(data.detail))
+        : data.detail;
+    throw new Error(detail || data.message || fallback);
+  }
   return data;
 }
 
@@ -35,7 +43,6 @@ export function StudentLeavePassPanel({ apiUrl, user, hostels = [], initialPasse
   const [pendingReturn, setPendingReturn] = useState(null);
   const [clock, setClock] = useState(() => new Date());
   const expectedBeacon = hostels.find((hostel) => hostel.name === user?.hostel_block)?.wing_beacons?.[user?.wing] || '';
-  const testModeEnabled = Boolean(hostels.find((hostel) => hostel.name === user?.hostel_block)?.attendance_test_mode);
   const digitalPasses = passes.filter((pass) => Boolean(pass.leave_type));
 
   // Bootstrap owns the server list; synchronize it when the parent refreshes.
@@ -125,7 +132,7 @@ export function StudentLeavePassPanel({ apiUrl, user, hostels = [], initialPasse
     }
   };
 
-  const confirmReturn = async (pass, simulated = false) => {
+  const confirmReturn = async (pass) => {
     if (returningPassId) return;
     setError('');
     setMessage('');
@@ -140,9 +147,7 @@ export function StudentLeavePassPanel({ apiUrl, user, hostels = [], initialPasse
     setReturningPassId(pass.pass_id);
     const previousPasses = passes;
     try {
-      const beacon = simulated
-        ? { wing_beacon_id: expectedBeacon, rssi: -58, simulated: true }
-        : await scanWingBeacon(expectedBeacon);
+      const beacon = await scanWingBeacon(expectedBeacon);
       setPendingReturn({ pass, beacon, previousPasses });
     } catch (returnError) {
       savePasses(previousPasses);
@@ -168,7 +173,7 @@ export function StudentLeavePassPanel({ apiUrl, user, hostels = [], initialPasse
       const requestBody = {
         pass_id: pass.pass_id,
         device_binding_token: deviceBindingToken,
-        liveness_passed: true,
+        live_image_base64: result.imageBase64 || '',
         ...beacon
       };
       const nowText = clock.toLocaleString();
@@ -296,16 +301,6 @@ export function StudentLeavePassPanel({ apiUrl, user, hostels = [], initialPasse
                           >
                             {returningPassId === pass.pass_id ? 'Scanning beacon and verifying…' : '📡 Confirm Return at Hostel Wing Beacon'}
                           </button>
-                          {testModeEnabled && expectedBeacon && (
-                            <button
-                              type="button"
-                              className="ptm-btn-secondary"
-                              disabled={Boolean(returningPassId) || user?.biometric_status !== 'Locked'}
-                              onClick={() => confirmReturn(pass, true)}
-                            >
-                              Use local development test beacon
-                            </button>
-                          )}
                           {!expectedBeacon && <span className="ptm-list-sub">Your Warden must configure the {user?.wing || 'assigned wing'} beacon.</span>}
                           {user?.biometric_status !== 'Locked' && <span className="ptm-list-sub">Ask your Warden to unlock device enrollment before return verification.</span>}
                         </div>
@@ -464,10 +459,14 @@ function currentEpochSeconds() {
   return Math.floor(Date.now() / 1000);
 }
 
-async function scanWingBeacon(expectedBeaconId) {
+async function scanWingBeacon(expectedBeaconId, disclosureConfirmed = false) {
+  if (!disclosureConfirmed && !window.confirm('Camera is used strictly for 1:1 liveness attendance. Bluetooth is used strictly to verify indoor hostel wing proximity. Continue?')) {
+    throw new Error('Bluetooth disclosure was not accepted.');
+  }
   await BleClient.initialize();
   return new Promise((resolve, reject) => {
     let settled = false;
+    const packets = [];
     const finish = (error, beacon) => {
       if (settled) return;
       settled = true;
@@ -479,19 +478,32 @@ async function scanWingBeacon(expectedBeaconId) {
       else resolve(beacon);
     };
     const timeoutId = window.setTimeout(
-      () => finish(new Error('No assigned wing beacon found in 3 seconds. Move closer and try again.')),
-      3000
+      () => {
+        if (packets.length < 3) finish(new Error('At least three live beacon advertisements are required.'));
+        else finish(null, {
+          wing_beacon_id: expectedBeaconId,
+          rssi: packets[packets.length - 1].rssi,
+          rssi_samples: packets.map((packet) => packet.rssi),
+          raw_rotating_payload_hex: packets[packets.length - 1].payload,
+          simulated: false
+        });
+      },
+      1500
     );
     BleClient.requestLEScan(
       { name: expectedBeaconId, allowDuplicates: true, scanMode: ScanMode.SCAN_MODE_LOW_LATENCY },
       (result) => {
         const name = result.localName || result.device?.name || '';
         if (name !== expectedBeaconId) return;
-        if (!Number.isInteger(result.rssi)) {
-          finish(new Error('The scanner did not report beacon signal strength. Use the native app or Warden-enabled Test Mode.'));
-          return;
-        }
-        finish(null, { wing_beacon_id: name, rssi: result.rssi, simulated: false });
+        if (!Number.isInteger(result.rssi) || result.rssi > -40 || result.rssi < -90) return;
+        const manufacturerData = result.manufacturerData || {};
+        const payload = Object.values(manufacturerData)[0] || result.serviceData?.[expectedBeaconId] || '';
+        const payloadHex = typeof payload === 'string'
+          ? payload.replace(/^0x/, '')
+          : Array.from(payload instanceof DataView ? new Uint8Array(payload.buffer) : payload || [])
+            .map((byte) => byte.toString(16).padStart(2, '0')).join('');
+        if (payloadHex && payloadHex.length < 8) return;
+        packets.push({ rssi: result.rssi, payload: payloadHex });
       }
     ).catch((scanError) => finish(new Error(scanError?.message || 'BLE scanning is unavailable. Use the native app or Warden-enabled Test Mode.')));
   });
@@ -502,8 +514,6 @@ export function StudentBiometricAttendancePanel({
   user,
   hostels = [],
   initialLogs = [],
-  developerSimulateBeacon = false,
-  onDeveloperSimulateBeaconChange,
   onLogsChange,
   onUserUpdate
 }) {
@@ -522,7 +532,9 @@ export function StudentBiometricAttendancePanel({
   const [nowSeconds, setNowSeconds] = useState(currentEpochSeconds);
   const enrollmentOpen = biometricStatus === 'Enrollment Unlocked' && enrollmentUntil >= nowSeconds;
   const expectedBeacon = hostels.find((hostel) => hostel.name === user?.hostel_block)?.wing_beacons?.[user?.wing] || '';
-  const testModeEnabled = Boolean(hostels.find((hostel) => hostel.name === user?.hostel_block)?.attendance_test_mode);
+  const [disclosureAction, setDisclosureAction] = useState(null);
+  const [disclosureAccepted, setDisclosureAccepted] = useState(false);
+  const [challenge, setChallenge] = useState(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowSeconds(currentEpochSeconds()), 1000);
@@ -590,6 +602,10 @@ export function StudentBiometricAttendancePanel({
       setError('Review and confirm face verification consent before enrolling.');
       return;
     }
+    if (!disclosureAccepted) {
+      setDisclosureAction(() => registerAndLock);
+      return;
+    }
     setBusy(true);
     setError('');
     setMessage('');
@@ -607,10 +623,12 @@ export function StudentBiometricAttendancePanel({
     let requestBody = '';
     try {
       const deviceBindingToken = await getOrCreateDeviceBindingToken(user);
+      const devicePublicKey = await getHardwarePublicKey();
       requestBody = JSON.stringify({
         device_binding_token: deviceBindingToken,
         reference_image_base64: referenceImage,
-        consent_confirmed: true
+        consent_confirmed: true,
+        device_public_key: devicePublicKey
       });
       const data = await responseData(
         await apiFetch(`${apiUrl}/api/biometric/register`, {
@@ -625,7 +643,7 @@ export function StudentBiometricAttendancePanel({
       setFaceEnrolled(Boolean(data.face_enrolled));
       setFaceConsent(false);
       onUserUpdate?.(data);
-      setMessage('Face verification and device binding enrolled. The reference image is encrypted at rest; attendance frames are not retained.');
+      setMessage('Face verification and hardware-backed device signing enrolled. Attendance frames are not uploaded.');
     } catch (enrollError) {
       setError(errorText(enrollError, 'Face verification enrollment failed.'));
     } finally {
@@ -637,7 +655,11 @@ export function StudentBiometricAttendancePanel({
     }
   };
 
-  const markWithBeacon = async (simulated = false, developerSimulation = false) => {
+  const markWithBeacon = async () => {
+    if (!disclosureAccepted) {
+      setDisclosureAction(() => markWithBeacon);
+      return;
+    }
     if (biometricStatus !== 'Locked' || !faceEnrolled) {
       setError('Complete face verification enrollment during a Warden-authorized setup window first.');
       return;
@@ -649,23 +671,24 @@ export function StudentBiometricAttendancePanel({
     setBusy(true);
     setError('');
     setMessage('');
-    setUsingTestBeacon(simulated);
+    setUsingTestBeacon(false);
     try {
       const deviceBindingToken = await getDeviceBindingToken(user);
       if (!deviceBindingToken) {
         throw new Error('This device binding is missing. Ask your Warden to unlock device enrollment again.');
       }
-      const detectedBeacon = developerSimulation
-        ? { beacon_id: 'WING-D-BEACON', rssi: -50 }
-        : simulated
-          ? { beacon_id: expectedBeacon, rssi: -58 }
-          : await scanWingBeacon(expectedBeacon);
+      const detectedBeacon = await scanWingBeacon(expectedBeacon, true);
       const beacon = {
         wing_beacon_id: detectedBeacon.beacon_id || detectedBeacon.wing_beacon_id,
         rssi: detectedBeacon.rssi,
-        simulated
+        rssi_samples: detectedBeacon.rssi_samples,
+        raw_rotating_payload_hex: detectedBeacon.raw_rotating_payload_hex,
+        simulated: false
       };
-      setPendingAttendance({ beacon, deviceBindingToken });
+      const challengeResponse = await apiFetch(`${apiUrl}/api/attendance/challenge`);
+      const attendanceChallenge = await responseData(challengeResponse, 'Could not create an attendance liveness challenge.');
+      setChallenge(attendanceChallenge);
+      setPendingAttendance({ beacon, deviceBindingToken, challenge: attendanceChallenge });
     } catch (markError) {
       setError(errorText(markError, 'Could not record attendance.'));
       setBusy(false);
@@ -682,14 +705,30 @@ export function StudentBiometricAttendancePanel({
       setUsingTestBeacon(false);
       return;
     }
-    let liveImage = result.imageBase64 || '';
     let requestBody = '';
-    const { beacon, deviceBindingToken } = pendingAttendance;
+    const { beacon, deviceBindingToken, challenge: attendanceChallenge } = pendingAttendance;
     try {
+      const signedTimestamp = Math.floor(Date.now() / 1000);
+      const unsignedPayload = {
+        student_id: user.user_id.toUpperCase(),
+        timestamp: signedTimestamp,
+        challenge_nonce: attendanceChallenge.challenge_nonce,
+        beacon_payload: beacon.raw_rotating_payload_hex.toLowerCase(),
+        embedding: result.embedding
+      };
+      const signature = await signAttendancePayload(JSON.stringify(unsignedPayload, Object.keys(unsignedPayload).sort()));
       requestBody = JSON.stringify({
         ...beacon,
         device_binding_token: deviceBindingToken,
-        live_image_base64: liveImage
+        embedding: result.embedding,
+        challenge_nonce: attendanceChallenge.challenge_nonce,
+        blink_ear_curve: result.blink_ear_curve,
+        yaw_delta: result.yaw_delta,
+        head_gesture: result.head_gesture,
+        rgb_reflection_delta: result.rgb_reflection_delta,
+        rgb_reflection_samples: result.rgb_reflection_samples,
+        signed_timestamp: signedTimestamp,
+        signature
       });
       const data = await responseData(
         await apiFetch(`${apiUrl}/api/attendance/verify-identity`, {
@@ -700,21 +739,30 @@ export function StudentBiometricAttendancePanel({
         'Could not verify your identity or record attendance.'
       );
       saveLogs([data.attendance_log, ...logs].slice(0, 30));
-      setMessage('Attendance recorded after server-side 1:1 face verification.');
+      setMessage('Attendance recorded after local liveness, rotating BLE, and hardware signature verification.');
     } catch (markError) {
       setError(errorText(markError, 'Could not verify your identity or record attendance.'));
     } finally {
-      liveImage = '';
       requestBody = '';
-      result.imageBase64 = '';
       setPendingAttendance(null);
       setBusy(false);
       setUsingTestBeacon(false);
+      setChallenge(null);
     }
-  }, [apiUrl, logs, pendingAttendance, saveLogs]);
+  }, [apiUrl, logs, pendingAttendance, saveLogs, user?.user_id]);
 
   return (
     <div>
+      {disclosureAction && (
+        <div className="ptm-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="ptm-card">
+            <div className="ptm-section-title">Before camera and Bluetooth access</div>
+            <p className="ptm-list-sub">Camera is used strictly for 1:1 liveness attendance verification. Bluetooth is used strictly to verify indoor hostel wing proximity. No background tracking is performed.</p>
+            <button type="button" className="ptm-btn-primary" onClick={() => { const action = disclosureAction; setDisclosureAccepted(true); setDisclosureAction(null); action(); }}>I understand and continue</button>
+            <button type="button" className="ptm-btn-secondary" onClick={() => setDisclosureAction(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
       <div className="ptm-drill-header"><h1 className="ptm-page-title">Server-Verified Face & Device Binding</h1></div>
       {error && <div className="ptm-alert-error" role="alert">{error}</div>}
       {message && <div className="ptm-sync-note" role="status">{message}</div>}
@@ -736,7 +784,10 @@ export function StudentBiometricAttendancePanel({
                 disabled={busy}
                 onChange={(event) => setFaceConsent(event.target.checked)}
               />
-              <span>I understand face verification is required for attendance and consent to storing one encrypted enrollment reference image.</span>
+              <span>
+                I understand face verification is required for attendance and consent to storing one encrypted enrollment reference image.
+                <br /><small>Purpose limitation: attendance only. उद्देश्य सीमा: केवल उपस्थिति। Fernet AES-128 encryption is used at rest. The reference is deleted at hostel checkout or when consent is withdrawn.</small>
+              </span>
             </label>
             <button type="button" className="ptm-btn-primary" onClick={registerAndLock} disabled={busy || !enrollmentOpen || !faceConsent}>
               {busy ? 'Please wait…' : 'Enroll Face & Lock This Device'}
@@ -749,34 +800,32 @@ export function StudentBiometricAttendancePanel({
           <div className="ptm-section-title">Mark attendance at your wing</div>
           <p className="ptm-list-sub">Attendance requires an active Warden roll call, this device token, your assigned BLE beacon, and a server-side 1:1 face match.</p>
           {!expectedBeacon && <div className="ptm-alert-error" role="alert">Your Warden must configure the {user?.wing || 'assigned wing'} beacon before attendance is available.</div>}
-          {onDeveloperSimulateBeaconChange && (
-            <label className="ptm-list-sub" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 12 }}>
-              <input
-                type="checkbox"
-                checked={developerSimulateBeacon}
-                disabled={busy}
-                onChange={(event) => onDeveloperSimulateBeaconChange(event.target.checked)}
-              />
-              <span>
-                Developer Test Mode: Simulate BLE Beacon
-                <br />
-                <strong>Uses WING-D-BEACON at -50 dBm; Warden Test Mode must also be enabled.</strong>
-              </span>
-            </label>
-          )}
           <button
             type="button"
             className="ptm-btn-primary"
-            onClick={() => markWithBeacon(developerSimulateBeacon, developerSimulateBeacon)}
+            onClick={markWithBeacon}
             disabled={busy || !expectedBeacon}
           >
             {busy && !usingTestBeacon ? 'Scanning beacon…' : '📡 Scan Wing Beacon & Verify Face'}
           </button>
-          {testModeEnabled && expectedBeacon && (
-            <button type="button" className="ptm-btn-secondary" onClick={() => markWithBeacon(true)} disabled={busy}>
-              {busy && usingTestBeacon ? 'Checking simulated beacon…' : `⚡ Simulate ${user?.wing || 'Wing'} Beacon (Test Mode)`}
-            </button>
-          )}
+        </div>
+      )}
+      {biometricStatus === 'Locked' && faceEnrolled && (
+        <div className="ptm-card">
+          <div className="ptm-section-title">Withdraw biometric consent</div>
+          <p className="ptm-list-sub">This permanently deletes your encrypted face reference and resets enrollment. यह आपकी एन्क्रिप्टेड फेस जानकारी को स्थायी रूप से हटाएगा।</p>
+          <button type="button" className="ptm-btn-secondary" onClick={async () => {
+            if (!window.confirm('Permanently delete your biometric reference and withdraw consent?')) return;
+            try {
+              const data = await responseData(await apiFetch(`${apiUrl}/api/biometric/revoke-and-delete`, { method: 'DELETE' }), 'Could not withdraw biometric consent.');
+              setBiometricStatus(data.biometric_status);
+              setFaceEnrolled(false);
+              onUserUpdate?.(data);
+              setMessage('Biometric consent withdrawn and encrypted reference deleted.');
+            } catch (revokeError) {
+              setError(errorText(revokeError, 'Could not withdraw biometric consent.'));
+            }
+          }}>Delete biometric data and withdraw consent</button>
         </div>
       )}
       <div className="ptm-card">
@@ -796,7 +845,7 @@ export function StudentBiometricAttendancePanel({
         )}
       </div>
       {pendingEnrollment && <LocalFaceCheckModal purpose="enrollment" onResult={completeEnrollmentFaceCheck} />}
-      {pendingAttendance && <LocalFaceCheckModal onResult={completeAttendanceFaceCheck} />}
+      {pendingAttendance && <LocalFaceCheckModal challenge={challenge} onResult={completeAttendanceFaceCheck} />}
     </div>
   );
 }

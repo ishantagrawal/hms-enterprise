@@ -15,6 +15,12 @@ public class MainActivity extends BridgeActivity implements ModifiedMainActivity
     private static final String TAG = "Google Activity Result";
 
     @Override
+    public void onCreate(android.os.Bundle savedInstanceState) {
+        registerPlugin(HardwareAuthPlugin.class);
+        super.onCreate(savedInstanceState);
+    }
+
+    @Override
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
 
