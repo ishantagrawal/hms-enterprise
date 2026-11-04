@@ -11,9 +11,13 @@ async function responseData(response, fallback) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const detail = Array.isArray(data.detail)
-      ? data.detail.map((item) => typeof item === 'object' ? (item.msg || item.message || JSON.stringify(item)) : String(item)).join('; ')
+      ? data.detail.map((item) => {
+        if (typeof item !== 'object' || item === null) return String(item);
+        const location = Array.isArray(item.loc) ? ` (${item.loc.join('.')})` : '';
+        return `${item.msg || item.message || JSON.stringify(item)}${location}`;
+      }).join('; ')
       : typeof data.detail === 'object' && data.detail !== null
-        ? (data.detail.msg || data.detail.message || JSON.stringify(data.detail))
+        ? `${data.detail.msg || data.detail.message || JSON.stringify(data.detail)}${Array.isArray(data.detail.loc) ? ` (${data.detail.loc.join('.')})` : ''}`
         : data.detail;
     throw new Error(detail || data.message || fallback);
   }

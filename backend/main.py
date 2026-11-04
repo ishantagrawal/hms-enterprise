@@ -1658,7 +1658,10 @@ class AttendanceBeaconMarkReq(AttendanceBeaconOptionsReq):
     credential: Dict
 
 class DeviceBindingRegisterReq(BaseModel):
-    model_config = {"extra": "forbid"}
+    # Older mobile bundles included device metadata that is no longer needed
+    # for enrollment. Ignore those fields while validating the security-critical
+    # values below so an app/backend rollout cannot strand enrollment.
+    model_config = {"extra": "ignore"}
 
     device_binding_token: str
     reference_image_base64: str = Field(min_length=100, max_length=6_000_000)
