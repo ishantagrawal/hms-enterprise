@@ -423,7 +423,9 @@ class TenantSafetyTests(unittest.TestCase):
             conn.commit()
             conn.close()
             request.state.user = {"user_id": "ATTENDANCE-STUDENT", "role": "Student"}
-            with patch.object(main, "_encrypt_face_reference", return_value="encrypted-test-face-reference"):
+            with patch.object(main, "_encrypt_face_reference", return_value="encrypted-test-face-reference"), patch.object(
+                main, "_compute_enrollment_embedding", return_value="encrypted-test-face-embedding"
+            ):
                 registered = main.register_device_binding(
                     main.DeviceBindingRegisterReq(
                         device_binding_token=device_token,

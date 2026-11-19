@@ -8,14 +8,9 @@ import PrivacyAndDataDeletion from './components/PrivacyAndDataDeletion';
 
 window.GLOBAL_SILICON_VALLEY_CSS = '';
 
-const DeanPortal = lazy(() => import('./components/DeanPortal'));
-const WardenPortal = lazy(() => import('./components/WardenPortal'));
-const ClubPortal = lazy(() => import('./components/ClubPortal'));
-const StaffPortal = lazy(() => import('./components/StaffPortal'));
-const FounderPortal = lazy(() => import('./components/FounderPortal'));
-const GateSecurityPortal = lazy(() => import('./components/CampusSecurity').then((module) => ({ default: module.GateSecurityPortal })));
-const loadStudentPortal = () => import('./components/StudentPortal');
-const StudentPortal = lazy(loadStudentPortal);
+const StudentAttendancePortal = lazy(() => import('./components/AttendanceOnlyPortals').then((module) => ({ default: module.StudentAttendancePortal })));
+const FacultyAttendancePortal = lazy(() => import('./components/AttendanceOnlyPortals').then((module) => ({ default: module.FacultyAttendancePortal })));
+const WardenAttendanceOnlyPortal = lazy(() => import('./components/AttendanceOnlyPortals').then((module) => ({ default: module.WardenAttendanceOnlyPortal })));
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
@@ -321,14 +316,6 @@ function AuthenticatedApp() {
     }
   };
 
-  const handleStudentProfileRefresh = useCallback((updatedUser) => {
-    setUser((currentUser) => {
-      const mergedUser = { ...currentUser, ...updatedUser };
-      localStorage.setItem('hms_user', JSON.stringify(mergedUser));
-      return mergedUser;
-    });
-  }, []);
-
   const handleLogout = () => {
     localStorage.removeItem('hms_user');
     localStorage.removeItem('hms_session_token');
@@ -506,13 +493,15 @@ function AuthenticatedApp() {
                 <GridCardSkeleton count={4} />
               </div>
             }>
-              {isFounder && <FounderPortal user={user} apiUrl={API_URL} onLogout={handleLogout} />}
-              {user.role === 'Dean' && <DeanPortal user={user} apiUrl={API_URL} />}
-              {user.role === 'Student' && <StudentPortal user={user} apiUrl={API_URL} modules={tenant?.modules} onUserUpdate={handleStudentProfileRefresh} />}
-              {user.role === 'Warden' && <WardenPortal user={user} apiUrl={API_URL} modules={tenant?.modules} />}
-              {(user.role === 'Gate Security' || user.role === 'GateSecurity') && tenant?.modules?.gate_outpass && <GateSecurityPortal user={user} apiUrl={API_URL} />}
-              {user.role === 'ClubOrganizer' && <ClubPortal user={user} apiUrl={API_URL} />}
-              {user.role === 'Staff' && <StaffPortal user={user} apiUrl={API_URL} />}
+              {(user.role === 'Dean' || user.role === 'Faculty' || user.role === 'Staff') && (
+                <FacultyAttendancePortal user={user} apiUrl={API_URL} />
+              )}
+              {user.role === 'Student' && (
+                <StudentAttendancePortal user={user} apiUrl={API_URL} />
+              )}
+              {user.role === 'Warden' && (
+                <WardenAttendanceOnlyPortal user={user} apiUrl={API_URL} />
+              )}
             </Suspense>
           </main>
 
@@ -863,4 +852,31 @@ const PAYTM_APPLE_CSS = `
     .ptm-bnav-btn { flex-basis: max(72px, 20%); font-size: 10px; }
     .ptm-card table { display: block; max-width: 100%; overflow-x: auto; white-space: nowrap; }
   }
+
+  :root { --cobalt:#0F62FE; --emerald:#059669; --crimson:#DC2626; }
+  body { background:#FFFFFF; color:#111827; padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom); }
+  .ptm-header { top:env(safe-area-inset-top); box-shadow:none; }
+  .ptm-header-title { color:#111827; }
+  .ptm-user-avatar { background:#F6F7F9; color:#111827; border:1px solid #E5E7EB; }
+  .ptm-main-container { max-width:920px; background:#FFFFFF; }
+  .ptm-card,.ptm-mini-card,.ptm-list-row { border-radius:10px; box-shadow:none; }
+  .ptm-card { padding:14px; }
+  .ptm-page-title { font-size:20px; letter-spacing:-0.02em; }
+  .ptm-list-title,.ptm-section-title,.ptm-page-title { font-weight:700; }
+  .ptm-input { border:1px solid #E5E7EB; border-radius:8px; background:#FFFFFF; }
+  .ptm-input:focus { border-color:#0F62FE; box-shadow:0 0 0 3px rgba(15,98,254,.10); }
+  .ptm-btn-primary { background:#0F62FE; border-radius:8px; }
+  .ptm-btn-secondary { background:#F6F7F9; color:#111827; border:1px solid #E5E7EB; border-radius:8px; }
+  .ptm-tag-pill,.ptm-status-badge { font-variant-numeric:tabular-nums; }
+  .ptm-bottom-nav { height:calc(64px + env(safe-area-inset-bottom)); background:rgba(255,255,255,.96); border-top:1px solid #E5E7EB; box-shadow:none; }
+  .ptm-bnav-btn.active { color:#0F62FE; }
+  .ptm-modal-backdrop { align-items:flex-end; padding:0; background:rgba(17,24,39,.40); }
+  .ptm-modal-card { width:100%; max-width:none; border-radius:18px 18px 0 0; box-shadow:none; padding-bottom:calc(20px + env(safe-area-inset-bottom)); }
+  .native-sheet-overlay { position:fixed; inset:0; z-index:299; background:rgba(17,24,39,.40); }
+  .native-sheet { position:fixed; z-index:300; left:0; right:0; bottom:0; max-height:86vh; overflow-y:auto; background:#FFFFFF; border:1px solid #E5E7EB; border-bottom:0; border-radius:18px 18px 0 0; padding:8px 16px calc(16px + env(safe-area-inset-bottom)); }
+  .native-sheet-grabber { width:36px; height:4px; border-radius:999px; background:#D1D5DB; margin:4px auto 12px; }
+  .native-sheet-title { margin:0; font-size:18px; }
+  .native-sheet-description { margin:4px 0 12px; color:#6B7280; font-size:13px; }
+  .native-sheet-body { min-width:0; }
+  .roll-number,.ptm-tag-pill,.ptm-status-badge,.attendance-percent,time { font-variant-numeric:tabular-nums; }
 `;
