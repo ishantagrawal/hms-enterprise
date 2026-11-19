@@ -4,10 +4,7 @@ import { App } from '@capacitor/app';
 
 export default function NativeBottomSheet({ open, onOpenChange, title, description, children }) {
   const openRef = useRef(open);
-
-  useEffect(() => {
-    openRef.current = open;
-  }, [open]);
+  openRef.current = open;
 
   useEffect(() => {
     let handle;

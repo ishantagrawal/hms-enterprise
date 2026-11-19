@@ -9,7 +9,6 @@ export function useBeaconScanner(targetBeacon) {
   const [scanning, setScanning] = useState(false);
   const handleRef = useRef(null);
 
-  // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => {
     let disposed = false;
     if (!targetBeacon?.uuid) {

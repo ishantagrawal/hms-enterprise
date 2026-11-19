@@ -178,45 +178,4 @@ USING (college_id = app_college_id() AND student_id = app_user_id());
 CREATE POLICY student_device_warden ON student_devices FOR ALL
 USING (college_id = app_college_id() AND app_role() = 'Warden')
 WITH CHECK (college_id = app_college_id() AND app_role() = 'Warden');
-
-DO $$
-BEGIN
-  IF to_regclass('public.attendance_sessions') IS NOT NULL THEN
-    ALTER TABLE attendance_sessions ENABLE ROW LEVEL SECURITY;
-    EXECUTE 'DROP POLICY IF EXISTS attendance_session_tenant_read ON attendance_sessions';
-    EXECUTE $policy$
-      CREATE POLICY attendance_session_tenant_read ON attendance_sessions FOR SELECT
-      USING (
-        college_id = app_college_id()
-        AND (
-          app_role() IN ('Faculty','Warden')
-          OR app_role() = 'Student'
-        )
-      )
-    $policy$;
-  END IF;
-  IF to_regclass('public.attendance_records') IS NOT NULL THEN
-    ALTER TABLE attendance_records ENABLE ROW LEVEL SECURITY;
-    EXECUTE 'DROP POLICY IF EXISTS attendance_record_student_read ON attendance_records';
-    EXECUTE $policy$
-      CREATE POLICY attendance_record_student_read ON attendance_records FOR SELECT
-      USING (
-        college_id = app_college_id()
-        AND (
-          UPPER(student_id) = UPPER(app_user_id())
-          OR app_role() IN ('Faculty','Warden')
-        )
-      )
-    $policy$;
-    EXECUTE 'DROP POLICY IF EXISTS attendance_record_student_checkin ON attendance_records';
-    EXECUTE $policy$
-      CREATE POLICY attendance_record_student_checkin ON attendance_records FOR INSERT
-      WITH CHECK (
-        college_id = app_college_id()
-        AND app_role() = 'Student'
-        AND UPPER(student_id) = UPPER(app_user_id())
-      )
-    $policy$;
-  END IF;
-END $$;
 COMMIT;

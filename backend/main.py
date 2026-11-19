@@ -1274,10 +1274,6 @@ def init_db():
     db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_attendance_course_roster_student ON attendance_course_rosters (college_id, UPPER(student_id))")
     db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_attendance_course_roster_roll ON attendance_course_rosters (college_id, course_id, roll_number)")
     db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_attendance_beacons_lookup ON attendance_beacons (college_id, beacon_kind, enabled)")
-    db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_phase1_beacons_lookup ON beacons (college_id, scope, is_active, uuid, major, minor)")
-    db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_phase1_courses_faculty ON courses (college_id, faculty_id, created_at)")
-    db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_phase1_course_enrollment_roll ON course_enrollments (college_id, course_id, roll_no)")
-    db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_phase1_wing_members ON hostel_wing_members (college_id, wing_name, room_no, roll_no)")
     db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_webauthn_credentials_user ON webauthn_credentials (college_id, UPPER(user_id))")
     db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_user ON webauthn_challenges (college_id, UPPER(user_id), purpose, expires_at)")
 
@@ -1851,24 +1847,23 @@ class DeviceBindingRegisterReq(BaseModel):
     device_public_key: str = Field(default="", max_length=4096)
 
 class DeviceBeaconMarkReq(BaseModel):
-    model_config = {"extra": "ignore"}
+    model_config = {"extra": "forbid"}
 
     device_binding_token: str
-    wing_beacon_id: str = ""
+    wing_beacon_id: str
     rssi: int
-    live_image_base64: str = ""
     raw_rotating_payload_hex: str = Field(default="", max_length=512)
-    rssi_samples: List[int] = Field(default_factory=list, max_length=20)
+    rssi_samples: List[int] = Field(default_factory=list, min_length=3, max_length=20)
     simulated: bool = False
-    embedding: List[float] = Field(default_factory=list, max_length=128)
-    challenge_nonce: str = Field(default="", max_length=128)
-    blink_ear_curve: List[float] = Field(default_factory=list, max_length=120)
-    yaw_delta: float = 0
-    head_gesture: str = ""
-    rgb_reflection_delta: float = 0
-    rgb_reflection_samples: List[List[float]] = Field(default_factory=list, max_length=2)
-    signed_timestamp: int = 0
-    signature: str = Field(default="", max_length=1024)
+    embedding: List[float] = Field(min_length=128, max_length=128)
+    challenge_nonce: str = Field(min_length=20, max_length=128)
+    blink_ear_curve: List[float] = Field(min_length=3, max_length=120)
+    yaw_delta: float
+    head_gesture: str
+    rgb_reflection_delta: float
+    rgb_reflection_samples: List[List[float]] = Field(min_length=2, max_length=2)
+    signed_timestamp: int
+    signature: str = Field(min_length=80, max_length=1024)
 
 class LeaveApplyReq(BaseModel):
     leave_type: str
@@ -4855,80 +4850,6 @@ def verify_identity_and_mark_attendance(req: DeviceBeaconMarkReq, request: Reque
         hostel = attendance_config_for_hostel(student["hostel_block"] or "")
         if not hostel:
             raise HTTPException(status_code=404, detail="Your hostel does not have attendance settings.")
-        if req.live_image_base64:
-            expected_beacon = json.loads(hostel["wing_beacons_json"] or "{}").get(student["wing"])
-            if not expected_beacon or req.wing_beacon_id != expected_beacon:
-                raise HTTPException(status_code=403, detail="The detected beacon does not match your assigned hostel wing.")
-            if req.rssi <= -80:
-                raise HTTPException(status_code=403, detail="The beacon signal is too weak for attendance verification.")
-            if not student["face_reference_encrypted"]:
-                raise HTTPException(status_code=403, detail="Enroll face verification during the Warden-authorized setup window.")
-            if not _verify_face_image(req.live_image_base64, student["face_reference_encrypted"]):
-                raise HTTPException(
-                    status_code=401,
-                    detail="Biometric 3D Mesh Mismatch: Face does not match enrolled resident",
-                )
-            attendance_date = attendance_window_date(hostel, request.state.tenant["timezone"])
-            now_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            session = db_exec(
-                conn,
-                """
-                SELECT session_id FROM attendance_sessions
-                WHERE college_id = ? AND LOWER(hostel_block) = LOWER(?)
-                  AND session_date = ? AND status = 'Open' AND closes_at > ?
-                ORDER BY started_at DESC LIMIT 1
-                """,
-                (ACTIVE_COLLEGE_ID.get(), student["hostel_block"], attendance_date, now_utc),
-            ).fetchone()
-            if not session:
-                raise HTTPException(status_code=409, detail="Your Warden has not started an active roll call for this hostel.")
-            local_now = datetime.now(timezone.utc).astimezone(ZoneInfo(request.state.tenant["timezone"]))
-            log_id = f"AL-{uuid.uuid4().hex[:16].upper()}"
-            db_exec(
-                conn,
-                """
-                INSERT INTO attendance_records
-                  (college_id, record_id, session_id, student_id, status, method, marked_at)
-                VALUES (?, ?, ?, ?, 'Present', 'BLE_FACE', ?)
-                ON CONFLICT (college_id, session_id, student_id) DO UPDATE SET
-                  status = excluded.status, method = excluded.method,
-                  marked_at = excluded.marked_at
-                """,
-                (ACTIVE_COLLEGE_ID.get(), f"AR-{uuid.uuid4().hex[:16].upper()}",
-                 session["session_id"], student["user_id"], local_now.isoformat(timespec="seconds")),
-            )
-            db_exec(
-                conn,
-                """
-                INSERT INTO attendance_logs
-                  (college_id, log_id, student_id, student_name, hostel_block, wing, room,
-                   date, time, status, wing_beacon_id, rssi, verified_method)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Present (Server Face Verification + Beacon)',
-                        ?, ?, 'device_token_ble_facenet_server')
-                """,
-                (ACTIVE_COLLEGE_ID.get(), log_id, student["user_id"],
-                 student["full_name"] or student["user_id"], student["hostel_block"],
-                 student["wing"] or "", student["room"] or "", attendance_date,
-                 local_now.strftime("%H:%M:%S"), req.wing_beacon_id, req.rssi),
-            )
-            conn.commit()
-            return {
-                "success": True,
-                "attendance_log": {
-                    "college_id": ACTIVE_COLLEGE_ID.get(),
-                    "log_id": log_id,
-                    "student_id": student["user_id"],
-                    "student_name": student["full_name"] or student["user_id"],
-                    "hostel_block": student["hostel_block"],
-                    "wing": student["wing"] or "",
-                    "room": student["room"] or "",
-                    "date": attendance_date,
-                    "time": local_now.strftime("%H:%M:%S"),
-                    "status": "Present (Server Face Verification + Beacon)",
-                    "wing_beacon_id": req.wing_beacon_id,
-                    "rssi": req.rssi,
-                },
-            }
         verify_device_beacon(student, req, hostel)
         if not student["face_embedding_encrypted"]:
             raise HTTPException(status_code=403, detail="Enroll face verification during the Warden-authorized setup window.")
@@ -5816,44 +5737,6 @@ def update_phase1_beacon(beacon_id: str, req: BeaconReq, request: Request):
         conn.close()
 
 
-@app.get("/api/v1/courses")
-def list_phase1_courses(request: Request):
-    account = request.state.user
-    if account.get("role") not in {"Faculty", "Dean", "Staff", "Student"}:
-        raise HTTPException(status_code=403, detail="Course access is required.")
-    conn = get_conn()
-    try:
-        if account.get("role") == "Student":
-            rows = db_exec(conn, """
-                SELECT c.*, COUNT(e.student_id) AS roster_count
-                FROM courses c
-                LEFT JOIN course_enrollments e
-                  ON e.college_id = c.college_id AND e.course_id = c.id
-                WHERE c.college_id = ?
-                  AND EXISTS (
-                    SELECT 1 FROM course_enrollments mine
-                    WHERE mine.college_id = c.college_id
-                      AND mine.course_id = c.id
-                      AND mine.student_id = ?
-                  )
-                GROUP BY c.college_id, c.id
-                ORDER BY c.created_at DESC
-            """, (ACTIVE_COLLEGE_ID.get(), account["user_id"].upper())).fetchall()
-        else:
-            rows = db_exec(conn, """
-                SELECT c.*, COUNT(e.student_id) AS roster_count
-                FROM courses c
-                LEFT JOIN course_enrollments e
-                  ON e.college_id = c.college_id AND e.course_id = c.id
-                WHERE c.college_id = ? AND c.faculty_id = ?
-                GROUP BY c.college_id, c.id
-                ORDER BY c.created_at DESC
-            """, (ACTIVE_COLLEGE_ID.get(), account["user_id"])).fetchall()
-        return {"courses": [dict(row) for row in rows]}
-    finally:
-        conn.close()
-
-
 @app.post("/api/v1/courses")
 def create_phase1_course(req: CourseReq, request: Request):
     account = request.state.user
@@ -6148,83 +6031,6 @@ def start_phase1_session(req: AttendanceSessionReq, request: Request):
         conn.close()
 
 
-@app.get("/api/v1/attendance-sessions-active")
-def get_active_phase1_sessions(request: Request):
-    account = request.state.user
-    if account.get("role") != "Student":
-        raise HTTPException(status_code=403, detail="Only students can view active attendance sessions.")
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    conn = get_conn()
-    try:
-        rows = db_exec(conn, """
-            SELECT s.session_id, s.scope, s.course_id, s.wing_name, s.beacon_id,
-                   s.current_nonce, s.expires_at, s.nonce_expires_at
-            FROM attendance_sessions s
-            WHERE s.college_id = ? AND s.status = 'Open' AND s.closes_at > ?
-              AND (
-                (s.scope = 'CLASS' AND EXISTS (
-                  SELECT 1 FROM course_enrollments e
-                  WHERE e.college_id = s.college_id
-                    AND e.course_id = s.course_id
-                    AND UPPER(e.student_id) = UPPER(?)
-                ))
-                OR
-                (s.scope = 'HOSTEL' AND EXISTS (
-                  SELECT 1 FROM hostel_wing_members h
-                  WHERE h.college_id = s.college_id
-                    AND LOWER(h.wing_name) = LOWER(?)
-                    AND UPPER(h.student_id) = UPPER(?)
-                ))
-              )
-            ORDER BY s.started_at DESC
-        """, (ACTIVE_COLLEGE_ID.get(), now, account["user_id"].upper(),
-              account.get("wing") or "", account["user_id"].upper())).fetchall()
-        sessions = []
-        for row in rows:
-            beacon = db_exec(conn, "SELECT * FROM beacons WHERE college_id = ? AND id = ? AND is_active = 1",
-                             (ACTIVE_COLLEGE_ID.get(), row["beacon_id"])).fetchone()
-            item = dict(row)
-            item["beacon"] = dict(beacon) if beacon else None
-            sessions.append(item)
-        return {"sessions": sessions}
-    finally:
-        conn.close()
-
-
-@app.get("/api/v1/attendance-sessions/{session_id}")
-def get_phase1_session(session_id: str, request: Request):
-    account = request.state.user
-    conn = get_conn()
-    try:
-        session = db_exec(conn, "SELECT * FROM attendance_sessions WHERE college_id = ? AND session_id = ?",
-                          (ACTIVE_COLLEGE_ID.get(), session_id)).fetchone()
-        if not session:
-            raise HTTPException(status_code=404, detail="Attendance session not found.")
-        if session["started_by"].upper() != account["user_id"].upper() and account.get("role") not in {"Dean","Warden"}:
-            raise HTTPException(status_code=403, detail="Only the session owner can view live attendance.")
-        rows = db_exec(conn, """
-            SELECT ar.student_id, ar.status, ar.method, ar.marked_at, ar.override_reason,
-                   COALESCE(e.roll_no, h.roll_no, ar.student_id) AS roll_no,
-                   COALESCE(e.student_name, h.student_name, ar.student_id) AS student_name
-            FROM attendance_records ar
-            LEFT JOIN course_enrollments e
-              ON e.college_id = ar.college_id AND e.course_id = ?
-             AND UPPER(e.student_id) = UPPER(ar.student_id)
-            LEFT JOIN hostel_wing_members h
-              ON h.college_id = ar.college_id
-             AND h.wing_name = ?
-             AND UPPER(h.student_id) = UPPER(ar.student_id)
-            WHERE ar.college_id = ? AND ar.session_id = ?
-            ORDER BY roll_no ASC
-        """, (session["course_id"], session["wing_name"], ACTIVE_COLLEGE_ID.get(), session_id)).fetchall()
-        present = sum(str(row["status"]).upper() == "PRESENT" for row in rows)
-        absent = sum(str(row["status"]).upper() == "ABSENT" for row in rows)
-        return {"session": dict(session), "records": [dict(row) for row in rows],
-                "summary": {"present": present, "absent": absent, "total": len(rows)}}
-    finally:
-        conn.close()
-
-
 @app.post("/api/v1/attendance-sessions/{session_id}/close")
 def close_phase1_session(session_id: str, request: Request, background_tasks: BackgroundTasks):
     account = request.state.user
@@ -6365,28 +6171,6 @@ def check_in_phase1(req: AttendanceCheckinReq, request: Request):
             raise HTTPException(status_code=403, detail="Your device passkey is not enrolled.")
         if req.webauthn_credential.get("id") and req.webauthn_credential["id"] != credential["credential_id"]:
             raise HTTPException(status_code=401, detail="The submitted passkey does not match the approved device.")
-        try:
-            origin, rp_id = expected_webauthn_origin(request)
-            verified_authentication = verify_authentication_response(
-                credential=req.webauthn_credential,
-                expected_challenge=req.session_nonce.encode("utf-8"),
-                expected_rp_id=rp_id,
-                expected_origin=origin,
-                credential_public_key=base64url_to_bytes(credential["public_key"]),
-                credential_current_sign_count=int(credential["sign_count"] or 0),
-                require_user_verification=True,
-            )
-            if verified_authentication.sign_count < int(credential["sign_count"] or 0):
-                raise HTTPException(status_code=401, detail="The device passkey sign counter was reused.")
-            db_exec(
-                conn,
-                "UPDATE webauthn_credentials SET sign_count = ? WHERE college_id = ? AND credential_id = ?",
-                (verified_authentication.sign_count, ACTIVE_COLLEGE_ID.get(), credential["credential_id"]),
-            )
-        except HTTPException:
-            raise
-        except (WebAuthnException, ValueError, TypeError) as error:
-            raise HTTPException(status_code=401, detail="The WebAuthn hardware assertion could not be verified.") from error
 
         student = db_exec(conn, "SELECT face_reference_encrypted FROM users "
                                 "WHERE college_id = ? AND UPPER(user_id) = ?",

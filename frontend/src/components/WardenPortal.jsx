@@ -1,0 +1,919 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { apiFetch } from '../api';
+import { getCached, setCached } from '../cache';
+import { getHostelOptions, inferHostelWing } from '../hostelOptions';
+import { WardenAttendancePanel, WardenLeavePassPanel } from './CampusSecurity';
+import StaffAccountAccess from './StaffAccountAccess';
+import { ListRowSkeleton } from './SkeletonLoader';
+import usePortalBackNavigation from '../hooks/usePortalBackNavigation';
+
+async function readResponse(response, fallback = 'Request failed') {
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || data.message || fallback);
+  return data;
+}
+
+function currentEpochSeconds() {
+  return Math.floor(Date.now() / 1000);
+}
+
+export default function WardenPortal({ user, apiUrl, modules }) {
+  const safeUser = user || {};
+  const hostelBlock = safeUser.hostel_block || '';
+  const sKey = `warden_students_${hostelBlock}`;
+  const cKey = `warden_complaints_${hostelBlock}`;
+  const dKey = `warden_depts_${hostelBlock}`;
+  const leavePassKey = `warden_leave_passes_${safeUser.college_id || 'college'}_${hostelBlock || 'hostel'}`;
+  const attendanceLogKey = `warden_attendance_logs_${safeUser.college_id || 'college'}_${hostelBlock || 'hostel'}`;
+
+  const [page, setPage] = useState('home');
+  usePortalBackNavigation(page, setPage);
+  const [dataLoading, setDataLoading] = useState(false);
+  const [students, setStudents] = useState(() => getCached(sKey) || []);
+  const [complaints, setComplaints] = useState(() => getCached(cKey) || []);
+  const [departments, setDepartments] = useState(() => getCached(dKey) || []);
+  const [leavePasses, setLeavePasses] = useState(() => getCached(leavePassKey) || []);
+  const [attendanceLogs, setAttendanceLogs] = useState(() => getCached(attendanceLogKey) || []);
+  const leavePassVersionRef = useRef(0);
+  const attendanceLogVersionRef = useRef(0);
+  const [hostelConfig, setHostelConfig] = useState([]);
+  const [profileRequests, setProfileRequests] = useState([]);
+  const [reviewingRequestId, setReviewingRequestId] = useState(null);
+  const [unlockingStudentId, setUnlockingStudentId] = useState('');
+  const [attendanceWingFilter, setAttendanceWingFilter] = useState('All');
+  const [msg, setMsg] = useState(null);
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [editingStudent, setEditingStudent] = useState(null);
+  const [editForm, setEditForm] = useState({ hostel_block: '', wing: '', room: '', phone: '', guardian_phone: '' });
+
+  const [newStudent, setNewStudent] = useState({
+    user_id: '',
+    full_name: '',
+    wing: '',
+    room: '',
+    department: 'Civil Engineering',
+    year: '1st Year',
+    phone: '',
+    guardian_phone: ''
+  });
+
+  const [newDept, setNewDept] = useState({ dept_id: '', name: '', email: '', icon: '🛠️' });
+  const [selectedTicket, setSelectedTicket] = useState(null);
+  const [wardenRemark, setWardenRemark] = useState('');
+
+  const [regWing, setRegWing] = useState('All');
+  const [regCategory, setRegCategory] = useState('All');
+  const hostelWings = hostelConfig.find((item) => item.name === hostelBlock)?.wings || [];
+  const editHostelOptions = getHostelOptions(
+    hostelConfig,
+    editForm.hostel_block,
+    safeUser.college_id || safeUser.institute_id
+  );
+  const editHostelWings = editHostelOptions.find(
+    (item) => item.name.toLowerCase() === editForm.hostel_block.toLowerCase()
+  )?.wings || [];
+
+  const updateLeavePasses = useCallback((next, isMutation = false) => {
+    if (isMutation) leavePassVersionRef.current += 1;
+    setLeavePasses(next);
+    setCached(leavePassKey, next);
+  }, [leavePassKey]);
+
+  const updateAttendanceLogs = useCallback((next, isMutation = false) => {
+    if (isMutation) attendanceLogVersionRef.current += 1;
+    setAttendanceLogs(next);
+    setCached(attendanceLogKey, next);
+  }, [attendanceLogKey]);
+
+  const loadWardenData = useCallback(async () => {
+    const leaveVersion = leavePassVersionRef.current;
+    const logVersion = attendanceLogVersionRef.current;
+    const hasCache = Boolean(getCached(sKey) || getCached(cKey));
+    if (!hasCache) {
+      setDataLoading(true);
+    }
+
+    try {
+      const bootstrapResponse = await apiFetch(
+        `${apiUrl}/api/portal/bootstrap?hostel_block=${encodeURIComponent(hostelBlock)}`
+      );
+      const data = await readResponse(bootstrapResponse, 'Could not load Warden portal data.');
+      const fetchedStudents = data.students || [];
+      const fetchedComplaints = data.complaints || [];
+      const fetchedDepartments = data.departments || [];
+      setStudents(fetchedStudents);
+      setCached(sKey, fetchedStudents);
+      setComplaints(fetchedComplaints);
+      setCached(cKey, fetchedComplaints);
+      setDepartments(fetchedDepartments);
+      setCached(dKey, fetchedDepartments);
+      setHostelConfig(data.hostels || []);
+      setProfileRequests(data.profile_requests || []);
+      if (leaveVersion === leavePassVersionRef.current) updateLeavePasses(data.leave_passes || []);
+      if (logVersion === attendanceLogVersionRef.current) updateAttendanceLogs(data.attendance_logs || []);
+    } catch (error) {
+      setMsg(error.message || 'Could not refresh Warden portal data.');
+    } finally {
+      setDataLoading(false);
+    }
+  }, [apiUrl, hostelBlock, sKey, cKey, dKey, updateLeavePasses, updateAttendanceLogs]);
+
+  useEffect(() => {
+    loadWardenData();
+  }, [loadWardenData]);
+
+  useEffect(() => {
+    if (page !== 'biometric_attendance' && page !== 'leave_passes') return undefined;
+    const timer = window.setInterval(async () => {
+      const leaveVersion = leavePassVersionRef.current;
+      const logVersion = attendanceLogVersionRef.current;
+      try {
+        const response = await apiFetch(`${apiUrl}/api/portal/bootstrap?hostel_block=${encodeURIComponent(hostelBlock)}`);
+        const data = await readResponse(response, 'Could not refresh attendance logs.');
+        if (logVersion === attendanceLogVersionRef.current) updateAttendanceLogs(data.attendance_logs || []);
+        if (leaveVersion === leavePassVersionRef.current) updateLeavePasses(data.leave_passes || []);
+      } catch (error) {
+        setMsg(error.message || 'Could not refresh attendance logs.');
+      }
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [apiUrl, hostelBlock, page, updateAttendanceLogs, updateLeavePasses]);
+
+  const handleOpenEditStudent = (st) => {
+    const currentHostel = st.hostel_block || hostelBlock;
+    const wings = getHostelOptions(
+      hostelConfig,
+      currentHostel,
+      safeUser.college_id || safeUser.institute_id
+    ).find((item) => item.name.toLowerCase() === currentHostel.toLowerCase())?.wings || [];
+    setEditingStudent(st);
+    setEditForm({
+      hostel_block: currentHostel,
+      wing: inferHostelWing(st.room, wings, st.wing),
+      room: st.room || '',
+      phone: st.phone || '',
+      guardian_phone: st.guardian_phone || ''
+    });
+    setPage('edit_student');
+  };
+
+  const handleUnlockBiometric = async (student) => {
+    if (unlockingStudentId) return;
+    const previousStudents = students;
+    const until = currentEpochSeconds() + 120;
+    const optimisticStudents = students.map((item) => item.user_id === student.user_id
+      ? { ...item, biometric_status: 'Enrollment Unlocked', biometric_cred_id: '', device_hardware_id: '', enroll_window_until: until }
+      : item);
+    setUnlockingStudentId(student.user_id);
+    setStudents(optimisticStudents);
+    setCached(sKey, optimisticStudents);
+    setMsg(`Two-minute enrollment window opened for ${student.full_name || student.user_id}.`);
+    try {
+      const response = await apiFetch(`${apiUrl}/api/warden/unlock-biometric`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ student_id: student.user_id })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.detail || 'Could not unlock biometric enrollment.');
+      const updatedStudents = optimisticStudents.map((item) => item.user_id === student.user_id
+        ? { ...item, biometric_status: data.biometric_status, enroll_window_until: data.enroll_window_until }
+        : item);
+      setStudents(updatedStudents);
+      setCached(sKey, updatedStudents);
+      setMsg(`Enrollment unlocked for ${student.full_name || student.user_id} for 2 minutes.`);
+    } catch (error) {
+      setStudents(previousStudents);
+      setCached(sKey, previousStudents);
+      setMsg(error.message || 'Could not unlock biometric enrollment.');
+    } finally {
+      setUnlockingStudentId('');
+    }
+  };
+
+  const handleSaveStudentEdit = async (e) => {
+    e.preventDefault();
+    if (!editingStudent) return;
+
+    try {
+      const response = await apiFetch(`${apiUrl}/api/warden/update-student`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: editingStudent.user_id,
+          ...editForm
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.detail || 'Could not update this student.');
+      setMsg(data.message || `Updated ${editingStudent.full_name}.`);
+      setPage('directory');
+      await loadWardenData();
+    } catch (error) {
+      setMsg(error.message || 'Could not update this student.');
+    }
+  };
+
+  const handleReviewProfileRequest = async (profileRequest, decision) => {
+    if (reviewingRequestId) return;
+    setReviewingRequestId(profileRequest.request_id);
+    try {
+      const res = await apiFetch(`${apiUrl}/api/warden/profile-requests/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request_id: profileRequest.request_id, decision })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.detail || 'Could not review this profile request.');
+
+      setProfileRequests((current) => current.filter((item) => item.request_id !== profileRequest.request_id));
+      if (decision === 'approved') {
+        const changes = profileRequest.requested_changes || {};
+        const transferred = changes.hostel_block && changes.hostel_block.toLowerCase() !== hostelBlock.toLowerCase();
+        const updatedStudents = students
+          .map((student) => student.user_id.toUpperCase() === profileRequest.student_id.toUpperCase()
+            ? { ...student, ...changes }
+            : student)
+          .filter((student) => !transferred || student.user_id.toUpperCase() !== profileRequest.student_id.toUpperCase());
+        setStudents(updatedStudents);
+        setCached(sKey, updatedStudents);
+        await loadWardenData();
+      }
+      setMsg(decision === 'approved'
+        ? `Approved profile changes for ${profileRequest.full_name}.`
+        : `Rejected profile changes for ${profileRequest.full_name}.`);
+    } catch (error) {
+      setMsg(error.message || 'Could not review this profile request.');
+    } finally {
+      setReviewingRequestId(null);
+    }
+  };
+
+  const handleAddStudent = async (e) => {
+    e.preventDefault();
+    const added = { ...newStudent, hostel_block: hostelBlock, role: 'Student' };
+    try {
+      const response = await apiFetch(`${apiUrl}/api/warden/add-student`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(added)
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.detail || 'Could not add this student.');
+      setMsg(data.message || `Added ${newStudent.full_name}.`);
+      setNewStudent({ user_id: '', full_name: '', wing: '', room: '', department: 'Civil Engineering', year: '1st Year', phone: '', guardian_phone: '' });
+      setPage('directory');
+      await loadWardenData();
+    } catch (error) {
+      setMsg(error.message || 'Could not add this student.');
+    }
+  };
+
+  const handleCreateHostelWing = async (e) => {
+    e.preventDefault();
+    setMsg(`✅ Maintenance Wing "${newDept.name}" created!`);
+    const payload = { ...newDept, hostel_block: hostelBlock, type: 'Hostel' };
+    setNewDept({ dept_id: '', name: '', email: '', icon: '🛠️' });
+
+    try {
+      await apiFetch(`${apiUrl}/api/departments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      loadWardenData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleUpdateTicketStatus = async (ticketId, status) => {
+    const updated = complaints.map((c) =>
+      c.ticket_id === ticketId
+        ? { ...c, status, staff_remark: wardenRemark || c.staff_remark }
+        : c
+    );
+    setComplaints(updated);
+    setCached(cKey, updated);
+    setMsg(`✅ Ticket ${ticketId} marked as ${status}!`);
+    setWardenRemark('');
+    setPage('complaints');
+
+    try {
+      await apiFetch(`${apiUrl}/api/complaints/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ticket_id: ticketId,
+          status,
+          remark: wardenRemark || 'Updated by Chief Warden Office'
+        })
+      });
+      loadWardenData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const filteredStudents = students.filter((s) => {
+    const q = searchQuery.toLowerCase();
+    return (
+      (s.full_name || '').toLowerCase().includes(q) ||
+      (s.user_id || '').toLowerCase().includes(q) ||
+      (s.room || '').toLowerCase().includes(q) ||
+      (s.wing || '').toLowerCase().includes(q)
+    );
+  });
+
+  const filteredRegister = complaints.filter((c) => {
+    const wingMatch = regWing === 'All' || (c.wing || '').toLowerCase().includes(regWing.toLowerCase());
+    const catMatch = regCategory === 'All' || (c.routed_to || '') === regCategory || (c.category || '') === regCategory;
+    return wingMatch && catMatch;
+  });
+
+  const handlePrintRegister = () => {
+    const win = window.open('', '_blank');
+    if (!win) return;
+    const rowsHtml = filteredRegister
+      .map(
+        (c) => `
+        <tr>
+          <td><strong>${c.ticket_id}</strong><br/><small>${c.created_at || ''}</small></td>
+          <td>${c.wing || '-'} / ${c.room || '-'}</td>
+          <td>${c.student_name || c.student_id || '-'}</td>
+          <td>${c.student_phone || '-'}</td>
+          <td>${c.routed_to || c.category || '-'}</td>
+          <td><strong>${c.summary}</strong><br/><small>${c.description || ''}</small></td>
+          <td>${c.status}</td>
+        </tr>`
+      )
+      .join('');
+
+    win.document.write(`
+      <html>
+        <head>
+          <title>${hostelBlock} - Official Complaint Register</title>
+          <style>
+            @page { size: A4 landscape; margin: 12mm; }
+            body { font-family: Arial, sans-serif; color: #111; }
+            h2 { margin: 0 0 4px 0; color: #002970; }
+            p { margin: 0 0 12px 0; font-size: 12px; color: #555; }
+            table { width: 100%; border-collapse: collapse; font-size: 11px; }
+            th, td { border: 1px solid #ccc; padding: 7px 8px; text-align: left; vertical-align: top; }
+            th { background: #f1f5f9; color: #002970; }
+          </style>
+        </head>
+        <body>
+          <h2>${hostelBlock} — Physical Maintenance & Grievance Register</h2>
+          <p>Wing Filter: ${regWing} | Category Filter: ${regCategory} | Total Records: ${filteredRegister.length}</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Ticket / Date</th>
+                <th>Wing / Room</th>
+                <th>Student</th>
+                <th>Mobile</th>
+                <th>Category</th>
+                <th>Complaint / Action</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+          <script>window.onload = () => { window.print(); }</script>
+        </body>
+      </html>
+    `);
+    win.document.close();
+  };
+
+  const pendingCount = complaints.filter((c) => c.status !== 'Completed').length;
+  const profileRequestCount = profileRequests.length;
+  const attendanceRoster = students.filter((student) => attendanceWingFilter === 'All' || student.wing === attendanceWingFilter);
+  const attendanceByStudent = new Map(attendanceLogs.map((log) => [String(log.student_id || '').toUpperCase(), log]));
+  const attendanceSummary = attendanceRoster.reduce((summary, student) => {
+    const record = attendanceByStudent.get(String(student.user_id || '').toUpperCase());
+    if (record?.status === 'On Approved Leave') summary.leave += 1;
+    else if (record?.status?.startsWith('Present')) summary.present += 1;
+    else summary.absent += 1;
+    return summary;
+  }, { present: 0, leave: 0, absent: 0 });
+
+  return (
+    <div className="ptm-shell-layout">
+      <aside className="ptm-sidebar-desktop">
+        <button className={`ptm-side-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}>🏠 Warden Home</button>
+        <button className={`ptm-side-btn ${page === 'add_student' ? 'active' : ''}`} onClick={() => setPage('add_student')}>➕ Add / Upload Students</button>
+        <button className={`ptm-side-btn ${page === 'directory' || page === 'edit_student' ? 'active' : ''}`} onClick={() => setPage('directory')}>🎓 Student Directory ({students.length})</button>
+        <button className={`ptm-side-btn ${page === 'profile_requests' ? 'active' : ''}`} onClick={() => setPage('profile_requests')}>🪪 Profile Requests ({profileRequestCount})</button>
+        <button className={`ptm-side-btn ${page === 'staff_accounts' ? 'active' : ''}`} onClick={() => setPage('staff_accounts')}>🔐 Staff Passwords</button>
+        {modules?.gate_outpass && <button className={`ptm-side-btn ${page === 'leave_passes' ? 'active' : ''}`} onClick={() => setPage('leave_passes')}>🪪 Leave Passes</button>}
+        {modules?.attendance && <button className={`ptm-side-btn ${page === 'biometric_attendance' ? 'active' : ''}`} onClick={() => setPage('biometric_attendance')}>🫆 Device Lock & Attendance</button>}
+        {modules?.attendance && <button className={`ptm-side-btn ${page === 'attendance' ? 'active' : ''}`} onClick={() => setPage('attendance')}>📅 Night Roll Call</button>}
+        <button className={`ptm-side-btn ${page === 'wings' ? 'active' : ''}`} onClick={() => setPage('wings')}>🛠️ Hostel Maintenance Wings</button>
+        <button className={`ptm-side-btn ${page === 'complaints' || page === 'ticket_detail' ? 'active' : ''}`} onClick={() => setPage('complaints')}>💬 Hostel Complaints ({complaints.length})</button>
+        <button className={`ptm-side-btn ${page === 'register' ? 'active' : ''}`} onClick={() => setPage('register')}>📋 Complaint Register</button>
+      </aside>
+
+      <div className="ptm-page-wrap">
+        {msg && <div className="ptm-toast" onClick={() => setMsg(null)}>{msg}</div>}
+
+        {dataLoading ? (
+          <ListRowSkeleton count={5} />
+        ) : (
+          <>
+            {modules?.gate_outpass && page === 'leave_passes' && (
+              <WardenLeavePassPanel
+                apiUrl={apiUrl}
+                user={safeUser}
+                leavePasses={leavePasses}
+                attendanceLogs={attendanceLogs}
+                onLeavePassesChange={(next) => updateLeavePasses(next, true)}
+                onAttendanceLogsChange={(next) => updateAttendanceLogs(next, true)}
+              />
+            )}
+            {modules?.attendance && page === 'biometric_attendance' && (
+              <div>
+                <div className="ptm-drill-header"><h1 className="ptm-page-title">Device Lock & Attendance · {hostelBlock}</h1></div>
+                <div className="ptm-card">
+                  <div className="ptm-section-title">Today's live attendance summary</div>
+                  <label className="ptm-label">Filter by wing
+                    <select className="ptm-input" value={attendanceWingFilter} onChange={(event) => setAttendanceWingFilter(event.target.value)}>
+                      <option value="All">All wings</option>
+                      {hostelWings.map((wing) => <option key={wing} value={wing}>{wing}</option>)}
+                    </select>
+                  </label>
+                  <div className="ptm-mini-grid">
+                    <div className="ptm-mini-card"><div className="ptm-list-sub">Present</div><div className="ptm-list-title">{attendanceSummary.present}</div></div>
+                    <div className="ptm-mini-card"><div className="ptm-list-sub">On Approved Leave</div><div className="ptm-list-title">{attendanceSummary.leave}</div></div>
+                    <div className="ptm-mini-card"><div className="ptm-list-sub">Absent / Not marked</div><div className="ptm-list-title">{attendanceSummary.absent}</div></div>
+                  </div>
+                  <p className="ptm-list-sub">This tenant-scoped summary refreshes every 30 seconds while this page is open.</p>
+                </div>
+                <div className="ptm-card">
+                  <div className="ptm-section-title">Resident device enrollment</div>
+                  <p className="ptm-list-sub">Unlocks a two-minute setup window for the student's app-stored device token. Student face checks run locally; no photo or face template is uploaded. The token is not hardware-backed.</p>
+                  <div className="ptm-list">
+                    {attendanceRoster.map((student) => {
+                      const status = student.biometric_status || 'Unenrolled';
+                      const isLocked = status === 'Locked';
+                      return (
+                        <div className="ptm-list-row" key={student.user_id}>
+                          <div className="ptm-list-main">
+                            <div className="ptm-list-title">{student.full_name || student.user_id} · {student.user_id}</div>
+                            <div className="ptm-list-sub">{student.wing || 'Wing not assigned'} · Room {student.room || '-'} · {isLocked ? '🔒 Locked' : `⚠️ ${status}`}</div>
+                          </div>
+                          <button
+                            type="button"
+                            className="ptm-btn-secondary"
+                            disabled={Boolean(unlockingStudentId)}
+                            onClick={() => handleUnlockBiometric(student)}
+                          >
+                            {unlockingStudentId === student.user_id ? 'Unlocking…' : '🔓 Unlock 2-Min Device Setup'}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+            {modules?.attendance && page === 'attendance' && <WardenAttendancePanel apiUrl={apiUrl} user={safeUser} />}
+            {page === 'staff_accounts' && <StaffAccountAccess apiUrl={apiUrl} user={safeUser} />}
+
+            {page === 'home' && (
+              <div>
+                <div className="ptm-mini-grid">
+                  <div className="ptm-mini-card" onClick={() => setPage('directory')}>
+                    <div className="ptm-row-between">
+                      <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>{hostelBlock} Residents</span>
+                      <span>🎓</span>
+                    </div>
+                    <div style={{ fontSize: '22px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>{students.length} Students</div>
+                    <button className="ptm-mini-btn">Manage Directory →</button>
+                  </div>
+
+                  <div className="ptm-mini-card" onClick={() => setPage('complaints')}>
+                    <div className="ptm-row-between">
+                      <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>Active Grievances</span>
+                      <span>🛠️</span>
+                    </div>
+                    <div style={{ fontSize: '22px', fontWeight: 800, color: '#D97706', marginTop: '4px' }}>{pendingCount} Open</div>
+                    <button className="ptm-mini-btn">View All ({complaints.length}) →</button>
+                  </div>
+
+                  <div className="ptm-mini-card" onClick={() => setPage('register')}>
+                    <div className="ptm-row-between">
+                      <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>Physical Audit PDF</span>
+                      <span>📋</span>
+                    </div>
+                    <div style={{ fontSize: '20px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>Print Register</div>
+                    <button className="ptm-mini-btn">Export Landscape PDF →</button>
+                  </div>
+                  <div className="ptm-mini-card" onClick={() => setPage('profile_requests')}>
+                    <div className="ptm-row-between">
+                      <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>Profile Changes</span>
+                      <span>🪪</span>
+                    </div>
+                    <div style={{ fontSize: '22px', fontWeight: 800, color: profileRequestCount ? '#D97706' : '#002970', marginTop: '4px' }}>{profileRequestCount} Pending</div>
+                    <button className="ptm-mini-btn">Review student requests →</button>
+                  </div>
+                </div>
+
+                <div className="ptm-card">
+                  <div className="ptm-section-title">{hostelBlock} Chief Warden Controls</div>
+                  <div className="ptm-icon-grid">
+                    <button className="ptm-icon-tile" onClick={() => setPage('directory')}>
+                      <div className="ptm-icon-circle">🎓</div>
+                      <span className="ptm-icon-label">Student Directory</span>
+                    </button>
+                    <button className="ptm-icon-tile" onClick={() => setPage('complaints')}>
+                      <div className="ptm-icon-circle">💬</div>
+                      <span className="ptm-icon-label">Hostel Complaints</span>
+                    </button>
+                    <button className="ptm-icon-tile" onClick={() => setPage('register')}>
+                      <div className="ptm-icon-circle">📋</div>
+                      <span className="ptm-icon-label">Complaint Register</span>
+                    </button>
+                    <button className="ptm-icon-tile" onClick={() => setPage('wings')}>
+                      <div className="ptm-icon-circle">🛠️</div>
+                      <span className="ptm-icon-label">Maintenance Wings</span>
+                    </button>
+                    <button className="ptm-icon-tile" onClick={() => setPage('profile_requests')}>
+                      <div className="ptm-icon-circle">
+                        🪪
+                        {profileRequestCount > 0 && <span className="ptm-tile-badge">{profileRequestCount}</span>}
+                      </div>
+                      <span className="ptm-icon-label">Profile Requests</span>
+                    </button>
+                    <button className="ptm-icon-tile" onClick={() => setPage('staff_accounts')}>
+                      <div className="ptm-icon-circle">🔐</div>
+                      <span className="ptm-icon-label">Staff Passwords</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {page === 'profile_requests' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+                  <h1 className="ptm-page-title">Student Profile Requests</h1>
+                  <p className="ptm-page-sub">{hostelBlock} · {profileRequestCount} awaiting review</p>
+                </div>
+                <div className="ptm-card">
+                  {profileRequestCount === 0 ? (
+                    <div className="ptm-list-sub">No profile change requests are waiting for review.</div>
+                  ) : (
+                    <div className="ptm-list">
+                      {profileRequests.map((item) => {
+                        const fieldLabels = { hostel_block: 'Hostel', room: 'Room', wing: 'Wing', phone: 'Mobile' };
+                        const currentValues = { hostel_block: item.hostel_block, room: item.current_room, wing: item.current_wing, phone: item.current_phone };
+                        return (
+                          <article className="ptm-profile-request" key={item.request_id}>
+                            <div className="ptm-list-title">{item.full_name} ({item.student_id})</div>
+                            <div className="ptm-list-sub">{item.hostel_block} · Requested {new Date(item.created_at).toLocaleString()}</div>
+                            <div className="ptm-profile-request-changes">
+                              {Object.entries(item.requested_changes || {}).map(([field, value]) => (
+                                <div className="ptm-profile-request-change" key={field}>
+                                  <span>{fieldLabels[field] || field}</span>
+                                  <span>{currentValues[field] || 'Not set'} → <strong>{value}</strong></span>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="ptm-profile-request-actions">
+                              <button type="button" className="ptm-btn-primary" onClick={() => handleReviewProfileRequest(item, 'approved')} disabled={reviewingRequestId === item.request_id}>
+                                {reviewingRequestId === item.request_id ? 'Saving…' : 'Approve changes'}
+                              </button>
+                              <button type="button" className="ptm-btn-danger" onClick={() => handleReviewProfileRequest(item, 'rejected')} disabled={reviewingRequestId === item.request_id}>
+                                Reject
+                              </button>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {page === 'directory' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+                  <h1 className="ptm-page-title">{hostelBlock} Student Directory</h1>
+                  <p className="ptm-page-sub">Tap "✏️ Edit" on any student to change their Room, Wing, or transfer them to another Hostel Bhawan.</p>
+                </div>
+
+                <div className="ptm-card">
+                  <input
+                    type="text"
+                    className="ptm-input"
+                    placeholder="🔍 Search by Roll No, Name, or Room..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    style={{ marginBottom: '14px', borderRadius: '999px' }}
+                  />
+
+                  {filteredStudents.length === 0 ? (
+                    <div className="ptm-list-sub" style={{ textAlign: 'center', padding: '20px' }}>No matching students found.</div>
+                  ) : (
+                    <div className="ptm-list">
+                      {filteredStudents.map((st) => (
+                        <div key={st.user_id} className="ptm-list-row">
+                          <div className="ptm-avatar-pastel" style={{ background: '#E0F2FE', color: '#002970' }}>
+                            {(st.full_name || 'ST').slice(0, 2).toUpperCase()}
+                          </div>
+                          <div className="ptm-list-main">
+                            <div className="ptm-list-title">{st.full_name} ({st.user_id})</div>
+                            <div className="ptm-list-sub">
+                              🚪 {st.wing || 'Wing'} • Room {st.room || '-'} • {st.year || '1st Year'} • {st.department || 'SVNIT'} • 📞 {st.phone || 'N/A'}
+                            </div>
+                            <div className="ptm-list-sub">{st.biometric_status === 'Locked' ? '🔒 Device token enrolled' : `⚠️ ${st.biometric_status || 'Unenrolled'}`}</div>
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', justifyContent: 'flex-end', maxWidth: '100%' }}>
+                            <button type="button" className="ptm-btn-secondary" style={{ width: 'auto', padding: '7px 14px', fontSize: '12px' }} disabled={Boolean(unlockingStudentId)} onClick={() => handleUnlockBiometric(st)}>
+                              {unlockingStudentId === st.user_id ? 'Unlocking…' : '🔓 Unlock 2-Min Device Setup'}
+                            </button>
+                            <button type="button" className="ptm-btn-secondary" style={{ width: 'auto', padding: '7px 14px', fontSize: '12px' }} onClick={() => handleOpenEditStudent(st)}>✏️ Edit</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {page === 'edit_student' && editingStudent && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('directory')}>←</button>
+                  <h1 className="ptm-page-title">Edit / Transfer Resident</h1>
+                  <p className="ptm-page-sub">{editingStudent.full_name} ({editingStudent.user_id})</p>
+                </div>
+                <div className="ptm-card">
+                  <form onSubmit={handleSaveStudentEdit} className="ptm-form-stack">
+                    <div>
+                      <label className="ptm-label">Hostel
+                        <select
+                          className="ptm-input"
+                          value={editForm.hostel_block}
+                          onChange={(e) => setEditForm((current) => ({ ...current, hostel_block: e.target.value, wing: '', room: '' }))}
+                          required
+                        >
+                          {editHostelOptions.map((item) => <option key={item.hostel_id} value={item.name}>{item.name}</option>)}
+                          <option value="Day Scholar">Day Scholar</option>
+                        </select>
+                      </label>
+                    </div>
+                    {editForm.hostel_block !== 'Day Scholar' && <div>
+                      <label className="ptm-label">Hostel Wing</label>
+                      <select
+                        className="ptm-input"
+                        value={editForm.wing}
+                        onChange={(e) => setEditForm({ ...editForm, wing: e.target.value })}
+                        required
+                      >
+                        <option value="">Choose a wing</option>
+                        {editHostelWings.map((wing) => <option key={wing} value={wing}>{wing}</option>)}
+                      </select>
+                    </div>
+                    }
+                    {editForm.hostel_block !== 'Day Scholar' && <div>
+                      <label className="ptm-label">Room Number</label>
+                      <input
+                        type="text"
+                        className="ptm-input"
+                        value={editForm.room}
+                        onChange={(e) => setEditForm({ ...editForm, room: e.target.value })}
+                        required
+                      />
+                    </div>
+                    }
+                    <div>
+                      <label className="ptm-label">Mobile Number</label>
+                      <input
+                        type="text"
+                        className="ptm-input"
+                        value={editForm.phone}
+                        onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="ptm-label">Parent / guardian number (managed by Warden)</label>
+                      <input
+                        type="tel"
+                        className="ptm-input"
+                        value={editForm.guardian_phone}
+                        onChange={(e) => setEditForm((current) => ({ ...current, guardian_phone: e.target.value }))}
+                        placeholder="+91 98765 43210"
+                      />
+                    </div>
+                    <button type="submit" className="ptm-btn-primary">💾 Save Changes & Route Student</button>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {page === 'add_student' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+                  <h1 className="ptm-page-title">Add Resident to {hostelBlock}</h1>
+                </div>
+                <div className="ptm-card">
+                  <form onSubmit={handleAddStudent} className="ptm-form-stack">
+                    <input type="text" className="ptm-input" placeholder="College student ID" value={newStudent.user_id} onChange={(e) => setNewStudent({ ...newStudent, user_id: e.target.value.toUpperCase() })} required />
+                    <input type="text" className="ptm-input" placeholder="Student Full Name" value={newStudent.full_name} onChange={(e) => setNewStudent({ ...newStudent, full_name: e.target.value })} required />
+                    <select className="ptm-input" value={newStudent.wing} onChange={(e) => setNewStudent({ ...newStudent, wing: e.target.value })} required>
+                      <option value="">Choose a wing</option>
+                      {hostelWings.map((wing) => <option key={wing} value={wing}>{wing}</option>)}
+                    </select>
+                    <input type="text" className="ptm-input" placeholder="Room Number (e.g. D-315)" value={newStudent.room} onChange={(e) => setNewStudent({ ...newStudent, room: e.target.value })} required />
+                    <input type="text" className="ptm-input" placeholder="Mobile Number" value={newStudent.phone} onChange={(e) => setNewStudent({ ...newStudent, phone: e.target.value })} />
+                    <input type="tel" className="ptm-input" placeholder="Parent / guardian number (optional)" value={newStudent.guardian_phone} onChange={(e) => setNewStudent({ ...newStudent, guardian_phone: e.target.value })} />
+                    <button type="submit" className="ptm-btn-primary">+ Add Resident</button>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {page === 'wings' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+                  <h1 className="ptm-page-title">{hostelBlock} Maintenance Wings</h1>
+                </div>
+                <div className="ptm-card">
+                  <form onSubmit={handleCreateHostelWing} className="ptm-form-stack">
+                    <input type="text" className="ptm-input" placeholder="Wing Code (e.g. MESS_GAJJAR)" value={newDept.dept_id} onChange={(e) => setNewDept({ ...newDept, dept_id: e.target.value.toUpperCase() })} required />
+                    <input type="text" className="ptm-input" placeholder="Wing Title (e.g. Gajjar Mess & Water Committee)" value={newDept.name} onChange={(e) => setNewDept({ ...newDept, name: e.target.value })} required />
+                    <input type="email" className="ptm-input" placeholder="Supervisor Email" value={newDept.email} onChange={(e) => setNewDept({ ...newDept, email: e.target.value })} />
+                    <button type="submit" className="ptm-btn-primary">+ Add Hostel Wing</button>
+                  </form>
+                </div>
+                <div className="ptm-card">
+                  <div className="ptm-section-title">Active Maintenance Departments</div>
+                  <div className="ptm-list">
+                    {departments.map((d) => (
+                      <div key={d.id} className="ptm-list-row">
+                        <div className="ptm-avatar-pastel">{d.icon || '🛠️'}</div>
+                        <div className="ptm-list-main">
+                          <div className="ptm-list-title">{d.title}</div>
+                          <div className="ptm-list-sub">ID: {d.id} • Scope: {d.type || 'Hostel'}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {page === 'complaints' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
+                  <h1 className="ptm-page-title">{hostelBlock} Grievances ({complaints.length})</h1>
+                </div>
+                <div className="ptm-card">
+                  {complaints.length === 0 ? (
+                    <div className="ptm-list-sub">No complaints found for {hostelBlock}.</div>
+                  ) : (
+                    <div className="ptm-list">
+                      {complaints.map((c) => (
+                        <div key={c.ticket_id} className="ptm-list-row" onClick={() => { setSelectedTicket(c); setPage('ticket_detail'); }}>
+                          <div className="ptm-avatar-pastel">🛠️</div>
+                          <div className="ptm-list-main">
+                            <div className="ptm-list-title">{c.summary}</div>
+                            <div className="ptm-list-sub">
+                              {c.ticket_id} • {c.wing} Room {c.room} • {c.student_name || c.student_id}
+                            </div>
+                            <span className="ptm-tag-pill">{c.routed_to} • {c.created_at}</span>
+                          </div>
+                          <span className="ptm-status-badge" style={{ background: c.status === 'Completed' ? '#DCFCE7' : '#FEF3C7', color: c.status === 'Completed' ? '#15803D' : '#B45309' }}>
+                            {c.status} ›
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {page === 'ticket_detail' && selectedTicket && (
+              <div>
+                <div className="ptm-drill-header">
+                  <button className="ptm-back-btn" onClick={() => setPage('complaints')}>←</button>
+                  <span className="ptm-tag-pill">{selectedTicket.ticket_id} • {selectedTicket.wing} Room {selectedTicket.room}</span>
+                  <h1 className="ptm-page-title">{selectedTicket.summary}</h1>
+                </div>
+                <div className="ptm-card">
+                  <p style={{ marginBottom: '12px' }}>{selectedTicket.description}</p>
+                  <div className="ptm-list-sub" style={{ marginBottom: '14px' }}>
+                    <strong>Student:</strong> {selectedTicket.student_name || selectedTicket.student_id} • 📞 {selectedTicket.student_phone || 'N/A'}
+                  </div>
+                  <textarea
+                    rows="2"
+                    className="ptm-input"
+                    placeholder="Add Warden / Maintenance Supervisor action remark..."
+                    value={wardenRemark}
+                    onChange={(e) => setWardenRemark(e.target.value)}
+                    style={{ marginBottom: '12px' }}
+                  />
+                  <div className="ptm-grid-2">
+                    <button className="ptm-btn-primary" onClick={() => handleUpdateTicketStatus(selectedTicket.ticket_id, 'Awaiting Confirmation')}>
+                      ⚡ Mark Action Taken (Ask Student to Verify)
+                    </button>
+                    <button className="ptm-btn-secondary" onClick={() => handleUpdateTicketStatus(selectedTicket.ticket_id, 'In Progress')}>
+                      🔧 Mark In Progress
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {page === 'register' && (
+              <div>
+                <div className="ptm-drill-header">
+                  <span className="ptm-tag-pill">{hostelBlock} • PHYSICAL REGISTER</span>
+                  <h1 className="ptm-page-title">Hostel Complaint Register</h1>
+                  <p className="ptm-page-sub">Filter maintenance requests by wing and category, then export a print-ready landscape register.</p>
+                </div>
+
+                <div className="ptm-card">
+                  <div className="ptm-grid-2" style={{ marginBottom: '14px' }}>
+                    <div>
+                      <label className="ptm-label">Wing</label>
+                      <select className="ptm-input" value={regWing} onChange={(e) => setRegWing(e.target.value)}>
+                        <option value="All">All Wings</option>
+                        {hostelWings.map((w) => (
+                          <option key={w} value={w}>{w}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="ptm-label">Category</label>
+                      <select className="ptm-input" value={regCategory} onChange={(e) => setRegCategory(e.target.value)}>
+                        <option value="All">All Categories</option>
+                        {departments.map((d) => (
+                          <option key={d.id} value={d.title}>{d.title}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <button className="ptm-btn-primary" onClick={handlePrintRegister}>
+                    📥 Download Register PDF ({filteredRegister.length})
+                  </button>
+                </div>
+
+                <div className="ptm-card" style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid #E5E7EB', textAlign: 'left' }}>
+                        <th style={{ padding: '10px 8px' }}>Ticket / Date</th>
+                        <th style={{ padding: '10px 8px' }}>Wing / Room</th>
+                        <th style={{ padding: '10px 8px' }}>Student</th>
+                        <th style={{ padding: '10px 8px' }}>Mobile</th>
+                        <th style={{ padding: '10px 8px' }}>Category</th>
+                        <th style={{ padding: '10px 8px' }}>Complaint / Action</th>
+                        <th style={{ padding: '10px 8px' }}>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredRegister.map((c) => (
+                        <tr key={c.ticket_id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                          <td style={{ padding: '10px 8px' }}><strong>{c.ticket_id}</strong><br/><span style={{ fontSize: '11px', color: '#6B7280' }}>{c.created_at}</span></td>
+                          <td style={{ padding: '10px 8px' }}>{c.wing}<br/>{c.room}</td>
+                          <td style={{ padding: '10px 8px' }}>{c.student_name || c.student_id}</td>
+                          <td style={{ padding: '10px 8px' }}>{c.student_phone || '-'}</td>
+                          <td style={{ padding: '10px 8px' }}>{c.routed_to || c.category}</td>
+                          <td style={{ padding: '10px 8px' }}><strong>{c.summary}</strong><br/>{c.description}</td>
+                          <td style={{ padding: '10px 8px' }}>{c.status}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <nav className="ptm-bottom-nav">
+        <button className={`ptm-bnav-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}><span>🏠</span><span>Home</span></button>
+        <button className={`ptm-bnav-btn ${page === 'directory' ? 'active' : ''}`} onClick={() => setPage('directory')}><span>🎓</span><span>Directory</span></button>
+        <button className={`ptm-bnav-btn ${page === 'complaints' ? 'active' : ''}`} onClick={() => setPage('complaints')}><span>💬</span><span>Tickets</span></button>
+        {modules?.attendance && <button className={`ptm-bnav-btn ${page === 'biometric_attendance' ? 'active' : ''}`} onClick={() => setPage('biometric_attendance')}><span>🫆</span><span>Device Lock</span></button>}
+        {modules?.gate_outpass && <button className={`ptm-bnav-btn ${page === 'leave_passes' ? 'active' : ''}`} onClick={() => setPage('leave_passes')}><span>🪪</span><span>Leave Pass</span></button>}
+        <button className={`ptm-bnav-btn ${page === 'register' ? 'active' : ''}`} onClick={() => setPage('register')}><span>📋</span><span>Register</span></button>
+      </nav>
+    </div>
+  );
+}

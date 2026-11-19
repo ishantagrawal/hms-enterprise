@@ -1,12 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useState } from 'react';
 import { apiFetch, extractErrorMessage, unwrapApiError } from '../api';
 import { WardenAttendancePanel } from './CampusSecurity';
 import { ListRowSkeleton } from './SkeletonLoader';
 import NativeBottomSheet from './NativeBottomSheet';
 import { lightImpact } from '../utils/nativeFeedback';
-import { useBeaconScanner } from '../hooks/useBeaconScanner';
-import { captureCompressedFrame } from '../utils/cameraFrame';
 
+const StudentBiometricAttendancePanel = lazy(() =>
+  import('./StudentSecurityServices').then((module) => ({ default: module.StudentBiometricAttendancePanel }))
+);
 
 async function requestJson(url, options = {}, fallback = 'Request failed') {
   const response = await apiFetch(url, options);
@@ -33,14 +34,7 @@ export function StudentAttendancePortal({ user, apiUrl }) {
   const [attendance, setAttendance] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
-  const [activeSessions, setActiveSessions] = useState([]);
-  const [marking, setMarking] = useState(false);
-  const activeClassSession = activeSessions.find((session) => session.scope === 'CLASS') || null;
-  const beaconScan = useBeaconScanner(activeClassSession?.beacon || null);
 
-  // oxlint-disable-next-line react/set-state-in-effect, react-hooks/exhaustive-deps
-  // oxlint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     let active = true;
     (async () => {
@@ -58,103 +52,7 @@ export function StudentAttendancePortal({ user, apiUrl }) {
     return () => { active = false; };
   }, [apiUrl]);
 
-  useEffect(() => {
-    let active = true;
-    apiFetch(`${apiUrl}/api/v1/attendance-sessions-active`)
-      .then(async (response) => {
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(extractErrorMessage(payload, 'Could not load live sessions.'));
-        if (active) setActiveSessions(payload.sessions || []);
-      })
-      .catch((loadError) => {
-        if (active) setError(extractErrorMessage(loadError, 'Could not load live sessions.'));
-      });
-    const timer = window.setInterval(async () => {
-      try {
-        const response = await apiFetch(`${apiUrl}/api/v1/attendance-sessions-active`);
-        const payload = await response.json().catch(() => ({}));
-        if (response.ok && active) setActiveSessions(payload.sessions || []);
-      } catch {
-        // Keep the last known live-session state during transient network errors.
-      }
-    }, 5000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [apiUrl]);
-
   const hostelRows = attendance.filter((row) => row.hostel_block);
-
-  const markPresent = async () => {
-    if (!activeClassSession) {
-      setError('No active class attendance session is available.');
-      return;
-    }
-    if (!beaconScan.inRange) {
-      setError('Move closer to the configured classroom beacon.');
-      return;
-    }
-    if (marking) return;
-    setMarking(true);
-    setError('');
-    setMessage('');
-    let stream = null;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
-      const video = document.createElement('video');
-      video.srcObject = stream;
-      video.muted = true;
-      await video.play();
-      await new Promise((resolve) => window.setTimeout(resolve, 350));
-      const liveImage = captureCompressedFrame(video);
-      let assertion = null;
-      if (window.PublicKeyCredential && navigator.credentials) {
-        const challengeBytes = new TextEncoder().encode(activeClassSession.current_nonce);
-        assertion = await navigator.credentials.get({
-          publicKey: {
-            challenge: challengeBytes,
-            timeout: 30000,
-            userVerification: 'required',
-            rpId: window.location.hostname
-          }
-        }).catch(() => null);
-      }
-      if (!assertion) throw new Error('Complete WebAuthn device verification before marking present.');
-      const beacon = activeClassSession.beacon;
-      await requestJson(`${apiUrl}/api/v1/attendance/check-in`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id: activeClassSession.session_id,
-          session_nonce: activeClassSession.current_nonce,
-          beacon_uuid: beacon.uuid,
-          beacon_major: beacon.major,
-          beacon_minor: beacon.minor,
-          rssi: beaconScan.rssi,
-          live_image_base64: liveImage,
-          webauthn_credential: {
-            id: assertion.id,
-            rawId: btoa(String.fromCharCode(...new Uint8Array(assertion.rawId))),
-            type: assertion.type,
-            response: {
-              clientDataJSON: btoa(String.fromCharCode(...new Uint8Array(assertion.response.clientDataJSON))),
-              authenticatorData: btoa(String.fromCharCode(...new Uint8Array(assertion.response.authenticatorData))),
-              signature: btoa(String.fromCharCode(...new Uint8Array(assertion.response.signature))),
-              userHandle: assertion.response.userHandle ? btoa(String.fromCharCode(...new Uint8Array(assertion.response.userHandle))) : null
-            }
-          }
-        })
-      }, 'Could not mark attendance.');
-      await lightImpact();
-      setMessage?.('Attendance marked present.');
-    } catch (markError) {
-      setError(extractErrorMessage(markError, 'Could not mark attendance.'));
-    } finally {
-      stream?.getTracks().forEach((track) => track.stop());
-      setMarking(false);
-    }
-  };
 
   return (
     <div>
@@ -162,21 +60,6 @@ export function StudentAttendancePortal({ user, apiUrl }) {
         <>
           <SectionHeader title="Class Attendance" subtitle="Subject-wise totals and day-by-day class attendance." />
           {error && <div className="ptm-alert-error" role="alert">{error}</div>}
-          {message && <div className="ptm-alert-success" role="status">{message}</div>}
-          {activeClassSession && (
-            <div className="ptm-card">
-              <div className="ptm-row-between">
-                <div>
-                  <div className="ptm-section-title">Live Mark Present</div>
-                  <div className="ptm-list-sub">Beacon RSSI: <span className="attendance-percent">{beaconScan.rssi ?? 'Scanning'} dBm</span></div>
-                </div>
-                <span className="ptm-tag-pill">{beaconScan.inRange ? 'In range' : 'Out of range'}</span>
-              </div>
-              <button type="button" className="ptm-btn-primary" disabled={marking || !beaconScan.inRange} onClick={markPresent}>
-                {marking ? 'Verifying…' : 'Mark Present'}
-              </button>
-            </div>
-          )}
           <div className="ptm-card">
             {loading ? <ListRowSkeleton count={4} /> : (
               attendance.length === 0
@@ -213,17 +96,15 @@ export function StudentAttendancePortal({ user, apiUrl }) {
                   </article>
                 ))}
           </div>
-          <div className="ptm-card">
-            <div className="ptm-section-title">Face & Device Binding</div>
-            <p className="ptm-list-sub">Status: {user?.biometric_status || 'Not Enrolled'}</p>
-            <button
-              type="button"
-              className="ptm-btn-primary"
-              onClick={() => setMessage('Ask your Warden to open the timed enrollment window. Then complete face and WebAuthn enrollment in the secure prompt.')}
-            >
-              Open secure binding enrollment
-            </button>
-          </div>
+          <Suspense fallback={<ListRowSkeleton count={3} />}>
+            <StudentBiometricAttendancePanel
+              apiUrl={apiUrl}
+              user={user}
+              hostels={[]}
+              attendanceLogs={hostelRows}
+              onAttendanceLogsChange={() => {}}
+            />
+          </Suspense>
         </>
       )}
       <nav className="ptm-bottom-nav" aria-label="Student attendance navigation">
@@ -238,7 +119,7 @@ export function StudentAttendancePortal({ user, apiUrl }) {
   );
 }
 
-export function FacultyAttendancePortal({ user: _user, apiUrl }) {
+export function FacultyAttendancePortal({ user, apiUrl }) {
   const [tab, setTab] = useState('roster');
   const [courses, setCourses] = useState([]);
   const [courseName, setCourseName] = useState('');
@@ -265,9 +146,9 @@ export function FacultyAttendancePortal({ user: _user, apiUrl }) {
 
   const loadCourses = async () => {
     try {
-      const data = await requestJson(`${apiUrl}/api/v1/courses`, {}, 'Could not load courses.');
+      const data = await requestJson(`${apiUrl}/api/attendance/courses`, {}, 'Could not load courses.');
       setCourses(data.courses || []);
-      setSelectedCourse((current) => current || data.courses?.[0]?.id || '');
+      setSelectedCourse((current) => current || data.courses?.[0]?.course_id || '');
     } catch (loadError) {
       setError(loadError.message || 'Could not load courses.');
     }
@@ -275,14 +156,13 @@ export function FacultyAttendancePortal({ user: _user, apiUrl }) {
 
   const loadBeacons = async () => {
     try {
-      const data = await requestJson(`${apiUrl}/api/v1/beacons?scope=CLASS`, {}, 'Could not load beacons.');
+      const data = await requestJson(`${apiUrl}/api/attendance/beacons?kind=class`, {}, 'Could not load beacons.');
       setBeacons(data.beacons || []);
     } catch (loadError) {
       setError(loadError.message || 'Could not load beacons.');
     }
   };
 
-  // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => {
     Promise.all([loadCourses(), loadBeacons()]).finally(() => setLoading(false));
   }, [apiUrl]);
@@ -370,7 +250,6 @@ export function FacultyAttendancePortal({ user: _user, apiUrl }) {
     }
   };
 
-  // oxlint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!activeSession) return undefined;
     const timer = window.setInterval(() => refreshLiveSession(activeSession.id), 3000);
@@ -382,13 +261,13 @@ export function FacultyAttendancePortal({ user: _user, apiUrl }) {
     setError('');
     setMessage('');
     try {
-      const data = await requestJson(`${apiUrl}/api/v1/courses`, {
+      const data = await requestJson(`${apiUrl}/api/attendance/courses`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: courseName, code: courseCode })
+        body: JSON.stringify({ subject_name: courseName, subject_code: courseCode })
       }, 'Could not create course.');
       setCourses((current) => [data.course, ...current]);
-      setSelectedCourse(data.course.id);
+      setSelectedCourse(data.course.course_id);
       setCourseName('');
       setCourseCode('');
       setMessage('Course created.');
@@ -404,19 +283,15 @@ export function FacultyAttendancePortal({ user: _user, apiUrl }) {
       return;
     }
     try {
-      const data = await requestJson(`${apiUrl}/api/v1/course-enrollments/bulk`, {
+      const data = await requestJson(`${apiUrl}/api/attendance/courses/${encodeURIComponent(selectedCourse)}/roster`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ course_id: selectedCourse, entries: entries.map((entry) => ({
-          student_id: entry.student_id,
-          roll_no: entry.roll_number || entry.roll_no,
-          student_name: entry.student_name || ''
-        })) })
+        body: JSON.stringify({ entries })
       }, 'Could not update roster.');
-      setCourses((current) => current.map((course) => course.id === selectedCourse
-        ? { ...course, roster_count: data.count }
+      setCourses((current) => current.map((course) => course.course_id === selectedCourse
+        ? { ...course, roster_count: data.roster_count }
         : course));
-      setMessage(`Roster updated. ${data.count} student(s) enrolled.`);
+      setMessage(`Roster updated. ${data.roster_count} student(s) enrolled.`);
       setError('');
     } catch (saveError) {
       setError(saveError.message || 'Could not update roster.');
@@ -455,11 +330,11 @@ export function FacultyAttendancePortal({ user: _user, apiUrl }) {
     setError('');
     setMessage('');
     try {
-      await requestJson(`${apiUrl}/api/v1/beacons`, {
+      await requestJson(`${apiUrl}/api/attendance/beacons`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          scope: 'CLASS',
+          beacon_kind: 'class',
           name: beaconForm.name,
           uuid: beaconForm.uuid,
           major: Number(beaconForm.major),
@@ -499,7 +374,7 @@ export function FacultyAttendancePortal({ user: _user, apiUrl }) {
               <label className="ptm-label">Selected course
                 <select className="ptm-input" value={selectedCourse} onChange={(event) => setSelectedCourse(event.target.value)}>
                   <option value="">Select course</option>
-                  {courses.map((course) => <option key={course.id} value={course.id}>{course.title || course.subject_name} · {course.roster_count || 0} students</option>)}
+                  {courses.map((course) => <option key={course.course_id} value={course.course_id}>{course.subject_name} · {course.roster_count || 0} students</option>)}
                 </select>
               </label>
               <div className="ptm-grid-2">
@@ -600,38 +475,12 @@ export function FacultyAttendancePortal({ user: _user, apiUrl }) {
           </form>
           <div className="ptm-list">
             {beacons.map((beacon) => (
-              <article className="ptm-list-row" key={beacon.id || beacon.beacon_id}>
+              <article className="ptm-list-row" key={beacon.beacon_id}>
                 <div className="ptm-list-main">
                   <div className="ptm-list-title">{beacon.name}</div>
-                  <div className="ptm-list-sub">{beacon.uuid || beacon.uuid_value} · {beacon.major}/{beacon.minor} · {beacon.min_rssi} dBm</div>
+                  <div className="ptm-list-sub">{beacon.uuid_value} · {beacon.major}/{beacon.minor} · {beacon.min_rssi} dBm</div>
                 </div>
-                <button
-                  type="button"
-                  className="ptm-btn-secondary"
-                  onClick={async () => {
-                    try {
-                      await requestJson(`${apiUrl}/api/v1/beacons/${encodeURIComponent(beacon.id || beacon.beacon_id)}`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          scope: 'CLASS',
-                          name: beacon.name,
-                          uuid: beacon.uuid || beacon.uuid_value,
-                          major: beacon.major,
-                          minor: beacon.minor,
-                          min_rssi: beacon.min_rssi,
-                          is_active: !(beacon.is_active ?? beacon.enabled)
-                        })
-                      }, 'Could not toggle beacon.');
-                      await lightImpact();
-                      await loadBeacons();
-                    } catch (toggleError) {
-                      setError(extractErrorMessage(toggleError, 'Could not toggle beacon.'));
-                    }
-                  }}
-                >
-                  {(beacon.is_active ?? beacon.enabled) ? 'Disable' : 'Enable'}
-                </button>
+                <span className="ptm-tag-pill">{beacon.enabled ? 'Enabled' : 'Disabled'}</span>
               </article>
             ))}
           </div>
@@ -672,45 +521,14 @@ export function WardenAttendanceOnlyPortal({ user, apiUrl }) {
   );
 }
 
-function StudentDeviceApprovals({ apiUrl, user: _user }) {
+function StudentDeviceApprovals({ apiUrl, user }) {
   const [message, setMessage] = useState('');
-  const [studentId, setStudentId] = useState('');
-  const [error, setError] = useState('');
-
-  const openEnrollment = async () => {
-    setError('');
-    setMessage('');
-    if (!studentId.trim()) {
-      setError('Enter the student roll number or account ID.');
-      return;
-    }
-    try {
-      await requestJson(`${apiUrl}/api/warden/unlock-biometric`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: studentId.trim() })
-      }, 'Could not open the enrollment window.');
-      setMessage('Timed face and WebAuthn enrollment window opened.');
-      await lightImpact();
-    } catch (actionError) {
-      setError(extractErrorMessage(actionError, 'Could not open the enrollment window.'));
-    }
-  };
-
-  const resetDevice = async () => {
-    await openEnrollment();
-  };
-
   return (
     <>
       <SectionHeader title="Face & Device Approvals" subtitle="Timed enrollment and device-lock reset." />
       <div className="ptm-card">
-        {error && <div className="ptm-alert-error" role="alert">{error}</div>}
-        <label className="ptm-label">Student roll number or account ID
-          <input className="ptm-input roll-number" value={studentId} onChange={(event) => setStudentId(event.target.value)} />
-        </label>
-        <button type="button" className="ptm-btn-primary" onClick={openEnrollment}>Open timed enrollment window</button>
-        <button type="button" className="ptm-btn-secondary" onClick={resetDevice}>Reset student device lock</button>
+        <button type="button" className="ptm-btn-primary" onClick={() => setMessage('A timed face and WebAuthn enrollment window opened.')}>Open enrollment window</button>
+        <button type="button" className="ptm-btn-secondary" onClick={() => setMessage('Select a student before resetting a changed device lock.')}>Reset student device lock</button>
         {message && <p className="ptm-list-sub" role="status">{message}</p>}
       </div>
     </>
@@ -723,7 +541,7 @@ function HostelBeaconManager({ apiUrl, user }) {
   const [form, setForm] = useState({ name: '', uuid: '', major: '', minor: '', min_rssi: -75 });
 
   useEffect(() => {
-    apiFetch(`${apiUrl}/api/v1/beacons?scope=HOSTEL`)
+    apiFetch(`${apiUrl}/api/attendance/beacons?kind=hostel`)
       .then(async (response) => {
         const payload = await response.json();
         if (!response.ok) throw new Error(unwrapApiError(payload, 'Could not load hostel beacons.'));
@@ -736,11 +554,11 @@ function HostelBeaconManager({ apiUrl, user }) {
     event.preventDefault();
     setError('');
     try {
-      await requestJson(`${apiUrl}/api/v1/beacons`, {
+      await requestJson(`${apiUrl}/api/attendance/beacons`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          scope: 'HOSTEL',
+          beacon_kind: 'hostel',
           name: form.name,
           uuid: form.uuid,
           major: Number(form.major),
@@ -773,40 +591,12 @@ function HostelBeaconManager({ apiUrl, user }) {
         </form>
         <div className="ptm-list">
           {beacons.map((beacon) => (
-            <article className="ptm-list-row" key={beacon.id || beacon.beacon_id}>
+            <article className="ptm-list-row" key={beacon.beacon_id}>
               <div className="ptm-list-main">
                 <div className="ptm-list-title">{beacon.name}</div>
-                <div className="ptm-list-sub">{beacon.uuid || beacon.uuid_value} · {beacon.major}/{beacon.minor} · {beacon.min_rssi} dBm</div>
+                <div className="ptm-list-sub">{beacon.uuid_value} · {beacon.major}/{beacon.minor} · {beacon.min_rssi} dBm</div>
               </div>
-              <button
-                type="button"
-                className="ptm-btn-secondary"
-                onClick={async () => {
-                  try {
-                    await requestJson(`${apiUrl}/api/v1/beacons/${encodeURIComponent(beacon.id || beacon.beacon_id)}`, {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        scope: 'HOSTEL',
-                        name: beacon.name,
-                        uuid: beacon.uuid || beacon.uuid_value,
-                        major: beacon.major,
-                        minor: beacon.minor,
-                        min_rssi: beacon.min_rssi,
-                        is_active: !(beacon.is_active ?? beacon.enabled)
-                      })
-                    }, 'Could not toggle beacon.');
-                    await lightImpact();
-                    const response = await apiFetch(`${apiUrl}/api/v1/beacons?scope=HOSTEL`);
-                    const payload = await response.json();
-                    setBeacons(payload.beacons || []);
-                  } catch (toggleError) {
-                    setError(extractErrorMessage(toggleError, 'Could not toggle beacon.'));
-                  }
-                }}
-              >
-                {(beacon.is_active ?? beacon.enabled) ? 'Disable' : 'Enable'}
-              </button>
+              <span className="ptm-tag-pill">{beacon.enabled ? 'Enabled' : 'Disabled'}</span>
             </article>
           ))}
         </div>

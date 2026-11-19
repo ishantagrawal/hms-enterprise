@@ -316,6 +316,14 @@ function AuthenticatedApp() {
     }
   };
 
+  const handleStudentProfileRefresh = useCallback((updatedUser) => {
+    setUser((currentUser) => {
+      const mergedUser = { ...currentUser, ...updatedUser };
+      localStorage.setItem('hms_user', JSON.stringify(mergedUser));
+      return mergedUser;
+    });
+  }, []);
+
   const handleLogout = () => {
     localStorage.removeItem('hms_user');
     localStorage.removeItem('hms_session_token');
