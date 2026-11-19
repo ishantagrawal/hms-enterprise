@@ -1,11 +1,17 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { apiFetch } from '../api';
 import { getCached, setCached } from '../cache';
 import { getHostelOptions, inferHostelWing } from '../hostelOptions';
 import { isEventCompleted } from '../eventUtils';
-import { StudentBiometricAttendancePanel, StudentLeavePassPanel } from './StudentSecurityServices';
 import { ListRowSkeleton, Skeleton } from './SkeletonLoader';
 import usePortalBackNavigation from '../hooks/usePortalBackNavigation';
+
+const StudentBiometricAttendancePanel = lazy(() =>
+  import('./StudentSecurityServices').then((module) => ({ default: module.StudentBiometricAttendancePanel }))
+);
+const StudentLeavePassPanel = lazy(() =>
+  import('./StudentSecurityServices').then((module) => ({ default: module.StudentLeavePassPanel }))
+);
 
 export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
   const safeUser = user || {};
@@ -1065,23 +1071,27 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
             )}
 
             {showAttendance && page === 'attendance' && (
-              <StudentBiometricAttendancePanel
-                apiUrl={apiUrl}
-                user={safeUser}
-                hostels={hostelConfig}
-                initialLogs={attendanceLogs}
-                onLogsChange={(next) => updateAttendanceLogs(next, true)}
-                onUserUpdate={onUserUpdate}
-              />
+              <Suspense fallback={<ListRowSkeleton count={3} />}>
+                <StudentBiometricAttendancePanel
+                  apiUrl={apiUrl}
+                  user={safeUser}
+                  hostels={hostelConfig}
+                  initialLogs={attendanceLogs}
+                  onLogsChange={(next) => updateAttendanceLogs(next, true)}
+                  onUserUpdate={onUserUpdate}
+                />
+              </Suspense>
             )}
             {showOutpass && page === 'leave_pass' && !isDayScholar && (
-              <StudentLeavePassPanel
-                apiUrl={apiUrl}
-                user={safeUser}
-                hostels={hostelConfig}
-                initialPasses={leavePasses}
-                onPassesChange={(next) => updateLeavePasses(next, true)}
-              />
+              <Suspense fallback={<ListRowSkeleton count={3} />}>
+                <StudentLeavePassPanel
+                  apiUrl={apiUrl}
+                  user={safeUser}
+                  hostels={hostelConfig}
+                  initialPasses={leavePasses}
+                  onPassesChange={(next) => updateLeavePasses(next, true)}
+                />
+              </Suspense>
             )}
 
             {page === 'profile' && (

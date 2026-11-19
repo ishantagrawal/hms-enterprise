@@ -1,5 +1,6 @@
 import React, { Suspense, lazy, useState, useEffect, useCallback } from 'react';
 import { apiFetch, API_URL } from './api';
+import { getCached, setCached } from './cache';
 import { DashboardCardSkeleton, GridCardSkeleton } from './components/SkeletonLoader';
 import { signInWithNativeGoogle, usesNativeGoogleSignIn } from './auth/googleSignIn';
 import { CapacitorUpdater } from '@capgo/capacitor-updater';
@@ -55,9 +56,9 @@ function AuthenticatedApp() {
   const [staffUsername, setStaffUsername] = useState('');
   const [staffPassword, setStaffPassword] = useState('');
   const [staffLoginLoading, setStaffLoginLoading] = useState(false);
-  const [tenant, setTenant] = useState(null);
-  const [hostels, setHostels] = useState([]);
-  const [hostelConfig, setHostelConfig] = useState([]);
+  const [tenant, setTenant] = useState(() => getCached('tenant') || null);
+  const [hostels, setHostels] = useState(() => getCached('tenant_hostels') || []);
+  const [hostelConfig, setHostelConfig] = useState(() => getCached('tenant_hostel_config') || []);
   const [profileDraft, setProfileDraft] = useState({ residence_type: 'hosteller', hostel_block: '', wing: '', room: '', phone: '' });
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileError, setProfileError] = useState('');
@@ -77,11 +78,18 @@ function AuthenticatedApp() {
   useEffect(() => {
     fetch(`${API_URL}/api/tenant`).then((res) => (res.ok ? res.json() : null))
       .then((tenantConfig) => {
-      if (tenantConfig) setTenant(tenantConfig);
+      if (tenantConfig) {
+        setTenant(tenantConfig);
+        setCached('tenant', tenantConfig);
+      }
       if (Array.isArray(tenantConfig?.hostels)) {
         setHostels(tenantConfig.hostels);
+        setCached('tenant_hostels', tenantConfig.hostels);
       }
-      if (Array.isArray(tenantConfig?.hostel_config)) setHostelConfig(tenantConfig.hostel_config);
+      if (Array.isArray(tenantConfig?.hostel_config)) {
+        setHostelConfig(tenantConfig.hostel_config);
+        setCached('tenant_hostel_config', tenantConfig.hostel_config);
+      }
     }).catch((error) => {
       console.error('Could not load college configuration:', error);
     });
@@ -164,6 +172,7 @@ function AuthenticatedApp() {
         } catch {
           localStorage.removeItem('hms_user');
         }
+        // Render the cached portal immediately, then validate the session in the background.
         apiFetch(`${API_URL}/api/auth/me`)
           .then(async (res) => {
             if (!res.ok) throw new Error('Session expired');
