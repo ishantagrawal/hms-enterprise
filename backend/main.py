@@ -14,8 +14,6 @@ import sqlite3
 import threading
 import time
 import uuid
-import smtplib
-from email.message import EmailMessage
 from io import BytesIO
 from contextlib import asynccontextmanager
 from html import escape as html_escape
@@ -39,7 +37,7 @@ from webauthn.helpers.structs import (
     ResidentKeyRequirement,
     UserVerificationRequirement,
 )
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -751,118 +749,6 @@ def init_db():
         )
     ''')
     db_exec(conn, '''
-        CREATE TABLE IF NOT EXISTS attendance_courses (
-            college_id TEXT NOT NULL DEFAULT 'SVNIT',
-            course_id TEXT NOT NULL,
-            faculty_id TEXT NOT NULL,
-            subject_name TEXT NOT NULL,
-            subject_code TEXT NOT NULL DEFAULT '',
-            enabled INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL,
-            PRIMARY KEY (college_id, course_id),
-            UNIQUE (college_id, faculty_id, subject_code)
-        )
-    ''')
-    db_exec(conn, '''
-        CREATE TABLE IF NOT EXISTS attendance_course_rosters (
-            college_id TEXT NOT NULL DEFAULT 'SVNIT',
-            course_id TEXT NOT NULL,
-            student_id TEXT NOT NULL,
-            roll_number TEXT NOT NULL,
-            added_by TEXT NOT NULL,
-            added_at TEXT NOT NULL,
-            PRIMARY KEY (college_id, course_id, student_id),
-            UNIQUE (college_id, course_id, roll_number)
-        )
-    ''')
-    db_exec(conn, '''
-        CREATE TABLE IF NOT EXISTS attendance_beacons (
-            college_id TEXT NOT NULL DEFAULT 'SVNIT',
-            beacon_id TEXT NOT NULL,
-            beacon_kind TEXT NOT NULL,
-            name TEXT NOT NULL,
-            uuid_value TEXT NOT NULL,
-            major INTEGER NOT NULL,
-            minor INTEGER NOT NULL,
-            min_rssi INTEGER NOT NULL DEFAULT -75,
-            course_id TEXT NOT NULL DEFAULT '',
-            wing_id TEXT NOT NULL DEFAULT '',
-            enabled INTEGER NOT NULL DEFAULT 1,
-            created_by TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (college_id, beacon_id),
-            UNIQUE (college_id, uuid_value, major, minor)
-        )
-    ''')
-    db_exec(conn, '''
-        CREATE TABLE IF NOT EXISTS beacons (
-            college_id TEXT NOT NULL DEFAULT 'SVNIT',
-            id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            scope TEXT NOT NULL CHECK (scope IN ('CLASS','HOSTEL')),
-            owner_id TEXT NOT NULL,
-            uuid TEXT NOT NULL,
-            major INTEGER NOT NULL,
-            minor INTEGER NOT NULL,
-            min_rssi INTEGER NOT NULL DEFAULT -78 CHECK (min_rssi BETWEEN -85 AND -65),
-            is_active INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL,
-            PRIMARY KEY (college_id, id),
-            UNIQUE (college_id, uuid, major, minor)
-        )
-    ''')
-    db_exec(conn, '''
-        CREATE TABLE IF NOT EXISTS courses (
-            college_id TEXT NOT NULL DEFAULT 'SVNIT',
-            id TEXT NOT NULL,
-            code TEXT NOT NULL,
-            title TEXT NOT NULL,
-            faculty_id TEXT NOT NULL,
-            default_beacon_id TEXT,
-            created_at TEXT NOT NULL,
-            PRIMARY KEY (college_id, id),
-            UNIQUE (college_id, code)
-        )
-    ''')
-    db_exec(conn, '''
-        CREATE TABLE IF NOT EXISTS course_enrollments (
-            college_id TEXT NOT NULL DEFAULT 'SVNIT',
-            id TEXT NOT NULL,
-            course_id TEXT NOT NULL,
-            student_id TEXT NOT NULL,
-            roll_no TEXT NOT NULL,
-            student_name TEXT NOT NULL DEFAULT '',
-            PRIMARY KEY (college_id, id),
-            UNIQUE (college_id, course_id, student_id)
-        )
-    ''')
-    db_exec(conn, '''
-        CREATE TABLE IF NOT EXISTS hostel_wing_members (
-            college_id TEXT NOT NULL DEFAULT 'SVNIT',
-            id TEXT NOT NULL,
-            wing_name TEXT NOT NULL,
-            room_no TEXT NOT NULL DEFAULT '',
-            student_id TEXT NOT NULL,
-            roll_no TEXT NOT NULL,
-            student_name TEXT NOT NULL DEFAULT '',
-            PRIMARY KEY (college_id, id),
-            UNIQUE (college_id, wing_name, student_id)
-        )
-    ''')
-    db_exec(conn, '''
-        CREATE TABLE IF NOT EXISTS student_devices (
-            college_id TEXT NOT NULL DEFAULT 'SVNIT',
-            student_id TEXT NOT NULL,
-            webauthn_credential_id TEXT,
-            public_key_cbor TEXT,
-            sign_count INTEGER NOT NULL DEFAULT 0,
-            reference_face_embedding_enc TEXT,
-            locked_at TEXT,
-            approved_by TEXT,
-            PRIMARY KEY (college_id, student_id)
-        )
-    ''')
-    db_exec(conn, '''
         CREATE TABLE IF NOT EXISTS attendance_challenges (
             college_id TEXT NOT NULL,
             nonce TEXT NOT NULL,
@@ -1199,13 +1085,6 @@ def init_db():
         ("hostel_key", "TEXT NOT NULL DEFAULT ''"),
         ("session_date", "TEXT NOT NULL DEFAULT ''"),
         ("session_secret", "TEXT NOT NULL DEFAULT ''"),
-        ("scope", "TEXT NOT NULL DEFAULT 'HOSTEL'"),
-        ("course_id", "TEXT"),
-        ("wing_name", "TEXT"),
-        ("beacon_id", "TEXT"),
-        ("expires_at", "TEXT"),
-        ("current_nonce", "TEXT NOT NULL DEFAULT ''"),
-        ("nonce_expires_at", "TEXT"),
         ("geofence_latitude", "REAL"),
         ("geofence_longitude", "REAL"),
         ("geofence_radius_m", "INTEGER NOT NULL DEFAULT 0"),
@@ -1216,10 +1095,6 @@ def init_db():
     attendance_columns = {column[0] for column in db_exec(conn, "SELECT * FROM attendance_records LIMIT 0").description}
     if "exception_reason" not in attendance_columns:
         db_exec(conn, "ALTER TABLE attendance_records ADD COLUMN exception_reason TEXT NOT NULL DEFAULT ''")
-    if "measured_rssi" not in attendance_columns:
-        db_exec(conn, "ALTER TABLE attendance_records ADD COLUMN measured_rssi INTEGER")
-    if "override_reason" not in attendance_columns:
-        db_exec(conn, "ALTER TABLE attendance_records ADD COLUMN override_reason TEXT")
     complaint_columns = {column[0] for column in db_exec(conn, "SELECT * FROM complaints LIMIT 0").description}
     if "wing" not in complaint_columns:
         db_exec(conn, "ALTER TABLE complaints ADD COLUMN wing TEXT")
@@ -1270,10 +1145,6 @@ def init_db():
     db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_attendance_hostel_status ON attendance_sessions (college_id, LOWER(hostel_block), status, closes_at)")
     db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_attendance_hostel_history ON attendance_sessions (college_id, LOWER(hostel_block), started_at)")
     db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_attendance_student ON attendance_records (college_id, UPPER(student_id), marked_at)")
-    db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_attendance_records_session_student ON attendance_records (college_id, session_id, UPPER(student_id))")
-    db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_attendance_course_roster_student ON attendance_course_rosters (college_id, UPPER(student_id))")
-    db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_attendance_course_roster_roll ON attendance_course_rosters (college_id, course_id, roll_number)")
-    db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_attendance_beacons_lookup ON attendance_beacons (college_id, beacon_kind, enabled)")
     db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_webauthn_credentials_user ON webauthn_credentials (college_id, UPPER(user_id))")
     db_exec(conn, "CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_user ON webauthn_challenges (college_id, UPPER(user_id), purpose, expires_at)")
 
@@ -1766,55 +1637,6 @@ class AttendanceOptionsReq(BaseModel):
 class AttendanceStartReq(BaseModel):
     hostel_block: Optional[str] = None
 
-class BeaconReq(BaseModel):
-    model_config = {"extra": "ignore"}
-    name: str
-    scope: str
-    owner_id: Optional[str] = None
-    uuid: str
-    major: int
-    minor: int
-    min_rssi: int = -78
-    is_active: bool = True
-
-class CourseReq(BaseModel):
-    code: str
-    title: str
-    default_beacon_id: Optional[str] = None
-
-class CourseEnrollmentReq(BaseModel):
-    course_id: str
-    entries: List[Dict]
-
-class HostelWingMemberReq(BaseModel):
-    wing_name: str
-    room_no: str = ""
-    entries: List[Dict]
-
-class AttendanceSessionReq(BaseModel):
-    scope: str
-    course_id: Optional[str] = None
-    wing_name: Optional[str] = None
-    beacon_id: str
-    duration_minutes: int
-
-class AttendanceOverrideReq(BaseModel):
-    session_id: str
-    student_id: str
-    status: str
-    reason: str
-
-class AttendanceCheckinReq(BaseModel):
-    model_config = {"extra": "forbid"}
-    session_id: str
-    session_nonce: str
-    beacon_uuid: str
-    beacon_major: int
-    beacon_minor: int
-    rssi: int
-    live_image_base64: str = Field(min_length=100, max_length=6_000_000)
-    webauthn_credential: Dict
-
 class BiometricUnlockReq(BaseModel):
     student_id: str
 
@@ -1844,7 +1666,7 @@ class DeviceBindingRegisterReq(BaseModel):
     device_binding_token: str
     reference_image_base64: str = Field(min_length=100, max_length=6_000_000)
     consent_confirmed: bool
-    device_public_key: str = Field(default="", max_length=4096)
+    device_public_key: str = Field(min_length=80, max_length=4096)
 
 class DeviceBeaconMarkReq(BaseModel):
     model_config = {"extra": "forbid"}
@@ -1892,15 +1714,14 @@ class LeaveReturnMarkReq(LeaveReturnOptionsReq):
     credential: Dict
 
 class DeviceLeaveReturnReq(BaseModel):
-    model_config = {"extra": "ignore"}
+    model_config = {"extra": "forbid"}
 
     pass_id: str
     device_binding_token: str
     wing_beacon_id: str
     rssi: int
     simulated: bool = False
-    live_image_base64: str = Field(default="", max_length=6_000_000)
-    liveness_passed: bool = False
+    live_image_base64: str = Field(min_length=100, max_length=6_000_000)
 
 
 def verify_google_credential(credential: str) -> dict:
@@ -3181,13 +3002,6 @@ def close_expired_attendance_sessions():
                         now,
                     ),
                 )
-            try:
-                session_course_id = session["course_id"]
-            except (KeyError, IndexError):
-                session_course_id = None
-            if session_course_id:
-                conn.commit()
-                generate_and_email_class_report(session["college_id"], session["session_id"])
             closed_count += 1
         conn.commit()
         return closed_count
@@ -3611,17 +3425,18 @@ def validate_leave_return_request(conn, request_body, request: Request, for_upda
         raise HTTPException(status_code=409, detail=f"Your Warden has not configured the {student['wing']} beacon yet.")
     if request_body.wing_beacon_id != expected_beacon:
         raise HTTPException(status_code=403, detail="The detected beacon does not match your assigned hostel wing.")
-    if re.fullmatch(r"HMS-[A-Za-z0-9_-]+-[A-Fa-f0-9]{8}", request_body.wing_beacon_id):
-        wing_id = request_body.wing_beacon_id.split("-", 2)[1]
-        secret = BEACON_HMAC_SECRETS.get(wing_id)
-        if not isinstance(secret, str) or not any(
-            hmac.compare_digest(
-                request_body.wing_beacon_id.rsplit("-", 1)[-1].lower(),
-                hmac.new(secret.encode(), f"{wing_id}:{slot}".encode(), hashlib.sha256).hexdigest()[:8].lower(),
-            )
-            for slot in (int(time.time() // 600) - 1, int(time.time() // 600), int(time.time() // 600) + 1)
-        ):
-            raise HTTPException(status_code=403, detail="The beacon signature is invalid or expired.")
+    if not re.fullmatch(r"HMS-[A-Za-z0-9_-]+-[A-Fa-f0-9]{8}", request_body.wing_beacon_id):
+        raise HTTPException(status_code=403, detail="The beacon identity is not a valid HMS beacon.")
+    wing_id = request_body.wing_beacon_id.split("-", 2)[1]
+    secret = BEACON_HMAC_SECRETS.get(wing_id)
+    if not isinstance(secret, str) or not any(
+        hmac.compare_digest(
+            request_body.wing_beacon_id.rsplit("-", 1)[-1].lower(),
+            hmac.new(secret.encode(), f"{wing_id}:{slot}".encode(), hashlib.sha256).hexdigest()[:8].lower(),
+        )
+        for slot in (int(time.time() // 600) - 1, int(time.time() // 600), int(time.time() // 600) + 1)
+    ):
+        raise HTTPException(status_code=403, detail="The beacon signature is invalid or expired.")
     if request_body.simulated:
         raise HTTPException(status_code=403, detail="Simulated BLE return verification is not available to students.")
     zone = ZoneInfo(request.state.tenant["timezone"])
@@ -3678,10 +3493,7 @@ def mark_leave_return(req: DeviceLeaveReturnReq, request: Request):
     conn = get_conn()
     try:
         leave_pass, student = validate_leave_return_request(conn, req, request, for_update=True)
-        face_verified = bool(req.liveness_passed and not req.live_image_base64)
-        if not face_verified:
-            face_verified = bool(student["face_reference_encrypted"] and _verify_face_image(req.live_image_base64, student["face_reference_encrypted"]))
-        if not face_verified:
+        if not student["face_reference_encrypted"] or not _verify_face_image(req.live_image_base64, student["face_reference_encrypted"]):
             raise HTTPException(status_code=403, detail="Server-side liveness and face verification failed.")
         req.live_image_base64 = ""
 
@@ -4386,14 +4198,12 @@ def register_device_binding(req: DeviceBindingRegisterReq, request: Request):
     if not re.fullmatch(r"[a-f0-9]{64}", token):
         raise HTTPException(status_code=400, detail="The device binding token must be a 256-bit hexadecimal token.")
     token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
-    public_key = None
-    if req.device_public_key:
-        try:
-            public_key = serialization.load_der_public_key(base64.b64decode(req.device_public_key))
-        except (ValueError, TypeError, base64.binascii.Error) as error:
-            raise HTTPException(status_code=400, detail="The device public key is invalid.") from error
-        if not isinstance(public_key, ec.EllipticCurvePublicKey) or public_key.curve.name != "secp256r1":
-            raise HTTPException(status_code=400, detail="Only a P-256 device public key is supported.")
+    try:
+        public_key = serialization.load_der_public_key(base64.b64decode(req.device_public_key))
+    except (ValueError, TypeError, base64.binascii.Error) as error:
+        raise HTTPException(status_code=400, detail="The device public key is invalid.") from error
+    if not isinstance(public_key, ec.EllipticCurvePublicKey) or public_key.curve.name != "secp256r1":
+        raise HTTPException(status_code=400, detail="Only a P-256 device public key is supported.")
     encrypted_reference = _encrypt_face_reference(req.reference_image_base64)
     encrypted_embedding = _compute_enrollment_embedding(req.reference_image_base64)
     req.reference_image_base64 = ""
@@ -5385,820 +5195,6 @@ def my_attendance(request: Request):
         ).fetchall()
         return {"attendance": [dict(row) for row in rows]}
     finally:
-        conn.close()
-
-
-def _require_faculty(request: Request):
-    account = request.state.user
-    if account.get("role") not in {"Faculty", "Dean", "Staff"}:
-        raise HTTPException(status_code=403, detail="Faculty access is required.")
-    return account
-
-
-@app.get("/api/attendance/courses")
-def list_attendance_courses(request: Request):
-    faculty = _require_faculty(request)
-    conn = get_conn()
-    try:
-        rows = db_exec(
-            conn,
-            """
-            SELECT c.*,
-                   (SELECT COUNT(*) FROM attendance_course_rosters r
-                    WHERE r.college_id = c.college_id AND r.course_id = c.course_id) AS roster_count
-            FROM attendance_courses c
-            WHERE c.college_id = ? AND c.faculty_id = ?
-            ORDER BY c.created_at DESC
-            """,
-            (ACTIVE_COLLEGE_ID.get(), faculty["user_id"]),
-        ).fetchall()
-        return {"courses": [dict(row) for row in rows]}
-    finally:
-        conn.close()
-
-
-@app.post("/api/attendance/courses")
-def create_attendance_course(req: dict, request: Request):
-    faculty = _require_faculty(request)
-    subject_name = str(req.get("subject_name") or "").strip()
-    subject_code = str(req.get("subject_code") or "").strip().upper()
-    if not subject_name:
-        raise HTTPException(status_code=400, detail="Subject name is required.")
-    course_id = f"CRS-{uuid.uuid4().hex[:16].upper()}"
-    conn = get_conn()
-    try:
-        db_exec(
-            conn,
-            """
-            INSERT INTO attendance_courses
-                (college_id, course_id, faculty_id, subject_name, subject_code, enabled, created_at)
-            VALUES (?, ?, ?, ?, ?, 1, ?)
-            """,
-            (ACTIVE_COLLEGE_ID.get(), course_id, faculty["user_id"], subject_name,
-             subject_code, datetime.now(timezone.utc).isoformat(timespec="seconds")),
-        )
-        conn.commit()
-        return {"success": True, "course": {
-            "course_id": course_id,
-            "faculty_id": faculty["user_id"],
-            "subject_name": subject_name,
-            "subject_code": subject_code,
-            "enabled": 1,
-            "roster_count": 0,
-        }}
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-
-@app.post("/api/attendance/courses/{course_id}/roster")
-def add_attendance_roster(course_id: str, req: dict, request: Request):
-    faculty = _require_faculty(request)
-    conn = get_conn()
-    try:
-        course = db_exec(
-            conn,
-            "SELECT * FROM attendance_courses WHERE college_id = ? AND course_id = ? AND faculty_id = ?",
-            (ACTIVE_COLLEGE_ID.get(), course_id, faculty["user_id"]),
-        ).fetchone()
-        if not course:
-            raise HTTPException(status_code=404, detail="Course not found.")
-
-        entries = req.get("entries")
-        if not isinstance(entries, list):
-            entries = []
-        for entry in entries:
-            student_id = str(entry.get("student_id") or "").strip().upper()
-            roll_number = str(entry.get("roll_number") or "").strip().upper()
-            if not student_id or not roll_number:
-                continue
-            db_exec(
-                conn,
-                """
-                INSERT INTO attendance_course_rosters
-                    (college_id, course_id, student_id, roll_number, added_by, added_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT (college_id, course_id, student_id) DO UPDATE
-                    SET roll_number = excluded.roll_number
-                """,
-                (ACTIVE_COLLEGE_ID.get(), course_id, student_id, roll_number,
-                 faculty["user_id"], datetime.now(timezone.utc).isoformat(timespec="seconds")),
-            )
-        conn.commit()
-        count = db_exec(
-            conn,
-            "SELECT COUNT(*) AS count FROM attendance_course_rosters WHERE college_id = ? AND course_id = ?",
-            (ACTIVE_COLLEGE_ID.get(), course_id),
-        ).fetchone()
-        return {"success": True, "roster_count": count["count"]}
-    except HTTPException:
-        conn.rollback()
-        raise
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-
-@app.get("/api/attendance/courses/{course_id}/roster")
-def get_attendance_roster(course_id: str, request: Request):
-    faculty = _require_faculty(request)
-    conn = get_conn()
-    try:
-        course = db_exec(
-            conn,
-            "SELECT course_id FROM attendance_courses WHERE college_id = ? AND course_id = ? AND faculty_id = ?",
-            (ACTIVE_COLLEGE_ID.get(), course_id, faculty["user_id"]),
-        ).fetchone()
-        if not course:
-            raise HTTPException(status_code=404, detail="Course not found.")
-        rows = db_exec(
-            conn,
-            """
-            SELECT r.student_id, r.roll_number, u.full_name
-            FROM attendance_course_rosters r
-            LEFT JOIN users u ON u.college_id = r.college_id
-                            AND UPPER(u.user_id) = UPPER(r.student_id)
-            WHERE r.college_id = ? AND r.course_id = ?
-            ORDER BY r.roll_number ASC
-            """,
-            (ACTIVE_COLLEGE_ID.get(), course_id),
-        ).fetchall()
-        return {"roster": [dict(row) for row in rows]}
-    finally:
-        conn.close()
-
-
-@app.get("/api/attendance/beacons")
-def list_attendance_beacons(request: Request, kind: Optional[str] = Query(default=None)):
-    account = request.state.user
-    if account.get("role") not in {"Faculty", "Warden", "Dean", "Staff"}:
-        raise HTTPException(status_code=403, detail="Attendance beacon access is required.")
-    conn = get_conn()
-    try:
-        if kind:
-            rows = db_exec(
-                conn,
-                "SELECT * FROM attendance_beacons WHERE college_id = ? AND beacon_kind = ? ORDER BY name",
-                (ACTIVE_COLLEGE_ID.get(), kind),
-            ).fetchall()
-        else:
-            rows = db_exec(
-                conn,
-                "SELECT * FROM attendance_beacons WHERE college_id = ? ORDER BY beacon_kind, name",
-                (ACTIVE_COLLEGE_ID.get(),),
-            ).fetchall()
-        return {"beacons": [dict(row) for row in rows]}
-    finally:
-        conn.close()
-
-
-@app.post("/api/attendance/beacons")
-def create_attendance_beacon(req: dict, request: Request):
-    account = request.state.user
-    kind = str(req.get("beacon_kind") or "").strip().lower()
-    if kind not in {"class", "hostel"}:
-        raise HTTPException(status_code=400, detail="Beacon kind must be class or hostel.")
-    if kind == "class" and account.get("role") not in {"Faculty", "Dean", "Staff"}:
-        raise HTTPException(status_code=403, detail="Faculty access is required.")
-    if kind == "hostel" and account.get("role") != "Warden":
-        raise HTTPException(status_code=403, detail="Warden access is required.")
-
-    name = str(req.get("name") or "").strip()
-    uuid_value = str(req.get("uuid") or "").strip()
-    major = int(req.get("major") or 0)
-    minor = int(req.get("minor") or 0)
-    min_rssi = int(req.get("min_rssi") if req.get("min_rssi") is not None else -75)
-    if not name or not re.fullmatch(r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", uuid_value):
-        raise HTTPException(status_code=400, detail="Enter a beacon name and valid UUID.")
-    if not 0 <= major <= 65535 or not 0 <= minor <= 65535:
-        raise HTTPException(status_code=400, detail="Major and Minor must be between 0 and 65535.")
-    if not -85 <= min_rssi <= -65:
-        raise HTTPException(status_code=400, detail="Minimum RSSI must be between -85 and -65 dBm.")
-
-    beacon_id = f"BEA-{uuid.uuid4().hex[:16].upper()}"
-    conn = get_conn()
-    try:
-        db_exec(
-            conn,
-            """
-            INSERT INTO attendance_beacons
-                (college_id, beacon_id, beacon_kind, name, uuid_value, major, minor,
-                 min_rssi, course_id, wing_id, enabled, created_by, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-            """,
-            (ACTIVE_COLLEGE_ID.get(), beacon_id, kind, name, uuid_value, major, minor,
-             min_rssi, str(req.get("course_id") or ""), str(req.get("wing_id") or ""),
-             account["user_id"], datetime.now(timezone.utc).isoformat(timespec="seconds")),
-        )
-        conn.commit()
-        return {"success": True, "beacon_id": beacon_id}
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-
-@app.put("/api/attendance/beacons/{beacon_id}")
-def update_attendance_beacon(beacon_id: str, req: dict, request: Request):
-    account = request.state.user
-    conn = get_conn()
-    try:
-        beacon = db_exec(
-            conn,
-            "SELECT * FROM attendance_beacons WHERE college_id = ? AND beacon_id = ?",
-            (ACTIVE_COLLEGE_ID.get(), beacon_id),
-        ).fetchone()
-        if not beacon:
-            raise HTTPException(status_code=404, detail="Beacon not found.")
-        kind = beacon["beacon_kind"]
-        if kind == "class" and account.get("role") not in {"Faculty", "Dean", "Staff"}:
-            raise HTTPException(status_code=403, detail="Faculty access is required.")
-        if kind == "hostel" and account.get("role") != "Warden":
-            raise HTTPException(status_code=403, detail="Warden access is required.")
-        min_rssi = int(req.get("min_rssi", beacon["min_rssi"]))
-        if not -85 <= min_rssi <= -65:
-            raise HTTPException(status_code=400, detail="Minimum RSSI must be between -85 and -65 dBm.")
-        db_exec(
-            conn,
-            """
-            UPDATE attendance_beacons SET
-                name = ?,
-                uuid_value = ?,
-                major = ?,
-                minor = ?,
-                min_rssi = ?,
-                enabled = ?,
-                updated_at = ?
-            WHERE college_id = ? AND beacon_id = ?
-            """,
-            (
-                str(req.get("name") or beacon["name"]).strip(),
-                str(req.get("uuid") or beacon["uuid_value"]).strip(),
-                int(req.get("major", beacon["major"])),
-                int(req.get("minor", beacon["minor"])),
-                min_rssi,
-                1 if req.get("enabled", True) else 0,
-                datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                ACTIVE_COLLEGE_ID.get(),
-                beacon_id,
-            ),
-        )
-        conn.commit()
-        return {"success": True}
-    except HTTPException:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-
-@app.get("/api/v1/beacons")
-def list_phase1_beacons(request: Request, scope: Optional[str] = None):
-    account = request.state.user
-    if account.get("role") not in {"Faculty", "Warden", "Dean", "Staff"}:
-        raise HTTPException(status_code=403, detail="Beacon access is required.")
-    conn = get_conn()
-    try:
-        if scope:
-            normalized_scope = scope.upper()
-            if normalized_scope not in {"CLASS", "HOSTEL"}:
-                raise HTTPException(status_code=400, detail="Beacon scope must be CLASS or HOSTEL.")
-            rows = db_exec(conn, "SELECT * FROM beacons WHERE college_id = ? AND scope = ? ORDER BY name",
-                           (ACTIVE_COLLEGE_ID.get(), normalized_scope)).fetchall()
-        else:
-            rows = db_exec(conn, "SELECT * FROM beacons WHERE college_id = ? ORDER BY scope, name",
-                           (ACTIVE_COLLEGE_ID.get(),)).fetchall()
-        return {"beacons": [dict(row) for row in rows]}
-    finally:
-        conn.close()
-
-
-@app.post("/api/v1/beacons")
-def create_phase1_beacon(req: BeaconReq, request: Request):
-    account = request.state.user
-    scope = req.scope.upper()
-    if scope not in {"CLASS", "HOSTEL"}:
-        raise HTTPException(status_code=400, detail="Beacon scope must be CLASS or HOSTEL.")
-    if scope == "CLASS" and account.get("role") not in {"Faculty", "Dean", "Staff"}:
-        raise HTTPException(status_code=403, detail="Faculty access is required.")
-    if scope == "HOSTEL" and account.get("role") != "Warden":
-        raise HTTPException(status_code=403, detail="Warden access is required.")
-    if not re.fullmatch(r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", req.uuid):
-        raise HTTPException(status_code=400, detail="Enter a valid beacon UUID.")
-    if not 0 <= req.major <= 65535 or not 0 <= req.minor <= 65535:
-        raise HTTPException(status_code=400, detail="Major and Minor must be between 0 and 65535.")
-    if not -85 <= req.min_rssi <= -65:
-        raise HTTPException(status_code=400, detail="Minimum RSSI must be between -85 and -65 dBm.")
-    beacon_id = f"B-{uuid.uuid4().hex[:20].upper()}"
-    conn = get_conn()
-    try:
-        db_exec(conn, """
-            INSERT INTO beacons
-              (college_id, id, name, scope, owner_id, uuid, major, minor, min_rssi, is_active, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (ACTIVE_COLLEGE_ID.get(), beacon_id, req.name.strip(), scope, account["user_id"],
-              req.uuid.lower(), req.major, req.minor, req.min_rssi, 1 if req.is_active else 0,
-              datetime.now(timezone.utc).isoformat(timespec="seconds")))
-        conn.commit()
-        return {"success": True, "beacon": {"id": beacon_id, "name": req.name.strip(),
-                                            "scope": scope, "uuid": req.uuid.lower(),
-                                            "major": req.major, "minor": req.minor,
-                                            "min_rssi": req.min_rssi, "is_active": req.is_active}}
-    finally:
-        conn.close()
-
-
-@app.put("/api/v1/beacons/{beacon_id}")
-def update_phase1_beacon(beacon_id: str, req: BeaconReq, request: Request):
-    account = request.state.user
-    conn = get_conn()
-    try:
-        beacon = db_exec(conn, "SELECT * FROM beacons WHERE college_id = ? AND id = ?",
-                         (ACTIVE_COLLEGE_ID.get(), beacon_id)).fetchone()
-        if not beacon:
-            raise HTTPException(status_code=404, detail="Beacon not found.")
-        if beacon["owner_id"].upper() != account["user_id"].upper():
-            raise HTTPException(status_code=403, detail="Only the beacon owner can edit it.")
-        if not -85 <= req.min_rssi <= -65:
-            raise HTTPException(status_code=400, detail="Minimum RSSI must be between -85 and -65 dBm.")
-        db_exec(conn, """
-            UPDATE beacons SET name = ?, uuid = ?, major = ?, minor = ?, min_rssi = ?, is_active = ?
-            WHERE college_id = ? AND id = ?
-        """, (req.name.strip(), req.uuid.lower(), req.major, req.minor, req.min_rssi,
-              1 if req.is_active else 0, ACTIVE_COLLEGE_ID.get(), beacon_id))
-        conn.commit()
-        return {"success": True}
-    finally:
-        conn.close()
-
-
-@app.post("/api/v1/courses")
-def create_phase1_course(req: CourseReq, request: Request):
-    account = request.state.user
-    if account.get("role") not in {"Faculty", "Dean", "Staff"}:
-        raise HTTPException(status_code=403, detail="Faculty access is required.")
-    code = req.code.strip().upper()
-    title = req.title.strip()
-    if not code or not title:
-        raise HTTPException(status_code=400, detail="Course code and title are required.")
-    course_id = f"C-{uuid.uuid4().hex[:20].upper()}"
-    conn = get_conn()
-    try:
-        db_exec(conn, """
-            INSERT INTO courses (college_id, id, code, title, faculty_id, default_beacon_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (ACTIVE_COLLEGE_ID.get(), course_id, code, title, account["user_id"],
-              req.default_beacon_id, datetime.now(timezone.utc).isoformat(timespec="seconds")))
-        conn.commit()
-        return {"success": True, "course": {"id": course_id, "code": code, "title": title,
-                                            "faculty_id": account["user_id"],
-                                            "default_beacon_id": req.default_beacon_id}}
-    finally:
-        conn.close()
-
-
-@app.post("/api/v1/course-enrollments/bulk")
-def bulk_import_course_enrollments(req: CourseEnrollmentReq, request: Request):
-    account = request.state.user
-    if account.get("role") not in {"Faculty", "Dean", "Staff"}:
-        raise HTTPException(status_code=403, detail="Faculty access is required.")
-    conn = get_conn()
-    try:
-        course = db_exec(conn, "SELECT id FROM courses WHERE college_id = ? AND id = ? AND faculty_id = ?",
-                         (ACTIVE_COLLEGE_ID.get(), req.course_id, account["user_id"])).fetchone()
-        if not course:
-            raise HTTPException(status_code=404, detail="Course not found.")
-        for entry in req.entries:
-            student_id = str(entry.get("student_id") or "").strip().upper()
-            roll_no = str(entry.get("roll_no") or "").strip().upper()
-            student_name = str(entry.get("student_name") or "").strip()
-            if not student_id or not roll_no:
-                continue
-            db_exec(conn, """
-                INSERT INTO course_enrollments
-                  (college_id, id, course_id, student_id, roll_no, student_name)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT (college_id, course_id, student_id) DO UPDATE
-                  SET roll_no = excluded.roll_no, student_name = excluded.student_name
-            """, (ACTIVE_COLLEGE_ID.get(), f"E-{uuid.uuid4().hex[:20].upper()}",
-                  req.course_id, student_id, roll_no, student_name))
-        conn.commit()
-        count = db_exec(conn, "SELECT COUNT(*) AS count FROM course_enrollments WHERE college_id = ? AND course_id = ?",
-                        (ACTIVE_COLLEGE_ID.get(), req.course_id)).fetchone()
-        return {"success": True, "count": count["count"]}
-    finally:
-        conn.close()
-
-
-@app.post("/api/v1/hostel-wing-members/bulk")
-def bulk_import_hostel_wing_members(req: HostelWingMemberReq, request: Request):
-    account = request.state.user
-    if account.get("role") != "Warden":
-        raise HTTPException(status_code=403, detail="Warden access is required.")
-    conn = get_conn()
-    try:
-        for entry in req.entries:
-            student_id = str(entry.get("student_id") or "").strip().upper()
-            roll_no = str(entry.get("roll_no") or "").strip().upper()
-            student_name = str(entry.get("student_name") or "").strip()
-            room_no = str(entry.get("room_no") or req.room_no or "").strip()
-            if not student_id or not roll_no:
-                continue
-            db_exec(conn, """
-                INSERT INTO hostel_wing_members
-                  (college_id, id, wing_name, room_no, student_id, roll_no, student_name)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (college_id, wing_name, student_id) DO UPDATE
-                  SET room_no = excluded.room_no, roll_no = excluded.roll_no,
-                      student_name = excluded.student_name
-            """, (ACTIVE_COLLEGE_ID.get(), f"H-{uuid.uuid4().hex[:20].upper()}",
-                  req.wing_name.strip(), room_no, student_id, roll_no, student_name))
-        conn.commit()
-        return {"success": True}
-    finally:
-        conn.close()
-
-
-def generate_and_email_class_report(college_id: str, session_id: str):
-    conn = get_conn()
-    try:
-        session = db_exec(conn, "SELECT * FROM attendance_sessions WHERE college_id = ? AND session_id = ?",
-                          (college_id, session_id)).fetchone()
-        if not session:
-            return
-        try:
-            course_id = session["course_id"]
-        except (KeyError, IndexError):
-            course_id = None
-        if not course_id:
-            return
-        course = db_exec(conn, "SELECT * FROM courses WHERE college_id = ? AND id = ?",
-                         (college_id, session["course_id"])).fetchone()
-        if not course:
-            return
-        faculty = db_exec(conn, "SELECT full_name, email FROM users WHERE college_id = ? AND UPPER(user_id) = ?",
-                          (college_id, str(session["started_by"]).upper())).fetchone()
-        enrolled = db_exec(conn, """
-            SELECT e.roll_no, e.student_name, r.status, r.method
-            FROM course_enrollments e
-            LEFT JOIN attendance_records r
-              ON r.college_id = ? AND r.session_id = ? AND UPPER(r.student_id) = UPPER(e.student_id)
-            WHERE e.college_id = ? AND e.course_id = ?
-            ORDER BY e.roll_no ASC
-        """, (college_id, session_id, college_id, session["course_id"])).fetchall()
-        total = len(enrolled)
-        present = sum(str(row["status"] or "").upper() == "PRESENT" for row in enrolled)
-        absent = total - present
-        present_pct = round(present * 100 / total, 1) if total else 0
-        absent_pct = round(absent * 100 / total, 1) if total else 0
-        overrides = sum(str(row["method"] or "").upper() == "MANUAL_OVERRIDE" for row in enrolled)
-        columns = [enrolled[index::3] for index in range(3)]
-
-        def grid_html():
-            return "".join(
-                f"<td><div class='roll'>{html_escape(str(row['roll_no']))}</div>"
-                f"<div class='name'>{html_escape(str(row['student_name'] or row['roll_no']))}</div>"
-                f"<span class='{'p' if str(row['status'] or '').upper() == 'PRESENT' else 'a'}'>"
-                f"{'P' if str(row['status'] or '').upper() == 'PRESENT' else 'A'}"
-                f"{'*' if str(row['method'] or '').upper() == 'MANUAL_OVERRIDE' else ''}</span></td>"
-                for column in columns for row in []  # placeholder: filled below
-            )
-
-        grid_rows = max((len(column) for column in columns), default=0)
-        cells = []
-        for row_index in range(grid_rows):
-            row_cells = []
-            for column in columns:
-                if row_index >= len(column):
-                    row_cells.append("<td></td>")
-                    continue
-                row = column[row_index]
-                status = str(row["status"] or "ABSENT").upper()
-                method = str(row["method"] or "").upper()
-                css = "present" if status == "PRESENT" else "absent"
-                label = "P" if status == "PRESENT" else "A"
-                star = "*" if method == "MANUAL_OVERRIDE" else ""
-                row_cells.append(
-                    f"<td><div class='roll'>{html_escape(str(row['roll_no']))}</div>"
-                    f"<div class='name'>{html_escape(str(row['student_name'] or row['roll_no']))}</div>"
-                    f"<span class='{css}'>{label}{star}</span></td>"
-                )
-            cells.append("<tr>" + "".join(row_cells) + "</tr>")
-
-        institute = "Sardar Vallabhbhai National Institute of Technology"
-        started = str(session["started_at"] if session["started_at"] else datetime.now(timezone.utc).isoformat())
-        beacon_name = ""
-        try:
-            session_beacon_id = session["beacon_id"]
-        except (KeyError, IndexError):
-            session_beacon_id = None
-        if session_beacon_id:
-            beacon = db_exec(conn, "SELECT name FROM beacons WHERE college_id = ? AND id = ?",
-                             (college_id, session_beacon_id)).fetchone()
-            beacon_name = beacon["name"] if beacon else ""
-        html = f"""
-        <!doctype html><html><head><meta charset="utf-8"><style>
-        @page {{ size: A4; margin: 10mm; }} body {{ font-family: Arial, sans-serif; color:#111827; font-size:9px; }}
-        h1 {{ font-size:16px; margin:0 0 2px }} h2 {{ font-size:11px; margin:0 0 8px; color:#374151 }}
-        .summary {{ display:grid; grid-template-columns:repeat(4,1fr); border:1px solid #d1d5db; margin:8px 0 }}
-        .summary div {{ padding:7px 5px; border-right:1px solid #d1d5db; text-align:center }}
-        table {{ width:100%; border-collapse:collapse; table-layout:fixed }}
-        td {{ border:1px solid #e5e7eb; width:33.33%; height:31px; vertical-align:middle; padding:3px 5px }}
-        .roll {{ font-family:monospace; font-size:8px; font-weight:700 }} .name {{ font-size:7.5px; color:#4b5563 }}
-        .present,.absent {{ float:right; width:18px; height:18px; border-radius:50%; color:white; text-align:center; line-height:18px; font-weight:700 }}
-        .present {{ background:#059669 }} .absent {{ background:#dc2626 }}
-        </style></head><body>
-        <h1>{html_escape(institute)}</h1>
-        <h2>{html_escape(str(course['code']))} · {html_escape(str(course['title']))}</h2>
-        <div>Faculty: {html_escape(str((faculty or {}).get('full_name') or session['started_by']))} &nbsp;
-        Date: {html_escape(started[:10])} &nbsp; Started: {html_escape(started[11:16])} &nbsp;
-        Room/Beacon: {html_escape(beacon_name)}</div>
-        <div class="summary">
-          <div><b>Total</b><br>{total}</div>
-          <div><b>Present</b><br>{present} ({present_pct}%)</div>
-          <div><b>Absent</b><br>{absent} ({absent_pct}%)</div>
-          <div><b>Manual overrides</b><br>{overrides}</div>
-        </div>
-        <table>{''.join(cells)}</table>
-        </body></html>
-        """
-        pdf = None
-        try:
-            from weasyprint import HTML
-            pdf = HTML(string=html).write_pdf()
-        except Exception:
-            return
-        recipient = (faculty or {}).get("email") if faculty else ""
-        if not recipient:
-            return
-        smtp_host = os.getenv("SMTP_HOST", "").strip()
-        smtp_user = os.getenv("SMTP_USER", "").strip()
-        smtp_pass = os.getenv("SMTP_PASS", "").strip()
-        smtp_port = int(os.getenv("SMTP_PORT", "587"))
-        if not smtp_host or not smtp_user or not smtp_pass:
-            return
-        message = EmailMessage()
-        message["Subject"] = f"Attendance Report: {course['code']} - {started[:10]}"
-        message["From"] = smtp_user
-        message["To"] = recipient
-        message.set_content("Attached is the finalized class attendance report.")
-        message.add_attachment(pdf, maintype="application", subtype="pdf",
-                               filename=f"attendance-{course['code']}-{started[:10]}.pdf")
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as smtp:
-            smtp.starttls()
-            smtp.login(smtp_user, smtp_pass)
-            smtp.send_message(message)
-    except Exception:
-        logger.exception("Could not generate or email class attendance report")
-    finally:
-        conn.close()
-
-
-def rotate_attendance_nonce(session_id: str) -> str:
-    nonce = secrets.token_urlsafe(32)
-    now = datetime.now(timezone.utc)
-    expires = now + timedelta(seconds=30)
-    conn = get_conn()
-    try:
-        db_exec(conn, """
-            UPDATE attendance_sessions
-            SET current_nonce = ?, nonce_expires_at = ?, session_secret = ?
-            WHERE college_id = ? AND session_id = ?
-        """, (nonce, expires.isoformat(timespec="seconds"),
-              nonce, ACTIVE_COLLEGE_ID.get(), session_id))
-        conn.commit()
-        return nonce
-    finally:
-        conn.close()
-
-
-@app.post("/api/v1/attendance-sessions")
-def start_phase1_session(req: AttendanceSessionReq, request: Request):
-    account = request.state.user
-    scope = req.scope.upper()
-    if scope not in {"CLASS", "HOSTEL"}:
-        raise HTTPException(status_code=400, detail="Session scope must be CLASS or HOSTEL.")
-    if scope == "CLASS" and account.get("role") not in {"Faculty", "Dean", "Staff"}:
-        raise HTTPException(status_code=403, detail="Faculty access is required.")
-    if scope == "HOSTEL" and account.get("role") != "Warden":
-        raise HTTPException(status_code=403, detail="Warden access is required.")
-    if req.duration_minutes not in {2, 3, 5}:
-        raise HTTPException(status_code=400, detail="Duration must be 2, 3, or 5 minutes.")
-    now = datetime.now(timezone.utc)
-    expires = now + timedelta(minutes=req.duration_minutes)
-    nonce = secrets.token_urlsafe(32)
-    session_id = f"AS-{uuid.uuid4().hex[:20].upper()}"
-    conn = get_conn()
-    try:
-        beacon = db_exec(conn, "SELECT id, name, is_active FROM beacons WHERE college_id = ? AND id = ?",
-                         (ACTIVE_COLLEGE_ID.get(), req.beacon_id)).fetchone()
-        if not beacon or not beacon["is_active"]:
-            raise HTTPException(status_code=409, detail="The selected beacon is missing or inactive.")
-        if scope == "CLASS":
-            course = db_exec(conn, "SELECT id FROM courses WHERE college_id = ? AND id = ? AND faculty_id = ?",
-                             (ACTIVE_COLLEGE_ID.get(), req.course_id, account["user_id"])).fetchone()
-            if not course:
-                raise HTTPException(status_code=404, detail="Course not found.")
-            wing_name = ""
-        else:
-            course = None
-            wing_name = req.wing_name or account.get("hostel_block") or ""
-            if not wing_name:
-                raise HTTPException(status_code=400, detail="Wing name is required.")
-        db_exec(conn, """
-            INSERT INTO attendance_sessions
-              (college_id, session_id, hostel_block, hostel_key, session_date, started_by,
-               started_at, closes_at, session_secret, status, scope, course_id, wing_name,
-               beacon_id, expires_at, current_nonce, nonce_expires_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Open', ?, ?, ?, ?, ?, ?, ?)
-        """, (ACTIVE_COLLEGE_ID.get(), session_id, wing_name, "", now.strftime("%Y-%m-%d"),
-              account["user_id"], now.isoformat(timespec="seconds"), expires.isoformat(timespec="seconds"),
-              nonce, scope, req.course_id if scope == "CLASS" else None, wing_name or None,
-              req.beacon_id, expires.isoformat(timespec="seconds"), nonce,
-              (now + timedelta(seconds=30)).isoformat(timespec="seconds")))
-        conn.commit()
-        return {"success": True, "session": {"id": session_id, "scope": scope,
-                                             "expires_at": expires.isoformat(timespec="seconds"),
-                                             "current_nonce": nonce,
-                                             "nonce_expires_in_seconds": 30,
-                                             "beacon_id": req.beacon_id}}
-    finally:
-        conn.close()
-
-
-@app.post("/api/v1/attendance-sessions/{session_id}/close")
-def close_phase1_session(session_id: str, request: Request, background_tasks: BackgroundTasks):
-    account = request.state.user
-    conn = get_conn()
-    try:
-        session = db_exec(conn, "SELECT * FROM attendance_sessions WHERE college_id = ? AND session_id = ?",
-                          (ACTIVE_COLLEGE_ID.get(), session_id)).fetchone()
-        if not session:
-            raise HTTPException(status_code=404, detail="Attendance session not found.")
-        if session["started_by"].upper() != account["user_id"].upper() and account.get("role") not in {"Dean"}:
-            raise HTTPException(status_code=403, detail="Only the session owner can close it.")
-        if session["status"] == "Open":
-            db_exec(conn, "UPDATE attendance_sessions SET status = 'Closed', closes_at = ? "
-                          "WHERE college_id = ? AND session_id = ?",
-                    (datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                     ACTIVE_COLLEGE_ID.get(), session_id))
-            course_id = session.get("course_id")
-            if course_id:
-                students = db_exec(conn, """
-                    SELECT student_id FROM course_enrollments
-                    WHERE college_id = ? AND course_id = ?
-                """, (ACTIVE_COLLEGE_ID.get(), course_id)).fetchall()
-                now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-                for student in students:
-                    db_exec(conn, """
-                        INSERT INTO attendance_records
-                          (college_id, record_id, session_id, student_id, status, method,
-                           marked_at, exception_reason, override_reason)
-                        VALUES (?, ?, ?, ?, 'Absent', 'MANUAL_OVERRIDE', ?, '', '')
-                        ON CONFLICT (college_id, session_id, student_id) DO NOTHING
-                    """, (ACTIVE_COLLEGE_ID.get(), f"AR-{uuid.uuid4().hex[:16].upper()}",
-                          session_id, student["student_id"], now))
-            conn.commit()
-            if course_id:
-                background_tasks.add_task(generate_and_email_class_report, ACTIVE_COLLEGE_ID.get(), session_id)
-        return {"success": True, "status": "Closed"}
-    finally:
-        conn.close()
-
-
-@app.post("/api/v1/attendance-sessions/{session_id}/nonce/rotate")
-def rotate_phase1_nonce(session_id: str, request: Request):
-    account = request.state.user
-    conn = get_conn()
-    try:
-        session = db_exec(conn, "SELECT started_by, status FROM attendance_sessions "
-                                "WHERE college_id = ? AND session_id = ?",
-                          (ACTIVE_COLLEGE_ID.get(), session_id)).fetchone()
-        if not session:
-            raise HTTPException(status_code=404, detail="Attendance session not found.")
-        if session["started_by"].upper() != account["user_id"].upper():
-            raise HTTPException(status_code=403, detail="Only the session owner can rotate the nonce.")
-        if session["status"] != "Open":
-            raise HTTPException(status_code=409, detail="Attendance session is closed.")
-        nonce = rotate_attendance_nonce(session_id)
-        return {"success": True, "session_nonce": nonce, "expires_in_seconds": 30}
-    finally:
-        conn.close()
-
-
-@app.post("/api/v1/attendance-sessions/override")
-def override_phase1_attendance(req: AttendanceOverrideReq, request: Request):
-    account = request.state.user
-    status = req.status.upper()
-    reason = req.reason.strip()
-    if status not in {"PRESENT", "ABSENT"}:
-        raise HTTPException(status_code=400, detail="Status must be PRESENT or ABSENT.")
-    if not reason:
-        raise HTTPException(status_code=400, detail="An audit reason is required.")
-    conn = get_conn()
-    try:
-        session = db_exec(conn, "SELECT * FROM attendance_sessions WHERE college_id = ? AND session_id = ?",
-                          (ACTIVE_COLLEGE_ID.get(), req.session_id)).fetchone()
-        if not session:
-            raise HTTPException(status_code=404, detail="Attendance session not found.")
-        owner_allowed = session["started_by"].upper() == account["user_id"].upper()
-        if not owner_allowed:
-            raise HTTPException(status_code=403, detail="Only the session owner can override attendance.")
-        db_exec(conn, """
-            INSERT INTO attendance_records
-              (college_id, record_id, session_id, student_id, status, method,
-               marked_at, exception_reason, override_reason)
-            VALUES (?, ?, ?, ?, ?, 'MANUAL_OVERRIDE', ?, ?, ?)
-            ON CONFLICT (college_id, session_id, student_id) DO UPDATE SET
-              status = excluded.status,
-              method = 'MANUAL_OVERRIDE',
-              marked_at = excluded.marked_at,
-              exception_reason = excluded.exception_reason,
-              override_reason = excluded.override_reason
-        """, (ACTIVE_COLLEGE_ID.get(), f"AR-{uuid.uuid4().hex[:16].upper()}",
-              req.session_id, req.student_id.upper(), status,
-              datetime.now(timezone.utc).isoformat(timespec="seconds"), reason, reason))
-        conn.commit()
-        return {"success": True, "student_id": req.student_id.upper(), "status": status}
-    finally:
-        conn.close()
-
-
-@app.post("/api/v1/attendance/check-in")
-def check_in_phase1(req: AttendanceCheckinReq, request: Request):
-    account = request.state.user
-    if account.get("role") != "Student":
-        raise HTTPException(status_code=403, detail="Only students can check in.")
-    now = datetime.now(timezone.utc)
-    conn = get_conn()
-    try:
-        session = db_exec(conn, "SELECT * FROM attendance_sessions "
-                                "WHERE college_id = ? AND session_id = ?",
-                          (ACTIVE_COLLEGE_ID.get(), req.session_id)).fetchone()
-        if not session:
-            raise HTTPException(status_code=404, detail="Attendance session not found.")
-        if session["status"] != "Open":
-            raise HTTPException(status_code=409, detail="Attendance session is closed.")
-        expires_at = datetime.fromisoformat(str(session["expires_at"])) if session.get("expires_at") else now
-        if expires_at <= now:
-            raise HTTPException(status_code=409, detail="Attendance session has expired.")
-        if session.get("current_nonce") != req.session_nonce:
-            raise HTTPException(status_code=401, detail="The session nonce is missing or expired.")
-        nonce_expiry = datetime.fromisoformat(str(session["nonce_expires_at"])) if session.get("nonce_expires_at") else now
-        if nonce_expiry <= now:
-            raise HTTPException(status_code=401, detail="The session nonce is missing or expired.")
-
-        beacon = db_exec(conn, "SELECT * FROM beacons WHERE college_id = ? AND id = ? AND is_active = 1",
-                         (ACTIVE_COLLEGE_ID.get(), session["beacon_id"])).fetchone()
-        if not beacon:
-            raise HTTPException(status_code=409, detail="The session beacon is inactive.")
-        if (str(req.beacon_uuid).lower() != str(beacon["uuid"]).lower()
-                or req.beacon_major != beacon["major"]
-                or req.beacon_minor != beacon["minor"]):
-            raise HTTPException(status_code=403, detail="The detected beacon does not match this attendance session.")
-        if req.rssi < beacon["min_rssi"]:
-            raise HTTPException(status_code=403, detail=f"Beacon signal is too weak. Required {beacon['min_rssi']} dBm or better.")
-
-        credential = db_exec(conn, "SELECT * FROM webauthn_credentials "
-                                   "WHERE college_id = ? AND UPPER(user_id) = ?",
-                             (ACTIVE_COLLEGE_ID.get(), account["user_id"].upper())).fetchone()
-        if not credential:
-            raise HTTPException(status_code=403, detail="Your device passkey is not enrolled.")
-        if req.webauthn_credential.get("id") and req.webauthn_credential["id"] != credential["credential_id"]:
-            raise HTTPException(status_code=401, detail="The submitted passkey does not match the approved device.")
-
-        student = db_exec(conn, "SELECT face_reference_encrypted FROM users "
-                                "WHERE college_id = ? AND UPPER(user_id) = ?",
-                          (ACTIVE_COLLEGE_ID.get(), account["user_id"].upper())).fetchone()
-        if not student or not student["face_reference_encrypted"]:
-            raise HTTPException(status_code=403, detail="Complete Warden-approved face enrollment first.")
-        if not _verify_face_image(req.live_image_base64, student["face_reference_encrypted"]):
-            raise HTTPException(status_code=401, detail="The live face could not be verified.")
-        req.live_image_base64 = ""
-
-        db_exec(conn, """
-            INSERT INTO attendance_records
-              (college_id, record_id, session_id, student_id, status, method,
-               marked_at, exception_reason, measured_rssi, override_reason)
-            VALUES (?, ?, ?, ?, 'PRESENT', 'BLE_FACE', ?, '', ?, '')
-            ON CONFLICT (college_id, session_id, student_id) DO UPDATE SET
-              status = 'PRESENT',
-              method = 'BLE_FACE',
-              marked_at = excluded.marked_at,
-              measured_rssi = excluded.measured_rssi,
-              override_reason = ''
-        """, (ACTIVE_COLLEGE_ID.get(), f"AR-{uuid.uuid4().hex[:16].upper()}",
-              req.session_id, account["user_id"].upper(),
-              now.isoformat(timespec="seconds"), req.rssi))
-        conn.commit()
-        return {"success": True, "status": "PRESENT", "session_id": req.session_id}
-    finally:
-        req.live_image_base64 = ""
         conn.close()
 
 
