@@ -1,3 +1,5 @@
+import { extractErrorMessage } from './utils/errorParser.ts';
+
 export const API_URL = import.meta.env.VITE_API_URL || 'https://api.svnitcampus.in';
 
 const ALLOWED_API_ORIGINS = new Set([
@@ -23,6 +25,19 @@ export async function apiFetch(input, init = {}) {
     localStorage.removeItem('hms_google_credential');
     localStorage.removeItem('hms_user');
     window.dispatchEvent(new Event('hms-auth-expired'));
+  }
+  if (!response.ok && response.headers.get('content-type')?.includes('application/json')) {
+    const data = await response.clone().json().catch(() => null);
+    if (data && typeof data === 'object' && !Array.isArray(data) && data.detail !== undefined) {
+      data.detail = extractErrorMessage(data.detail, `Request failed (${response.status}).`);
+      const responseHeaders = new Headers(response.headers);
+      responseHeaders.delete('content-length');
+      return new Response(JSON.stringify(data), {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders
+      });
+    }
   }
   return response;
 }

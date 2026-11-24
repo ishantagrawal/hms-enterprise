@@ -3,6 +3,7 @@ import { apiFetch } from '../api';
 import StaffAccountAccess from './StaffAccountAccess';
 import { DashboardCardSkeleton, GridCardSkeleton, ListRowSkeleton } from './SkeletonLoader';
 import usePortalBackNavigation from '../hooks/usePortalBackNavigation';
+import { extractErrorMessage } from '../utils/errorParser.ts';
 
 const TENANT_MODULES = [
   ['grievances', 'Grievances'],
@@ -10,6 +11,8 @@ const TENANT_MODULES = [
   ['event_radar', 'Events'],
   ['gate_outpass', 'Gate outpass'],
   ['attendance', 'Night attendance'],
+  ['class_attendance', 'Class attendance'],
+  ['hostel_attendance', 'Hostel attendance'],
   ['parent_alerts', 'Parent alerts']
 ];
 
@@ -63,10 +66,10 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
     try {
       const res = await apiFetch(`${apiUrl}/api/founder/tenants`);
       const data = await res.json().catch(() => []);
-      if (!res.ok) throw new Error(data.detail || 'Could not load college settings.');
+      if (!res.ok) throw new Error(extractErrorMessage(data, 'Could not load college settings.'));
       setTenants(data);
     } catch (error) {
-      setMsg(error.message || 'Could not load college settings.');
+      setMsg(extractErrorMessage(error, 'Could not load college settings.'));
     } finally {
       setTenantLoading(false);
     }
@@ -89,7 +92,7 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
         body: JSON.stringify(tenantForm)
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.success) throw new Error(data.detail || 'Could not create college.');
+      if (!res.ok || !data.success) throw new Error(extractErrorMessage(data, 'Could not create college.'));
       setMsg(`College ${data.college_id} configured. Connect and verify ${data.domain} before launch.`);
       setTenantForm({
         college_id: '',
@@ -105,7 +108,7 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
       });
       await loadTenants();
     } catch (error) {
-      setMsg(error.message || 'Could not create college.');
+      setMsg(extractErrorMessage(error, 'Could not create college.'));
     } finally {
       setTenantSaving(false);
     }
@@ -125,12 +128,12 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
         body: JSON.stringify({ modules })
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.success) throw new Error(data.detail || 'Could not update college modules.');
+      if (!res.ok || !data.success) throw new Error(extractErrorMessage(data, 'Could not update college modules.'));
     } catch (error) {
       setTenants((current) => current.map((item) =>
         item.college_id === tenant.college_id ? tenant : item
       ));
-      setMsg(error.message || 'Could not update college modules.');
+      setMsg(extractErrorMessage(error, 'Could not update college modules.'));
     } finally {
       setModuleSaving((current) => ({ ...current, [tenant.college_id]: false }));
     }

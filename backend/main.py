@@ -124,6 +124,7 @@ PASSWORD_MIN_LENGTH = 12
 STAFF_LOGIN_ROLES = {
     "Dean",
     "Founder",
+    "Faculty",
     "Warden",
     "ClubOrganizer",
     "Staff",
@@ -972,6 +973,8 @@ def init_db():
         "event_radar": True,
         "gate_outpass": False,
         "attendance": False,
+        "class_attendance": False,
+        "hostel_attendance": False,
         "parent_alerts": False,
     }
     db_exec(
@@ -1331,6 +1334,8 @@ def get_tenant_by_id(college_id: str):
         tenant = dict(row) if row else None
         if tenant:
             tenant["modules"] = json.loads(tenant.get("modules_json") or "{}")
+            tenant["modules"].setdefault("class_attendance", False)
+            tenant["modules"].setdefault("hostel_attendance", False)
             with _TENANT_CACHE_LOCK:
                 _TENANT_CACHE[normalized_id] = (now + 30.0, tenant)
         return tenant
@@ -1792,6 +1797,12 @@ def get_account_by_id(user_id: str):
     return None
 
 
+def _link_attendance_v2_student(conn, student_id: str):
+    linker = globals().get("_attendance_v2_link_student_records")
+    if linker:
+        linker(conn, ACTIVE_COLLEGE_ID.get(), student_id)
+
+
 def get_account_for_google_claims(claims: dict):
     email = str(claims.get("email", "")).strip().lower()
     if claims.get("email_verified") is not True:
@@ -1801,6 +1812,13 @@ def get_account_for_google_claims(claims: dict):
 
     existing_email = get_account_by_email(email)
     if existing_email:
+        if existing_email.get("role") == "Student":
+            conn = get_conn()
+            try:
+                _link_attendance_v2_student(conn, existing_email["user_id"])
+                conn.commit()
+            finally:
+                conn.close()
         return existing_email
 
     local_part = email.split("@", 1)[0].upper()
@@ -1820,6 +1838,7 @@ def get_account_for_google_claims(claims: dict):
                 "UPDATE users SET email = ? WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'",
                 (email, ACTIVE_COLLEGE_ID.get(), local_part),
             )
+            _link_attendance_v2_student(conn, local_part)
             conn.commit()
         finally:
             conn.close()
@@ -1838,6 +1857,7 @@ def get_account_for_google_claims(claims: dict):
             (local_part, "", full_name, "Student", "Verified Student", ACTIVE_COLLEGE_ID.get(), "", "", "", "", email, "", "", "", ACTIVE_COLLEGE_ID.get()),
         )
         account = db_exec(conn, "SELECT * FROM users WHERE college_id = ? AND UPPER(user_id) = ?", (ACTIVE_COLLEGE_ID.get(), local_part)).fetchone()
+        _link_attendance_v2_student(conn, local_part)
         conn.commit()
     finally:
         conn.close()
@@ -1940,8 +1960,12 @@ async def require_authentication(request: Request, call_next):
             module = "grievances"
         elif request.url.path.startswith(("/api/unicore/", "/api/notices")):
             module = "event_radar"
-        elif request.url.path.startswith("/api/attendance") or request.url.path == "/api/warden/unlock-biometric":
+        elif request.url.path.startswith("/api/attendance/") or request.url.path == "/api/warden/unlock-biometric":
             module = "attendance"
+        elif request.url.path.startswith("/api/attendance-v2/courses") or request.url.path == "/api/attendance-v2/student/class-summary":
+            module = "class_attendance"
+        elif request.url.path.startswith(("/api/attendance-v2/hostel", "/api/attendance-v2/device")) or request.url.path == "/api/attendance-v2/student/hostel-history":
+            module = "hostel_attendance"
         elif request.url.path.startswith(("/api/outpasses", "/api/leave")):
             module = "gate_outpass"
         if module and not tenant["modules"].get(module, False):
@@ -1973,13 +1997,14 @@ def list_tenants(request: Request):
     conn = get_conn()
     try:
         rows = db_exec(conn, "SELECT * FROM tenants ORDER BY college_name").fetchall()
-        return [
-            {
-                **dict(row),
-                "modules": json.loads(row["modules_json"] or "{}"),
-            }
-            for row in rows
-        ]
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["modules"] = json.loads(row["modules_json"] or "{}")
+            item["modules"].setdefault("class_attendance", False)
+            item["modules"].setdefault("hostel_attendance", False)
+            result.append(item)
+        return result
     finally:
         conn.close()
 
@@ -2055,6 +2080,8 @@ def create_tenant(req: TenantCreateReq, request: Request):
         "event_radar": True,
         "gate_outpass": False,
         "attendance": False,
+        "class_attendance": False,
+        "hostel_attendance": False,
         "parent_alerts": False,
     }
     if req.modules is not None:
@@ -2140,6 +2167,8 @@ def update_tenant_modules(college_id: str, req: TenantModulesReq, request: Reque
         "event_radar",
         "gate_outpass",
         "attendance",
+        "class_attendance",
+        "hostel_attendance",
         "parent_alerts",
     }
     if set(req.modules) != allowed_modules or not all(isinstance(value, bool) for value in req.modules.values()):
@@ -2584,8 +2613,25 @@ def password_login(req: PasswordLoginReq, request: Request):
 @app.post("/api/auth/google")
 def google_login(req: GoogleLoginReq):
     claims = verify_google_credential(req.credential)
-    account = get_account_for_google_claims(claims)
-    if account.get("role") != "Student":
+    approved_staff_login = False
+    staff_provisioner = globals().get("_attendance_v2_provision_approved_staff")
+    email = str(claims.get("email", "")).strip().lower()
+    if staff_provisioner and claims.get("email_verified") is True and is_tenant_email(email):
+        conn = get_conn()
+        try:
+            account = staff_provisioner(conn, ACTIVE_COLLEGE_ID.get(), claims)
+            conn.commit()
+            approved_staff_login = account is not None
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+    else:
+        account = None
+    if account is None:
+        account = get_account_for_google_claims(claims)
+    if account.get("role") != "Student" and not approved_staff_login:
         raise HTTPException(status_code=403, detail="Staff accounts must use username and password.")
     user = dict(account)
     user.pop("password", None)
@@ -6441,3 +6487,22 @@ def delete_complaint(ticket_id: str = Query(...), request: Request = None):
     conn.commit()
     conn.close()
     return {"success": True, "message": "Complaint deleted."}
+
+
+import importlib as _importlib
+
+_attendance_v2_module_name = (
+    f"{__package__}.attendance_v2" if __package__ else "attendance_v2"
+)
+_attendance_v2_module = _importlib.import_module(_attendance_v2_module_name)
+_attendance_v2_module.install(app, globals())
+_attendance_v2_link_student_records = (
+    lambda conn, tenant_id, student_id: _attendance_v2_module.link_student_records(
+        conn, globals(), tenant_id, student_id
+    )
+)
+_attendance_v2_provision_approved_staff = (
+    lambda conn, tenant_id, claims: _attendance_v2_module.create_approved_staff(
+        conn, globals(), tenant_id, claims
+    )
+)

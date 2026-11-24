@@ -1,14 +1,20 @@
 {
-  "name": "svnitcampus",
-  "short_name": "svnitcampus",
-  "description": "SVNIT Surat Official Campus, Club & Hostel Management System",
+  "name": "CampusVerify Infrastructure",
+  "short_name": "CampusVerify",
+  "description": "Privacy-first campus attendance infrastructure",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#F5F7FA",
-  "theme_color": "#002970",
+  "background_color": "#FAFAFB",
+  "theme_color": "#FFFFFF",
   "orientation": "portrait-primary",
   "icons": [
+    {
+      "src": "/campusverify-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
     {
       "src": "https://upload.wikimedia.org/wikipedia/en/thumb/1/1b/NIT_Surat_Logo.svg/192px-NIT_Surat_Logo.svg.png",
       "sizes": "192x192",

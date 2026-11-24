@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -118,6 +119,51 @@ class TenantSafetyTests(unittest.TestCase):
         )
         conn.commit()
         conn.close()
+
+    def test_attendance_v2_tables_are_additive_and_records_are_unique(self):
+        conn = main.get_conn()
+        try:
+            tables = {
+                row["name"] for row in main.db_exec(
+                    conn, "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            self.assertIn("attendance_sessions", tables)
+            self.assertIn("attendance_records", tables)
+            self.assertIn("attendance_v2_sessions", tables)
+            self.assertIn("attendance_v2_records", tables)
+            records_sql = main.db_exec(
+                conn,
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+                ("attendance_v2_records",),
+            ).fetchone()["sql"]
+            self.assertIn("UNIQUE (session_id, student_id)", records_sql)
+        finally:
+            conn.close()
+
+    def test_attendance_v2_faculty_pdf_fits_150_students_on_one_page(self):
+        rows = [
+            {
+                "roll_no": f"U24CS{number:03d}",
+                "student_name": f"Student {number}",
+                "status": "PRESENT" if number % 2 else "ABSENT",
+                "method": "BLE_FACE",
+            }
+            for number in range(1, 151)
+        ]
+        pdf = main._attendance_v2_module._build_report_pdf(
+            {
+                "students": rows,
+                "course_code": "U24CS",
+                "course_title": "Systems",
+                "faculty_name": "Faculty",
+                "date": "2026-06-11 10:00",
+                "beacon_name": "Room Beacon",
+                "overrides": 0,
+                "institute": "Institute",
+            }
+        )
+        self.assertEqual(len(re.findall(rb"/Type\s*/Page\b", pdf)), 1)
 
     def test_face_reference_is_encrypted_before_persistence(self):
         import cv2

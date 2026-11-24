@@ -1,10 +1,15 @@
 import React, { Suspense, lazy, useState, useEffect, useCallback } from 'react';
+import { Navigate, Route, Routes } from 'react-router-dom';
 import { apiFetch, API_URL } from './api';
 import { getCached, setCached } from './cache';
-import { DashboardCardSkeleton, GridCardSkeleton } from './components/SkeletonLoader';
+import BrandLoadingScreen from './components/BrandLoadingScreen';
 import { signInWithNativeGoogle, usesNativeGoogleSignIn } from './auth/googleSignIn';
 import { CapacitorUpdater } from '@capgo/capacitor-updater';
+import { Capacitor } from '@capacitor/core';
 import PrivacyAndDataDeletion from './components/PrivacyAndDataDeletion';
+import AttendanceOnlyPortals from './components/AttendanceOnlyPortals.jsx';
+import CompanyLandingPage from './pages/CompanyLandingPage.tsx';
+import { extractErrorMessage } from './utils/errorParser.ts';
 
 window.GLOBAL_SILICON_VALLEY_CSS = '';
 
@@ -42,10 +47,14 @@ function profileDraftFromUser(user) {
 }
 
 export default function App() {
-  if (window.location.pathname === '/privacy-and-data-deletion') {
-    return <PrivacyAndDataDeletion />;
-  }
-  return <AuthenticatedApp />;
+  return (
+    <Routes>
+      <Route path="/" element={Capacitor.isNativePlatform() ? <Navigate to="/app" replace /> : <CompanyLandingPage />} />
+      <Route path="/app/*" element={<AuthenticatedApp />} />
+      <Route path="/privacy-and-data-deletion" element={<PrivacyAndDataDeletion />} />
+      <Route path="*" element={<Navigate to="/app" replace />} />
+    </Routes>
+  );
 }
 
 function AuthenticatedApp() {
@@ -104,16 +113,14 @@ function AuthenticatedApp() {
         body: JSON.stringify({ credential })
       });
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.detail || 'Google sign-in failed.');
+      if (!res.ok || !data.success) throw new Error(extractErrorMessage(data, 'Google sign-in failed.'));
       localStorage.setItem('hms_session_token', data.token || credential);
       localStorage.removeItem('hms_google_credential');
       localStorage.setItem('hms_user', JSON.stringify(data.user));
       setProfileDraft(profileDraftFromUser(data.user));
       setUser(data.user);
     } catch (error) {
-      setLoginError(error instanceof TypeError
-        ? 'Could not reach the sign-in server. Check your internet connection and try again.'
-        : error.message || 'Could not verify your college Google account.');
+      setLoginError(extractErrorMessage(error, 'Could not verify your college Google account.'));
     }
   }, []);
 
@@ -126,7 +133,7 @@ function AuthenticatedApp() {
       await handleGoogleCredential(credential);
     } catch (error) {
       if (error?.code !== 'USER_CANCELLED') {
-        setLoginError(error.message || 'Google sign-in failed. Please try again.');
+        setLoginError(extractErrorMessage(error, 'Google sign-in failed. Please try again.'));
       }
     } finally {
       setGoogleLoginLoading(false);
@@ -145,7 +152,7 @@ function AuthenticatedApp() {
         body: JSON.stringify({ username: staffUsername, password: staffPassword })
       });
       const data = await response.json();
-      if (!response.ok || !data.success) throw new Error(data.detail || 'Staff sign-in failed.');
+      if (!response.ok || !data.success) throw new Error(extractErrorMessage(data, 'Staff sign-in failed.'));
       localStorage.setItem('hms_session_token', data.token);
       localStorage.removeItem('hms_google_credential');
       localStorage.setItem('hms_user', JSON.stringify(data.user));
@@ -153,7 +160,7 @@ function AuthenticatedApp() {
       setProfileDraft(profileDraftFromUser(data.user));
       setUser(data.user);
     } catch (error) {
-      setLoginError(error.message || 'Staff sign-in failed.');
+      setLoginError(extractErrorMessage(error, 'Staff sign-in failed.'));
     } finally {
       setStaffLoginLoading(false);
     }
@@ -310,12 +317,12 @@ function AuthenticatedApp() {
         body: JSON.stringify(payload)
       });
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.detail || 'Could not save your profile.');
+      if (!res.ok || !data.success) throw new Error(extractErrorMessage(data, 'Could not save your profile.'));
       localStorage.setItem('hms_user', JSON.stringify(data.user));
       setProfileDraft(profileDraftFromUser(data.user));
       setUser(data.user);
     } catch (error) {
-      setProfileError(error.message || 'Could not save your profile.');
+      setProfileError(extractErrorMessage(error, 'Could not save your profile.'));
     } finally {
       setProfileSaving(false);
     }
@@ -338,14 +345,7 @@ function AuthenticatedApp() {
   };
 
   if (!authReady) {
-    return (
-      <div className="ptm-root">
-        <style>{PAYTM_APPLE_CSS}</style>
-        <div className="ptm-login-screen">
-          <DashboardCardSkeleton />
-        </div>
-      </div>
-    );
+    return <BrandLoadingScreen label="Preparing your secure portal" />;
   }
 
   const isFounder = user?.role === 'Founder' || user?.user_id === 'FOUNDER';
@@ -359,6 +359,12 @@ function AuthenticatedApp() {
     : 'SV';
   const selectedHostelConfig = hostelConfig.find(
     (item) => item.name === profileDraft.hostel_block
+  );
+  const modules = tenant?.modules || {};
+  const hasAttendanceFeature = Boolean(modules.class_attendance || modules.hostel_attendance);
+  const hasLegacyFeatures = Boolean(
+    modules.grievances || modules.mess_pulse || modules.event_radar || modules.gate_outpass
+    || modules.attendance || modules.parent_alerts
   );
 
   return (
@@ -501,15 +507,19 @@ function AuthenticatedApp() {
 
           <main className="ptm-main-container">
             <Suspense fallback={
-              <div role="status" aria-label="Opening your portal">
-                <DashboardCardSkeleton />
-                <GridCardSkeleton count={4} />
-              </div>
+              <BrandLoadingScreen />
             }>
               {isFounder && <FounderPortal user={user} apiUrl={API_URL} onLogout={handleLogout} />}
-              {user.role === 'Dean' && <DeanPortal user={user} apiUrl={API_URL} />}
-              {user.role === 'Student' && <StudentPortal user={user} apiUrl={API_URL} modules={tenant?.modules} onUserUpdate={handleStudentProfileRefresh} />}
-              {user.role === 'Warden' && <WardenPortal user={user} apiUrl={API_URL} modules={tenant?.modules} />}
+              {user.role === 'Dean' && hasAttendanceFeature
+                ? <AttendanceOnlyPortals user={user} apiUrl={API_URL} modules={modules} legacyPortal={hasLegacyFeatures ? <DeanPortal user={user} apiUrl={API_URL} /> : null} />
+                : user.role === 'Dean' && <DeanPortal user={user} apiUrl={API_URL} />}
+              {user.role === 'Student' && hasAttendanceFeature
+                ? <AttendanceOnlyPortals user={user} apiUrl={API_URL} modules={modules} legacyPortal={hasLegacyFeatures ? <StudentPortal user={user} apiUrl={API_URL} modules={modules} onUserUpdate={handleStudentProfileRefresh} /> : null} />
+                : user.role === 'Student' && <StudentPortal user={user} apiUrl={API_URL} modules={modules} onUserUpdate={handleStudentProfileRefresh} />}
+              {user.role === 'Warden' && hasAttendanceFeature
+                ? <AttendanceOnlyPortals user={user} apiUrl={API_URL} modules={modules} legacyPortal={hasLegacyFeatures ? <WardenPortal user={user} apiUrl={API_URL} modules={modules} /> : null} />
+                : user.role === 'Warden' && <WardenPortal user={user} apiUrl={API_URL} modules={modules} />}
+              {user.role === 'Faculty' && modules.class_attendance && <AttendanceOnlyPortals user={user} apiUrl={API_URL} modules={modules} />}
               {(user.role === 'Gate Security' || user.role === 'GateSecurity') && tenant?.modules?.gate_outpass && <GateSecurityPortal user={user} apiUrl={API_URL} />}
               {user.role === 'ClubOrganizer' && <ClubPortal user={user} apiUrl={API_URL} />}
               {user.role === 'Staff' && <StaffPortal user={user} apiUrl={API_URL} />}

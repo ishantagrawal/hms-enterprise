@@ -10,3 +10,4 @@ cryptography==50.0.2
 deepface==0.0.103
 opencv-contrib-python-headless==5.0.0.93
 werkzeug==3.1.6
+reportlab>=4.2,<5
