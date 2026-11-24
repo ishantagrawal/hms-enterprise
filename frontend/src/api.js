@@ -10,10 +10,12 @@ const ALLOWED_API_ORIGINS = new Set([
 
 export async function apiFetch(input, init = {}) {
   const headers = new Headers(init.headers || {});
+  const tenantDomain = localStorage.getItem('hms_tenant_domain');
   const credential = localStorage.getItem('hms_session_token');
   const requestUrl = typeof input === 'string' ? input : input.url;
   const targetOrigin = new URL(requestUrl, window.location.origin).origin;
 
+  if (tenantDomain) headers.set('X-Campus-Domain', tenantDomain);
   if (credential && ALLOWED_API_ORIGINS.has(targetOrigin)) {
     headers.set('Authorization', `Bearer ${credential}`);
   }

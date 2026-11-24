@@ -117,10 +117,10 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
   }, [attendanceLogKey]);
 
   const isDayScholar = (safeUser.hostel_block || '').toLowerCase() === 'day scholar';
-  const showGrievances = modules?.grievances !== false;
-  const showEvents = modules?.event_radar !== false;
+  const showGrievances = modules?.grievances === true;
+  const showEvents = modules?.event_radar === true;
   const showAttendance = modules?.attendance === true;
-  const showAttendanceV2 = Boolean(modules?.class_attendance || modules?.hostel_attendance);
+  const showAttendanceV2 = modules?.class_attendance === true || modules?.hostel_attendance === true;
   const showOutpass = modules?.gate_outpass === true;
   const profileIsDayScholar = (profileDraft.hostel_block || '').toLowerCase() === 'day scholar';
   const profileHostelOptions = getHostelOptions(
@@ -725,7 +725,7 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">Official SVNIT Clubs & Chapters</h1>
+                  <h1 className="ptm-page-title">Official College Clubs &amp; Chapters</h1>
                 </div>
                 <div className="ptm-card">
                   {clubs.length === 0 ? (
@@ -1152,7 +1152,7 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
         <button className={`ptm-bnav-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}><span>🏠</span><span>Home</span></button>
         {showGrievances && !isDayScholar && <button className={`ptm-bnav-btn ${page === 'my_complaints' ? 'active' : ''}`} onClick={() => setPage('my_complaints')}><span>💬</span><span>Grievances</span></button>}
         {showEvents && <button className={`ptm-bnav-btn ${page === 'events_list' ? 'active' : ''}`} onClick={() => setPage('events_list')}><span>🎪</span><span>Events</span></button>}
-        {showAttendance && <button className={`ptm-bnav-btn ${page === 'attendance' ? 'active' : ''}`} onClick={() => setPage('attendance')}><span>📅</span><span>Attendance</span></button>}
+        {showAttendance && <button className={`ptm-bnav-btn ${page === 'attendance' ? 'active' : ''}`} onClick={() => setPage('attendance')}><span>📅</span><span>Night Attendance</span></button>}
         {showAttendanceV2 && <button className={`ptm-bnav-btn ${page === 'attendance_v2' ? 'active' : ''}`} onClick={() => setPage('attendance_v2')}><span>📚</span><span>Class/Hostel</span></button>}
         {showOutpass && !isDayScholar && <button className={`ptm-bnav-btn ${page === 'leave_pass' ? 'active' : ''}`} onClick={() => setPage('leave_pass')}><span>🪪</span><span>Leave Pass</span></button>}
         {showEvents && <button className={`ptm-bnav-btn ${page === 'notices' ? 'active' : ''}`} onClick={() => setPage('notices')}><span>📢</span><span>Notices</span></button>}

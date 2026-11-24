@@ -3,15 +3,40 @@ import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 
 let sessionPromise;
 let landmarkPromise;
+let externalDataPromise;
+
+function getExternalData() {
+  if (!externalDataPromise) {
+    externalDataPromise = fetch('/models/mobile_facenet.data').then((response) => {
+      if (!response.ok) throw new Error('The bundled MobileFaceNet weights could not be loaded.');
+      return response.arrayBuffer();
+    });
+  }
+  return externalDataPromise;
+}
+
+async function createSession(executionProvider) {
+  const externalData = await getExternalData();
+  return ort.InferenceSession.create('/models/mobilefacenet.onnx', {
+    executionProviders: [executionProvider],
+    externalData: [{ path: 'mobile_facenet.data', data: externalData.slice(0) }]
+  });
+}
 
 async function getSession() {
   if (!sessionPromise) {
     sessionPromise = (async () => {
-      const modelUrl = import.meta.env.VITE_FACE_EMBEDDING_MODEL_URL || '/models/mobilefacenet.onnx';
       try {
-        return await ort.InferenceSession.create(modelUrl, { executionProviders: ['webgl'] });
+        return await createSession('webgl');
       } catch {
-        return ort.InferenceSession.create(modelUrl, { executionProviders: ['wasm'] });
+        try {
+          return await createSession('wasm');
+        } catch (error) {
+          throw new Error(
+            'Face verification is unavailable. Check that the bundled MobileFaceNet ONNX model and its external weights are present.',
+            { cause: error }
+          );
+        }
       }
     })();
   }
@@ -30,28 +55,49 @@ async function getLandmarker() {
   return landmarkPromise;
 }
 
-function alignedTensor(video, landmarks) {
+function alignedFaceCanvas(video, landmarks) {
   const left = landmarks[33];
   const right = landmarks[263];
   const eyeDistance = Math.hypot(right.x - left.x, right.y - left.y);
   if (!eyeDistance) throw new Error('The face landmarks are not stable enough.');
+  if (!video.videoWidth || !video.videoHeight) throw new Error('The camera did not provide a usable face frame.');
   const centerX = ((left.x + right.x) / 2) * video.videoWidth;
   const centerY = ((left.y + right.y) / 2) * video.videoHeight;
   const size = eyeDistance * video.videoWidth * 2.2;
-  const canvas = new OffscreenCanvas(112, 112);
+  const canvas = document.createElement('canvas');
+  canvas.width = 112;
+  canvas.height = 112;
   const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) throw new Error('The secure face tensor could not be created.');
   context.translate(56, 56);
   context.rotate(-Math.atan2(right.y - left.y, right.x - left.x));
   context.drawImage(video, centerX - size / 2, centerY - size * 0.62, size, size, -56, -56, 112, 112);
+  return canvas;
+}
+
+function alignedTensor(video, landmarks, zeroToOne) {
+  const canvas = alignedFaceCanvas(video, landmarks);
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) throw new Error('The secure face tensor could not be created.');
   const pixels = context.getImageData(0, 0, 112, 112).data;
+  canvas.width = 0;
+  canvas.height = 0;
   const tensor = new Float32Array(3 * 112 * 112);
+  const normalize = (value) => zeroToOne ? value / 255 : (value - 127.5) / 128;
   for (let index = 0; index < 112 * 112; index += 1) {
-    tensor[index] = (pixels[index * 4] - 127.5) / 128;
-    tensor[112 * 112 + index] = (pixels[index * 4 + 1] - 127.5) / 128;
-    tensor[2 * 112 * 112 + index] = (pixels[index * 4 + 2] - 127.5) / 128;
+    tensor[index] = normalize(pixels[index * 4]);
+    tensor[112 * 112 + index] = normalize(pixels[index * 4 + 1]);
+    tensor[2 * 112 * 112 + index] = normalize(pixels[index * 4 + 2]);
   }
   return new ort.Tensor('float32', tensor, [1, 3, 112, 112]);
+}
+
+export function encodeAlignedFaceReference(video, landmarks) {
+  const canvas = alignedFaceCanvas(video, landmarks);
+  const image = canvas.toDataURL('image/jpeg', 0.9);
+  canvas.width = 0;
+  canvas.height = 0;
+  return image;
 }
 
 function cheekChrominance(video, landmarks) {
@@ -77,16 +123,21 @@ function cheekChrominance(video, landmarks) {
 
 export async function extractFaceEmbedding(video, landmarks) {
   const session = await getSession();
-  const input = alignedTensor(video, landmarks);
-  const inputName = session.inputNames[0];
-  const output = await session.run({ [inputName]: input });
+  if (session.inputNames.length < 1 || session.inputNames.length > 2) {
+    throw new Error('The face model has an unsupported input format.');
+  }
+  const input = alignedTensor(video, landmarks, session.inputNames.length === 2);
+  const feeds = Object.fromEntries(session.inputNames.map((name) => [name, input]));
+  const output = await session.run(feeds);
   const values = Array.from(output[session.outputNames[0]].data, Number);
-  if (values.length !== 128 || values.some((value) => !Number.isFinite(value))) {
+  const expectedSize = session.inputNames.length === 2 ? 256 : 128;
+  if (values.length !== expectedSize || values.some((value) => !Number.isFinite(value))) {
     throw new Error('The face model did not return a valid 128D embedding.');
   }
-  const norm = Math.hypot(...values);
+  const embedding = values.slice(0, 128);
+  const norm = Math.hypot(...embedding);
   if (!(norm > 0)) throw new Error('The face model returned a zero-length embedding.');
-  return values.map((value) => value / norm);
+  return embedding.map((value) => value / norm);
 }
 
 export async function captureLivenessEmbedding(video, onStatus, signal, challenge) {

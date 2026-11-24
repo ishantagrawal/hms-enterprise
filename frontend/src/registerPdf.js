@@ -1,11 +1,11 @@
-export async function downloadComplaintRegister({ title, hostel, wing, category, complaints }) {
+export async function downloadComplaintRegister({ title, hostel, wing, category, complaints, collegeName = 'Campus OS' }) {
   const [{ jsPDF }, { default: autoTable }] = await Promise.all([
     import('jspdf'),
     import('jspdf-autotable')
   ]);
   const document = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   document.setFontSize(15);
-  document.text('SVNIT Campus Hostel Management System', 14, 14);
+  document.text(collegeName, 14, 14);
   document.setFontSize(12);
   document.text(title, 14, 22);
   document.setFontSize(9);
@@ -33,5 +33,5 @@ export async function downloadComplaintRegister({ title, hostel, wing, category,
     margin: { left: 10, right: 10 }
   });
 
-  document.save('svnit-hostel-complaint-register.pdf');
+  document.save('campus-hostel-complaint-register.pdf');
 }

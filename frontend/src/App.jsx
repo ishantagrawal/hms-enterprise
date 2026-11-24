@@ -34,6 +34,17 @@ function ProfileRow({ label, value }) {
   );
 }
 
+function ModuleUnavailableNotice() {
+  return (
+    <div className="ptm-page-wrap">
+      <div className="ptm-card" role="status">
+        <div className="ptm-section-title">This service is not enabled for your college.</div>
+        <div className="ptm-list-sub">Contact your college administrator if you need access.</div>
+      </div>
+    </div>
+  );
+}
+
 function profileDraftFromUser(user) {
   const isDS = user?.hostel_block === 'Day Scholar';
   return {
@@ -57,13 +68,22 @@ export default function App() {
 }
 
 function AuthenticatedApp() {
+  const isNativeApp = Capacitor.isNativePlatform();
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
   const [loginError, setLoginError] = useState(null);
   const [staffUsername, setStaffUsername] = useState('');
   const [staffPassword, setStaffPassword] = useState('');
   const [staffLoginLoading, setStaffLoginLoading] = useState(false);
-  const [tenant, setTenant] = useState(() => getCached('tenant') || null);
+  const [tenant, setTenant] = useState(null);
+  const [tenantDomain, setTenantDomain] = useState(
+    () => localStorage.getItem('hms_tenant_domain') || (isNativeApp ? 'svnitcampus.in' : '')
+  );
+  const [tenantDomainConnected, setTenantDomainConnected] = useState(
+    () => !isNativeApp || Boolean(localStorage.getItem('hms_tenant_domain'))
+  );
+  const [tenantDomainLoading, setTenantDomainLoading] = useState(false);
+  const [tenantDomainError, setTenantDomainError] = useState('');
   const [hostels, setHostels] = useState(() => getCached('tenant_hostels') || []);
   const [hostelConfig, setHostelConfig] = useState(() => getCached('tenant_hostel_config') || []);
   const [profileDraft, setProfileDraft] = useState({ residence_type: 'hosteller', hostel_block: '', wing: '', room: '', phone: '' });
@@ -84,24 +104,52 @@ function AuthenticatedApp() {
   }, []);
 
   useEffect(() => {
-    fetch(`${API_URL}/api/tenant`).then((res) => (res.ok ? res.json() : null))
-      .then((tenantConfig) => {
-      if (tenantConfig) {
-        setTenant(tenantConfig);
-        setCached('tenant', tenantConfig);
-      }
-      if (Array.isArray(tenantConfig?.hostels)) {
-        setHostels(tenantConfig.hostels);
-        setCached('tenant_hostels', tenantConfig.hostels);
-      }
-      if (Array.isArray(tenantConfig?.hostel_config)) {
-        setHostelConfig(tenantConfig.hostel_config);
-        setCached('tenant_hostel_config', tenantConfig.hostel_config);
-      }
-    }).catch((error) => {
-      console.error('Could not load college configuration:', error);
-    });
-  }, []);
+    let active = true;
+    const loadTenantConfig = () => {
+      const selectedDomain = localStorage.getItem('hms_tenant_domain');
+      const headers = selectedDomain ? { 'X-Campus-Domain': selectedDomain } : undefined;
+      fetch(`${API_URL}/api/tenant`, { headers })
+        .then((response) => {
+          if (!response.ok) throw new Error(`College configuration request failed (${response.status}).`);
+          return response.json();
+        })
+        .then((tenantConfig) => {
+          if (!active) return;
+          if (isNativeApp && selectedDomain) setTenantDomainConnected(true);
+          setTenant((current) => (
+            current && JSON.stringify(current) === JSON.stringify(tenantConfig)
+              ? current
+              : tenantConfig
+          ));
+          if (Array.isArray(tenantConfig?.hostels)) {
+            setHostels(tenantConfig.hostels);
+            setCached('tenant_hostels', tenantConfig.hostels);
+          }
+          if (Array.isArray(tenantConfig?.hostel_config)) {
+            setHostelConfig(tenantConfig.hostel_config);
+            setCached('tenant_hostel_config', tenantConfig.hostel_config);
+          }
+        })
+        .catch((error) => {
+          if (!active) return;
+          if (isNativeApp && localStorage.getItem('hms_tenant_domain')) setTenantDomainConnected(false);
+          setTenant((current) => (
+            current && Object.values(current.modules || {}).some((enabled) => enabled === true)
+              ? { ...current, modules: {} }
+              : current
+          ));
+          console.error('Could not load college configuration:', error);
+        });
+    };
+    loadTenantConfig();
+    const refreshInterval = window.setInterval(loadTenantConfig, 30_000);
+    window.addEventListener('focus', loadTenantConfig);
+    return () => {
+      active = false;
+      window.clearInterval(refreshInterval);
+      window.removeEventListener('focus', loadTenantConfig);
+    };
+  }, [isNativeApp]);
 
   const handleStaffLogin = async (event) => {
     event.preventDefault();
@@ -111,7 +159,12 @@ function AuthenticatedApp() {
     try {
       const response = await fetch(`${API_URL}/api/auth/login`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(localStorage.getItem('hms_tenant_domain')
+            ? { 'X-Campus-Domain': localStorage.getItem('hms_tenant_domain') }
+            : {})
+        },
         body: JSON.stringify({ username: staffUsername, password: staffPassword })
       });
       const data = await response.json();
@@ -126,6 +179,50 @@ function AuthenticatedApp() {
       setLoginError(extractErrorMessage(error, 'Sign-in failed.'));
     } finally {
       setStaffLoginLoading(false);
+    }
+  };
+
+  const handleTenantDomainConnect = async (event) => {
+    event.preventDefault();
+    const domain = tenantDomain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    if (!domain || /[/:?#@\s]/.test(domain)) {
+      setTenantDomainError('Enter the college portal hostname, such as portal.example.edu.');
+      return;
+    }
+
+    setTenantDomainLoading(true);
+    setTenantDomainError('');
+    setTenant(null);
+    const previousDomain = localStorage.getItem('hms_tenant_domain');
+    if (previousDomain !== domain) {
+      localStorage.removeItem('hms_session_token');
+      localStorage.removeItem('hms_user');
+      setUser(null);
+    }
+    localStorage.setItem('hms_tenant_domain', domain);
+    setTenantDomain(domain);
+
+    try {
+      const response = await fetch(`${API_URL}/api/tenant`, {
+        headers: { 'X-Campus-Domain': domain }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(extractErrorMessage(data, 'Could not load this college.'));
+      setTenant(data);
+      if (Array.isArray(data.hostels)) {
+        setHostels(data.hostels);
+        setCached('tenant_hostels', data.hostels);
+      }
+      if (Array.isArray(data.hostel_config)) {
+        setHostelConfig(data.hostel_config);
+        setCached('tenant_hostel_config', data.hostel_config);
+      }
+      setTenantDomainConnected(true);
+    } catch (error) {
+      setTenantDomainConnected(false);
+      setTenantDomainError(extractErrorMessage(error, 'Could not load this college.'));
+    } finally {
+      setTenantDomainLoading(false);
     }
   };
 
@@ -291,6 +388,10 @@ function AuthenticatedApp() {
     (item) => item.name === profileDraft.hostel_block
   );
   const modules = tenant?.modules || {};
+  const canSignIn = !isNativeApp || (
+    tenantDomainConnected &&
+    tenantDomain.trim().toLowerCase() === (localStorage.getItem('hms_tenant_domain') || '')
+  );
 
   return (
     <div className="ptm-root">
@@ -301,7 +402,7 @@ function AuthenticatedApp() {
           <div className="ptm-page-wrap">
             <div className="ptm-drill-header">
               <button className="ptm-back-btn" onClick={() => setShowInstallHelp(false)}>←</button>
-              <h1 className="ptm-page-title">Install svnitcampus App</h1>
+              <h1 className="ptm-page-title">Install Campus OS</h1>
             </div>
             <div className="ptm-card">
               <div className="ptm-section-title">Download on Your Phone</div>
@@ -333,7 +434,7 @@ function AuthenticatedApp() {
             <div className="ptm-login-top-row">
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <img
-                  src={tenant?.logo_url || 'https://upload.wikimedia.org/wikipedia/en/1/1b/NIT_Surat_Logo.svg'}
+                  src={tenant?.logo_url || '/campus-os-mark.svg'}
                   alt={tenant?.college_name || 'College'}
                   style={{ width: '32px', height: '32px', objectFit: 'contain' }}
                   onError={(e) => { e.currentTarget.style.display = 'none'; }}
@@ -347,6 +448,31 @@ function AuthenticatedApp() {
 
             <h1 className="ptm-login-heading">{tenant?.college_name || 'Campus'} Portal</h1>
             <p className="ptm-login-sub">Sign in with the username and password provided by your college.</p>
+
+            {isNativeApp && (
+              <form className="ptm-form-stack" onSubmit={handleTenantDomainConnect}>
+                <label className="ptm-label">
+                  College portal domain
+                  <input
+                    className="ptm-input"
+                    autoCapitalize="none"
+                    autoComplete="url"
+                    placeholder="portal.example.edu"
+                    value={tenantDomain}
+                    onChange={(event) => {
+                      setTenantDomain(event.target.value);
+                      setTenantDomainConnected(false);
+                      setTenantDomainError('');
+                    }}
+                    required
+                  />
+                </label>
+                <button className="ptm-btn-secondary" type="submit" disabled={tenantDomainLoading}>
+                  {tenantDomainLoading ? 'Connecting…' : 'Connect college'}
+                </button>
+                {tenantDomainError && <div className="ptm-alert-error" role="alert">{tenantDomainError}</div>}
+              </form>
+            )}
 
             {loginError && <div className="ptm-alert-error">{loginError}</div>}
 
@@ -373,7 +499,7 @@ function AuthenticatedApp() {
                   required
                 />
               </label>
-              <button className="ptm-btn-primary" type="submit" disabled={staffLoginLoading}>
+              <button className="ptm-btn-primary" type="submit" disabled={staffLoginLoading || tenantDomainLoading || !canSignIn}>
                 {staffLoginLoading ? 'Signing in…' : 'Sign in'}
               </button>
               <p className="ptm-list-sub" style={{ textAlign: 'center', margin: 0 }}>
@@ -415,13 +541,25 @@ function AuthenticatedApp() {
               <BrandLoadingScreen />
             }>
               {isFounder && <FounderPortal user={user} apiUrl={API_URL} onLogout={handleLogout} />}
-              {user.role === 'Dean' && <DeanPortal user={user} apiUrl={API_URL} modules={modules} />}
+              {user.role === 'Dean' && (
+                <DeanPortal
+                  user={user}
+                  apiUrl={API_URL}
+                  modules={modules}
+                  tenantName={tenant?.college_name}
+                  institutionEmailDomain={tenant?.allowed_email_domain}
+                />
+              )}
               {user.role === 'Student' && <StudentPortal user={user} apiUrl={API_URL} modules={modules} onUserUpdate={handleStudentProfileRefresh} />}
               {user.role === 'Warden' && <WardenPortal user={user} apiUrl={API_URL} modules={modules} />}
-              {user.role === 'Faculty' && modules.class_attendance && <AttendanceOnlyPortals user={user} apiUrl={API_URL} modules={modules} />}
-              {(user.role === 'Gate Security' || user.role === 'GateSecurity') && tenant?.modules?.gate_outpass && <GateSecurityPortal user={user} apiUrl={API_URL} />}
-              {user.role === 'ClubOrganizer' && <ClubPortal user={user} apiUrl={API_URL} />}
-              {user.role === 'Staff' && <StaffPortal user={user} apiUrl={API_URL} />}
+              {user.role === 'Faculty' && modules.class_attendance === true && <AttendanceOnlyPortals user={user} apiUrl={API_URL} modules={modules} />}
+              {user.role === 'Faculty' && modules.class_attendance !== true && <ModuleUnavailableNotice />}
+              {(user.role === 'Gate Security' || user.role === 'GateSecurity') && tenant?.modules?.gate_outpass === true && <GateSecurityPortal user={user} apiUrl={API_URL} />}
+              {(user.role === 'Gate Security' || user.role === 'GateSecurity') && tenant?.modules?.gate_outpass !== true && <ModuleUnavailableNotice />}
+              {user.role === 'ClubOrganizer' && modules.event_radar === true && <ClubPortal user={user} apiUrl={API_URL} />}
+              {user.role === 'ClubOrganizer' && modules.event_radar !== true && <ModuleUnavailableNotice />}
+              {user.role === 'Staff' && modules.grievances === true && <StaffPortal user={user} apiUrl={API_URL} />}
+              {user.role === 'Staff' && modules.grievances !== true && <ModuleUnavailableNotice />}
               {user.role === 'StudentOnboarding' && <StudentOnboardingPortal user={user} apiUrl={API_URL} />}
             </Suspense>
           </main>
@@ -508,7 +646,7 @@ function AuthenticatedApp() {
                 <form onSubmit={handleProfileSave} className="ptm-form-stack">
                   {profileDraft.residence_type === 'hosteller' ? (
                     <>
-                      <label className="ptm-label">Select SVNIT Hostel Bhawan
+                      <label className="ptm-label">Select College Hostel
                         <select
                           className="ptm-input"
                           value={profileDraft.hostel_block === 'Day Scholar' ? '' : profileDraft.hostel_block}
@@ -552,7 +690,7 @@ function AuthenticatedApp() {
                     </>
                   ) : (
                     <div style={{ background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: '12px', padding: '12px', fontSize: '12.5px', color: '#0369A1' }}>
-                      ✨ As a <strong>Day Scholar</strong>, you will have full access to the Campus Event Calendar, All 15+ SVNIT Clubs, RSVPs, and Official Notice Boards (hostel room maintenance sections will be hidden).
+                      ✨ As a <strong>Day Scholar</strong>, you can use the enabled campus events, clubs, and notice services. Hostel-only services will be hidden.
                     </div>
                   )}
 
@@ -657,7 +795,7 @@ const PAYTM_APPLE_CSS = `
     box-shadow: 0 2px 8px rgba(0, 41, 112, 0.18);
   }
 
-  .ptm-root { min-height: 100vh; min-height: 100svh; display: flex; flex-direction: column; background: #F5F7FA; }
+  .ptm-root { width: 100%; min-width: 0; min-height: 100vh; min-height: 100svh; display: flex; flex-direction: column; background: #F5F7FA; }
   .ptm-profile-trigger { padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
   .ptm-modal-backdrop { position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(15, 23, 42, 0.62); }
   .ptm-modal-card { position: relative; width: min(100%, 520px); max-height: min(90vh, 760px); overflow-y: auto; padding: 24px; border-radius: 20px; background: #FFFFFF; color: #111827; box-shadow: 0 24px 70px rgba(0, 0, 0, 0.25); }
@@ -680,20 +818,22 @@ const PAYTM_APPLE_CSS = `
   .ptm-login-sub { margin: 0 0 16px 0; font-size: 13px; color: #6B7280; }
   .ptm-alert-error { background: #FEF2F2; border: 1px solid #FECACA; color: #DC2626; padding: 12px; border-radius: 12px; font-size: 13px; font-weight: 600; margin-bottom: 16px; }
   .ptm-alert-success { background: #F0FDF4; border: 1px solid #BBF7D0; color: #166534; padding: 12px; border-radius: 12px; font-size: 13px; font-weight: 600; margin: 10px 0; }
-  .ptm-main-container { flex: 1; width: 100%; max-width: 1280px; margin: 0 auto; padding: 14px 12px calc(92px + env(safe-area-inset-bottom)); }
-  .ptm-shell-layout { display: grid; grid-template-columns: 250px 1fr; gap: 20px; align-items: start; }
-  .ptm-sidebar-desktop { background: #FFFFFF; border: 1px solid #EAEEF4; border-radius: 18px; padding: 12px; position: sticky; top: 76px; display: flex; flex-direction: column; gap: 4px; box-shadow: 0 2px 8px rgba(0, 41, 112, 0.03); }
+  .ptm-main-container { flex: 1; width: 100%; min-width: 0; max-width: 1280px; margin: 0 auto; padding: 14px 12px calc(92px + env(safe-area-inset-bottom)); }
+  .ptm-shell-layout { display: grid; grid-template-columns: minmax(0, 250px) minmax(0, 1fr); gap: 20px; align-items: start; min-width: 0; }
+  .ptm-shell-layout > * { min-width: 0; }
+  .ptm-sidebar-desktop { min-width: 0; max-height: calc(100dvh - 88px); overflow-y: auto; overscroll-behavior-y: contain; background: #FFFFFF; border: 1px solid #EAEEF4; border-radius: 18px; padding: 12px; position: sticky; top: 76px; display: flex; flex-direction: column; gap: 4px; box-shadow: 0 2px 8px rgba(0, 41, 112, 0.03); }
   .ptm-side-btn { width: 100%; background: transparent; border: none; border-radius: 12px; padding: 11px 14px; text-align: left; font-size: 13.5px; font-weight: 600; color: #4B5563; cursor: pointer; display: flex; align-items: center; justify-content: space-between; transition: 0.15s; }
   .ptm-side-btn:hover { background: #F3F4F6; color: #111827; }
   .ptm-side-btn.active { background: #002970; color: #FFFFFF; font-weight: 700; }
-  .ptm-page-wrap { max-width: 880px; margin: 0 auto; width: 100%; text-align: left; }
+  .ptm-page-wrap { max-width: 880px; min-width: 0; margin: 0 auto; width: 100%; text-align: left; }
   .ptm-drill-header { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 6px; margin-bottom: 14px; width: 100%; }
   .ptm-back-btn { width: 36px; height: 36px; border-radius: 50%; background: #FFFFFF; border: 1px solid #D1D5DB; color: #111827; font-size: 18px; font-weight: 700; display: flex; align-items: center; justify-content: center; cursor: pointer; }
   .ptm-page-title { margin: 2px 0 0 0; font-size: 22px; font-weight: 800; color: #111827; text-align: left; line-height: 1.25; }
   .ptm-page-sub { margin: 0; font-size: 13px; color: #6B7280; text-align: left; }
-  .ptm-card { background: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 18px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 4px rgba(0, 41, 112, 0.03); text-align: left; }
+  .ptm-card { min-width: 0; background: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 18px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 4px rgba(0, 41, 112, 0.03); text-align: left; overflow-wrap: anywhere; }
   .ptm-section-title { font-size: 16px; font-weight: 800; color: #111827; margin: 0 0 12px 0; text-align: left; }
   .ptm-icon-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; text-align: center; }
+  .ptm-icon-grid > *, .ptm-mini-grid > *, .ptm-grid-2 > * { min-width: 0; }
   .ptm-icon-tile { background: transparent; border: none; padding: 6px 2px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 6px; border-radius: 12px; }
   .ptm-icon-circle { width: 48px; height: 48px; border-radius: 50%; background: #002970; color: #FFFFFF; font-size: 20px; display: flex; align-items: center; justify-content: center; position: relative; box-shadow: 0 3px 8px rgba(0, 41, 112, 0.14); }
   .ptm-icon-circle.light { background: #E8F4FD; color: #002970; box-shadow: none; border: 1px solid #BAE6FD; }
@@ -715,12 +855,12 @@ const PAYTM_APPLE_CSS = `
   .ptm-grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
   .ptm-security-camera { display: block; width: min(100%, 520px); max-height: 60vh; margin: 12px auto; border-radius: 16px; background: #111827; object-fit: cover; }
   .ptm-label { display: block; font-size: 12px; font-weight: 700; color: #374151; margin-bottom: 5px; }
-  .ptm-input { width: 100%; background: #FFFFFF; border: 1.5px solid #D1D5DB; border-radius: 12px; padding: 11px 13px; font-size: 14px; color: #111827; outline: none; }
+  .ptm-input { width: 100%; min-width: 0; max-width: 100%; background: #FFFFFF; border: 1.5px solid #D1D5DB; border-radius: 12px; padding: 11px 13px; font-size: 14px; color: #111827; outline: none; }
   .ptm-input:focus { border-color: #002970; }
   .ptm-search-pill { display: flex; align-items: center; gap: 10px; background: #FFFFFF; border: 1.5px solid #D1D5DB; border-radius: 999px; padding: 10px 16px; margin-bottom: 14px; }
   .ptm-search-pill input { border: none; outline: none; width: 100%; font-size: 14px; color: #111827; background: transparent; }
   .ptm-btn-primary { width: 100%; background: #002970; color: #FFFFFF; border: none; border-radius: 12px; padding: 12px 16px; font-size: 14px; font-weight: 700; cursor: pointer; }
-  .ptm-btn-secondary { background: #E8F4FD; color: #002970; border: 1px solid #BAE6FD; border-radius: 10px; padding: 8px 12px; font-size: 12.5px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .ptm-btn-secondary { max-width: 100%; background: #E8F4FD; color: #002970; border: 1px solid #BAE6FD; border-radius: 10px; padding: 8px 12px; font-size: 12.5px; font-weight: 700; cursor: pointer; white-space: nowrap; }
   .ptm-btn-danger { width: 100%; background: #FEE2E2; color: #DC2626; border: 1px solid #FECACA; border-radius: 12px; padding: 12px 16px; font-size: 14px; font-weight: 700; cursor: pointer; }
   .ptm-cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; }
   .ptm-cal-weekday { text-align: center; font-size: 11px; font-weight: 700; color: #6B7280; padding: 4px 0; }
@@ -750,8 +890,9 @@ const PAYTM_APPLE_CSS = `
   .ptm-bnav-btn.active { color: #002970; font-weight: 800; }
   .ptm-bnav-btn:focus-visible, .ptm-back-btn:focus-visible, .ptm-side-btn:focus-visible, .ptm-icon-tile:focus-visible { outline: 3px solid #38BDF8; outline-offset: 2px; }
   .ptm-btn-primary:disabled, .ptm-btn-secondary:disabled, .ptm-btn-danger:disabled { cursor: wait; opacity: 0.7; }
+  .ptm-card table { display: block; width: 100%; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; white-space: nowrap; }
 
-  @media (max-width: 900px) {
+  @media (max-width: 1024px) {
     .ptm-shell-layout { grid-template-columns: 1fr; }
     .ptm-sidebar-desktop { display: none; }
     .ptm-bottom-nav { display: flex; justify-content: flex-start; overflow-x: auto; overscroll-behavior-x: contain; }
@@ -769,6 +910,7 @@ const PAYTM_APPLE_CSS = `
     .ptm-cal-cell { height: 54px; }
     .ptm-main-container { padding-left: 10px; padding-right: 10px; }
     .ptm-card { padding: 14px; border-radius: 16px; }
+    .ptm-btn-secondary { white-space: normal; overflow-wrap: anywhere; }
     .ptm-icon-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
     .ptm-icon-tile { min-height: 78px; justify-content: center; }
     .ptm-page-title { font-size: 20px; overflow-wrap: anywhere; }
@@ -782,6 +924,5 @@ const PAYTM_APPLE_CSS = `
     .ptm-row-between > .ptm-btn-secondary { white-space: normal; }
     .ptm-bottom-nav { justify-content: flex-start; }
     .ptm-bnav-btn { flex-basis: max(72px, 20%); font-size: 10px; }
-    .ptm-card table { display: block; max-width: 100%; overflow-x: auto; white-space: nowrap; }
   }
 `;

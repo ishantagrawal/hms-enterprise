@@ -3,11 +3,11 @@ uvicorn==0.54.0
 pydantic==2.14.1
 psycopg2-binary==2.9.13
 python-multipart==0.0.32
-google-auth[requests]==2.62.0
 webauthn==2.8.0
 tzdata==2026.6
 cryptography==50.0.2
 deepface==0.0.103
+onnxruntime==1.32.0
 opencv-contrib-python-headless==5.0.0.93
 werkzeug==3.1.6
 reportlab>=4.2,<5

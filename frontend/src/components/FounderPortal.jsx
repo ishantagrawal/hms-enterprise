@@ -7,7 +7,7 @@ import { extractErrorMessage } from '../utils/errorParser.ts';
 
 const TENANT_MODULES = [
   ['grievances', 'Grievances'],
-  ['mess_pulse', 'Mess Pulse'],
+  ['mess_pulse', 'Mess Pulse (coming soon)', false],
   ['event_radar', 'Events'],
   ['gate_outpass', 'Gate outpass'],
   ['attendance', 'Night attendance'],
@@ -198,12 +198,12 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
                       Portal: {tenant.primary_domain} • Email domain: @{tenant.allowed_email_domain}
                     </div>
                     <div className="ptm-grid-2" style={{ marginTop: '10px' }}>
-                      {TENANT_MODULES.map(([moduleName, label]) => (
+                      {TENANT_MODULES.map(([moduleName, label, available = true]) => (
                         <label key={moduleName} className="ptm-list-sub" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <input
                             type="checkbox"
-                            checked={Boolean(tenant.modules?.[moduleName])}
-                            disabled={Boolean(moduleSaving[tenant.college_id])}
+                            checked={available && Boolean(tenant.modules?.[moduleName])}
+                            disabled={!available || Boolean(moduleSaving[tenant.college_id])}
                             onChange={(e) => handleModuleChange(tenant, moduleName, e.target.checked)}
                           />
                           {label}

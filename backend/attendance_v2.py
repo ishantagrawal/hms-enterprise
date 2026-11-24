@@ -63,12 +63,20 @@ TABLES = {
         CREATE TABLE IF NOT EXISTS attendance_v2_sessions (
             college_id TEXT NOT NULL, tenant_id TEXT NOT NULL, id TEXT NOT NULL,
             scope TEXT NOT NULL CHECK (scope IN ('CLASS', 'HOSTEL')),
-            course_id TEXT, wing_name TEXT, hostel_block TEXT NOT NULL DEFAULT '',
+            course_id TEXT, department TEXT NOT NULL DEFAULT '', year TEXT NOT NULL DEFAULT '',
+            division TEXT NOT NULL DEFAULT '', wing_name TEXT, hostel_block TEXT NOT NULL DEFAULT '',
             beacon_id TEXT NOT NULL,
             created_by TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('OPEN', 'CLOSED')),
             expires_at TEXT, current_nonce TEXT NOT NULL, nonce_expires_at TEXT NOT NULL,
             created_at TEXT NOT NULL, closed_at TEXT,
             PRIMARY KEY (college_id, id)
+        )
+    """,
+    "attendance_v2_session_roster": """
+        CREATE TABLE IF NOT EXISTS attendance_v2_session_roster (
+            college_id TEXT NOT NULL, tenant_id TEXT NOT NULL, session_id TEXT NOT NULL,
+            student_id TEXT NOT NULL, roll_no TEXT NOT NULL, student_name TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL, PRIMARY KEY (college_id, session_id, student_id)
         )
     """,
     "attendance_v2_records": """
@@ -124,6 +132,7 @@ INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_attendance_v2_enrollments_student ON attendance_v2_course_enrollments (college_id, student_id, course_id)",
     "CREATE INDEX IF NOT EXISTS idx_attendance_v2_wing_student ON attendance_v2_hostel_wing_members (college_id, student_id, hostel_block, wing_name)",
     "CREATE INDEX IF NOT EXISTS idx_attendance_v2_sessions_expiry ON attendance_v2_sessions (college_id, status, expires_at)",
+    "CREATE INDEX IF NOT EXISTS idx_attendance_v2_session_roster_student ON attendance_v2_session_roster (college_id, student_id, session_id)",
     "CREATE INDEX IF NOT EXISTS idx_attendance_v2_records_student ON attendance_v2_records (college_id, student_id, session_id)",
     "CREATE INDEX IF NOT EXISTS idx_attendance_v2_staff_email ON attendance_v2_pre_approved_staff (college_id, email)",
     "CREATE INDEX IF NOT EXISTS idx_attendance_v2_report_email_expiry ON attendance_v2_report_email_codes (college_id, expires_at)",
@@ -155,6 +164,9 @@ class SessionInput(BaseModel):
     scope: str
     beacon_id: str
     course_id: Optional[str] = None
+    department: Optional[str] = Field(default=None, max_length=120)
+    year: Optional[str] = Field(default=None, max_length=40)
+    division: Optional[str] = Field(default=None, max_length=80)
     wing_name: Optional[str] = None
     hostel_block: Optional[str] = None
     duration_minutes: Optional[int] = None
@@ -281,6 +293,9 @@ def _sync_v2_rls(conn, backend):
             _ensure_column(conn, backend, table_name, "hostel_block", "TEXT NOT NULL DEFAULT ''")
         elif table_name == "attendance_v2_sessions":
             _ensure_column(conn, backend, table_name, "hostel_block", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, backend, table_name, "department", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, backend, table_name, "year", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, backend, table_name, "division", "TEXT NOT NULL DEFAULT ''")
         if backend["USE_POSTGRES"]:
             db_exec(conn, f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY")
             db_exec(conn, f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY")
@@ -346,14 +361,26 @@ def _session_roster(conn, backend, session):
     db_exec = backend["db_exec"]
     college_id = backend["ACTIVE_COLLEGE_ID"].get()
     if session["scope"] == "CLASS":
-        rows = db_exec(
-            conn,
-            """
-            SELECT student_id, roll_no, student_name FROM attendance_v2_course_enrollments
-            WHERE college_id = ? AND course_id = ? ORDER BY roll_no
-            """,
-            (college_id, session["course_id"]),
-        ).fetchall()
+        if session.get("department") and session.get("year") and session.get("division"):
+            rows = db_exec(
+                conn,
+                """
+                SELECT student_id, roll_no, student_name
+                FROM attendance_v2_session_roster
+                WHERE college_id = ? AND session_id = ?
+                ORDER BY UPPER(roll_no), roll_no
+                """,
+                (college_id, session["id"]),
+            ).fetchall()
+        else:
+            rows = db_exec(
+                conn,
+                """
+                SELECT student_id, roll_no, student_name FROM attendance_v2_course_enrollments
+                WHERE college_id = ? AND course_id = ? ORDER BY UPPER(roll_no), roll_no
+                """,
+                (college_id, session["course_id"]),
+            ).fetchall()
     else:
         rows = db_exec(
             conn,
@@ -393,6 +420,21 @@ def _session_roster(conn, backend, session):
 def _close_session(conn, backend, session):
     db_exec = backend["db_exec"]
     now = _now_text()
+    for student in _session_roster(conn, backend, session):
+        if student["student_id"] and student["status"] == "ABSENT" and not student["method"]:
+            db_exec(
+                conn,
+                """
+                INSERT INTO attendance_v2_records
+                    (college_id, id, session_id, student_id, roll_no, status, method, measured_rssi, override_reason, marked_at)
+                VALUES (?, ?, ?, ?, ?, 'ABSENT', 'NO_CHECK_IN', NULL, NULL, ?)
+                ON CONFLICT (session_id, student_id) DO NOTHING
+                """,
+                (
+                    backend["ACTIVE_COLLEGE_ID"].get(), _new_id("REC"), session["id"],
+                    student["student_id"], student["roll_no"], now,
+                ),
+            )
     db_exec(
         conn,
         "UPDATE attendance_v2_sessions SET status = 'CLOSED', closed_at = ? WHERE college_id = ? AND id = ? AND status = 'OPEN'",
@@ -421,7 +463,8 @@ def _build_report_pdf(report):
     pdf.setFont("Helvetica", 9)
     pdf.drawString(left, page_height - 56, str(report["institute"])[:110])
     pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(left, page_height - 76, f'{report["course_code"]}  |  {report["course_title"]}'[:100])
+    class_label = f'  |  {report["class_group"]}' if report.get("class_group") else ""
+    pdf.drawString(left, page_height - 76, f'{report["course_code"]}  |  {report["course_title"]}{class_label}'[:100])
     pdf.setFont("Helvetica", 8)
     pdf.drawString(
         left, page_height - 94,
@@ -515,24 +558,31 @@ def _report_data(conn, backend, session):
     tenant = backend["get_tenant_by_id"](backend["ACTIVE_COLLEGE_ID"].get())
     tenant_zone = ZoneInfo((tenant or {}).get("timezone") or "UTC")
     if session["scope"] == "CLASS":
-        course = db_exec(
-            conn,
-            "SELECT * FROM attendance_v2_courses WHERE college_id = ? AND id = ?",
-            (backend["ACTIVE_COLLEGE_ID"].get(), session["course_id"]),
-        ).fetchone()
-        if not course:
-            return None
+        course = None
+        if session.get("course_id"):
+            course = db_exec(
+                conn,
+                "SELECT * FROM attendance_v2_courses WHERE college_id = ? AND id = ?",
+                (backend["ACTIVE_COLLEGE_ID"].get(), session["course_id"]),
+            ).fetchone()
+            if not course:
+                return None
+        owner_id = session["created_by"]
         owner = db_exec(
             conn,
             """
             SELECT full_name, attendance_report_email, attendance_report_email_verified
             FROM users WHERE college_id = ? AND UPPER(user_id) = ?
             """,
-            (backend["ACTIVE_COLLEGE_ID"].get(), str(course["faculty_id"]).upper()),
+            (backend["ACTIVE_COLLEGE_ID"].get(), str(owner_id).upper()),
         ).fetchone()
-        course_code = course["code"]
-        course_title = course["title"]
-        owner_id = course["faculty_id"]
+        group_label = " · ".join(
+            item for item in (
+                session.get("department"), session.get("year"), session.get("division")
+            ) if item
+        )
+        course_code = course["code"] if course else group_label or "Class"
+        course_title = course["title"] if course else "Class attendance"
         owner_label = "Faculty"
         owner_name = owner["full_name"] if owner else owner_id
     else:
@@ -559,6 +609,7 @@ def _report_data(conn, backend, session):
         "institute": (tenant or {}).get("college_name", "Institute"),
         "course_code": course_code,
         "course_title": course_title,
+        "class_group": group_label if session["scope"] == "CLASS" else "",
         "faculty_name": owner_name,
         "report_email": str(owner["attendance_report_email"] or "") if owner else "",
         "report_email_verified": bool(owner["attendance_report_email_verified"]) if owner else False,
@@ -770,12 +821,41 @@ def list_courses(request: Request):
     backend = request.app.state.attendance_v2_backend
     conn = backend["get_conn"]()
     try:
-        query = "SELECT * FROM attendance_v2_courses WHERE college_id = ?"
-        args = [backend["ACTIVE_COLLEGE_ID"].get()]
-        if str(actor["role"]).upper() != "DEAN":
-            query += " AND UPPER(faculty_id) = ?"
-            args.append(str(actor["user_id"]).upper())
-        return [dict(row) for row in backend["db_exec"](conn, query + " ORDER BY code", tuple(args)).fetchall()]
+        return [
+            dict(row)
+            for row in backend["db_exec"](
+                conn,
+                "SELECT * FROM attendance_v2_courses WHERE college_id = ? ORDER BY code",
+                (backend["ACTIVE_COLLEGE_ID"].get(),),
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+@router.get("/directory/class-groups")
+def attendance_class_groups(request: Request):
+    _require_feature(request, "class_attendance")
+    _require_roles(request, "Dean", "Faculty")
+    backend = request.app.state.attendance_v2_backend
+    conn = backend["get_conn"]()
+    try:
+        rows = backend["db_exec"](
+            conn,
+            """
+            SELECT MIN(TRIM(department)) AS department, MIN(TRIM(year)) AS year,
+                   MIN(TRIM(division)) AS division, COUNT(*) AS student_count
+            FROM users
+            WHERE college_id = ? AND role = 'Student'
+              AND TRIM(COALESCE(department, '')) <> ''
+              AND TRIM(COALESCE(year, '')) <> ''
+              AND TRIM(COALESCE(division, '')) <> ''
+            GROUP BY LOWER(TRIM(department)), LOWER(TRIM(year)), LOWER(TRIM(division))
+            ORDER BY LOWER(MIN(TRIM(department))), LOWER(MIN(TRIM(year))), LOWER(MIN(TRIM(division)))
+            """,
+            (backend["ACTIVE_COLLEGE_ID"].get(),),
+        ).fetchall()
+        return [dict(row) for row in rows]
     finally:
         conn.close()
 
@@ -817,7 +897,7 @@ def attendance_student_directory(
         rows = backend["db_exec"](
             conn,
             """
-            SELECT user_id, full_name, department, year, hostel_block, room, wing
+            SELECT user_id, full_name, department, year, division, hostel_block, room, wing
             FROM users WHERE """ + " AND ".join(predicates) + " ORDER BY user_id LIMIT 1000",
             tuple(values),
         ).fetchall()
@@ -828,6 +908,7 @@ def attendance_student_directory(
                 "student_name": row["full_name"],
                 "department": row["department"],
                 "year": row["year"],
+                "division": row["division"],
                 "hostel_block": row["hostel_block"],
                 "room_no": row["room"],
                 "wing": row["wing"],
@@ -1044,8 +1125,19 @@ def start_session(body: SessionInput, request: Request):
     _require_feature(request, "class_attendance" if scope == "CLASS" else "hostel_attendance")
     if body.duration_minutes not in {None, 2, 3, 5}:
         raise HTTPException(status_code=400, detail="Session duration must be 2, 3, 5 minutes, or manual stop.")
-    if scope == "CLASS" and (not body.course_id or str(actor["role"]).upper() not in {"FACULTY", "DEAN"}):
-        raise HTTPException(status_code=403, detail="Faculty must choose a course to start a class session.")
+    if scope == "CLASS" and str(actor["role"]).upper() not in {"FACULTY", "DEAN"}:
+        raise HTTPException(status_code=403, detail="Only Faculty or the Dean can start a class session.")
+    class_group = {
+        "department": str(body.department or "").strip(),
+        "year": str(body.year or "").strip(),
+        "division": str(body.division or "").strip(),
+    }
+    has_class_details = any(class_group.values())
+    use_profile_roster = scope == "CLASS" and all(class_group.values())
+    if scope == "CLASS" and has_class_details and not use_profile_roster:
+        raise HTTPException(status_code=400, detail="Choose a department, academic year, and division.")
+    if scope == "CLASS" and not use_profile_roster and not body.course_id:
+        raise HTTPException(status_code=400, detail="Choose a class division or an existing course.")
     if scope == "HOSTEL" and (not body.wing_name or str(actor["role"]).upper() not in {"WARDEN", "DEAN"}):
         raise HTTPException(status_code=403, detail="A Warden must choose a wing to start a hostel session.")
     hostel_block = ""
@@ -1064,9 +1156,32 @@ def start_session(body: SessionInput, request: Request):
         if not beacon["is_active"]:
             raise HTTPException(status_code=400, detail="The selected beacon is inactive.")
         if scope == "CLASS":
-            course = _course_for_user(conn, backend, body.course_id, actor, allow_admin=str(actor["role"]).upper() == "DEAN")
-            if course.get("default_beacon_id") and course["default_beacon_id"] != body.beacon_id:
-                raise HTTPException(status_code=400, detail="The selected beacon does not match this course's default room beacon.")
+            if use_profile_roster:
+                if body.course_id:
+                    _course_for_user(conn, backend, body.course_id, actor, allow_admin=True)
+                group_roster = backend["db_exec"](
+                    conn,
+                    """
+                    SELECT user_id, full_name FROM users
+                    WHERE college_id = ? AND role = 'Student'
+                      AND LOWER(TRIM(COALESCE(department, ''))) = LOWER(?)
+                      AND LOWER(TRIM(COALESCE(year, ''))) = LOWER(?)
+                      AND LOWER(TRIM(COALESCE(division, ''))) = LOWER(?)
+                    ORDER BY UPPER(user_id), user_id
+                    """,
+                    (
+                        backend["ACTIVE_COLLEGE_ID"].get(), class_group["department"],
+                        class_group["year"], class_group["division"],
+                    ),
+                ).fetchall()
+                if not group_roster:
+                    raise HTTPException(status_code=400, detail="No students are assigned to the selected class division.")
+            else:
+                _course_for_user(
+                    conn, backend, body.course_id, actor,
+                    allow_admin=str(actor["role"]).upper() == "DEAN",
+                )
+                group_roster = None
         else:
             if str(actor["role"]).upper() == "WARDEN" and not backend["db_exec"](
                 conn,
@@ -1085,17 +1200,37 @@ def start_session(body: SessionInput, request: Request):
             conn,
             """
             INSERT INTO attendance_v2_sessions
-                (college_id, tenant_id, id, scope, course_id, wing_name, hostel_block, beacon_id, created_by, status,
+                (college_id, tenant_id, id, scope, course_id, department, year, division,
+                 wing_name, hostel_block, beacon_id, created_by, status,
                  expires_at, current_nonce, nonce_expires_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)
             """,
             (
                 backend["ACTIVE_COLLEGE_ID"].get(), _tenant_id(request), session_id, scope,
-                body.course_id, body.wing_name, hostel_block, body.beacon_id, actor["user_id"], expires_at,
+                body.course_id if scope == "CLASS" else None,
+                class_group["department"] if scope == "CLASS" else "",
+                class_group["year"] if scope == "CLASS" else "",
+                class_group["division"] if scope == "CLASS" else "",
+                body.wing_name, hostel_block, body.beacon_id, actor["user_id"], expires_at,
                 secrets.token_urlsafe(24), (created_at + timedelta(seconds=30)).isoformat(timespec="seconds"),
                 created_at.isoformat(timespec="seconds"),
             ),
         )
+        if use_profile_roster:
+            for student in group_roster:
+                backend["db_exec"](
+                    conn,
+                    """
+                    INSERT INTO attendance_v2_session_roster
+                        (college_id, tenant_id, session_id, student_id, roll_no, student_name, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        backend["ACTIVE_COLLEGE_ID"].get(), _tenant_id(request), session_id,
+                        student["user_id"], student["user_id"], student["full_name"] or "",
+                        created_at.isoformat(timespec="seconds"),
+                    ),
+                )
         conn.commit()
         return {"id": session_id, "scope": scope, "status": "OPEN", "expires_at": expires_at}
     except Exception:
@@ -1114,11 +1249,7 @@ def _get_session(conn, backend, session_id):
     if not row:
         raise HTTPException(status_code=404, detail="Attendance session not found.")
     session = dict(row)
-    if session["status"] == "OPEN" and session.get("expires_at"):
-        expires = _parse_time(session["expires_at"])
-        if expires and expires <= _now():
-            _close_session(conn, backend, session)
-    if session["status"] == "OPEN":
+    if session["status"] == "OPEN" and not _session_expired(session):
         nonce_expiry = _parse_time(session["nonce_expires_at"])
         if not nonce_expiry or nonce_expiry <= _now():
             now = _now()
@@ -1130,6 +1261,11 @@ def _get_session(conn, backend, session_id):
                 (session["current_nonce"], session["nonce_expires_at"], backend["ACTIVE_COLLEGE_ID"].get(), session_id),
             )
     return session
+
+
+def _session_expired(session):
+    expires = _parse_time(session.get("expires_at"))
+    return bool(session.get("status") == "OPEN" and expires and expires <= _now())
 
 
 @router.get("/sessions")
@@ -1152,13 +1288,34 @@ def list_open_sessions(request: Request, scope: Optional[str] = None):
         result = []
         for row in rows:
             session = _get_session(conn, backend, dict(row)["id"])
-            if session["status"] != "OPEN":
+            if session["status"] != "OPEN" or _session_expired(session):
                 continue
             _require_feature(request, "class_attendance" if session["scope"] == "CLASS" else "hostel_attendance")
             roster = _session_roster(conn, backend, session)
             session["students"] = roster
             session["present_count"] = sum(item["status"] == "PRESENT" for item in roster)
             session["absent_count"] = sum(item["status"] == "ABSENT" for item in roster)
+            if session["scope"] == "CLASS":
+                course = None
+                if session.get("course_id"):
+                    course = backend["db_exec"](
+                        conn,
+                        "SELECT code, title FROM attendance_v2_courses WHERE college_id = ? AND id = ?",
+                        (backend["ACTIVE_COLLEGE_ID"].get(), session["course_id"]),
+                    ).fetchone()
+                session["class_group"] = " · ".join(
+                    item for item in (
+                        session.get("department"), session.get("year"), session.get("division")
+                    ) if item
+                )
+                session["course_code"] = course["code"] if course else session["class_group"]
+                session["course_title"] = course["title"] if course else "Class attendance"
+                faculty = backend["db_exec"](
+                    conn,
+                    "SELECT full_name FROM users WHERE college_id = ? AND UPPER(user_id) = ?",
+                    (backend["ACTIVE_COLLEGE_ID"].get(), str(session["created_by"]).upper()),
+                ).fetchone()
+                session["faculty_name"] = faculty["full_name"] if faculty else session["created_by"]
             result.append(session)
         conn.commit()
         return result
@@ -1215,35 +1372,59 @@ def student_open_sessions(request: Request):
             LEFT JOIN attendance_v2_course_enrollments e
                 ON e.college_id = s.college_id AND e.course_id = s.course_id
                 AND UPPER(e.student_id) = ?
+            LEFT JOIN attendance_v2_session_roster sr
+                ON sr.college_id = s.college_id AND sr.session_id = s.id
+                AND UPPER(sr.student_id) = ?
             LEFT JOIN attendance_v2_hostel_wing_members m
                 ON m.college_id = s.college_id AND LOWER(m.wing_name) = LOWER(s.wing_name)
                 AND LOWER(m.hostel_block) = LOWER(s.hostel_block) AND UPPER(m.student_id) = ?
             WHERE s.college_id = ? AND s.status = 'OPEN'
                 AND s.scope IN ({})
-                AND ((s.scope = 'CLASS' AND e.student_id IS NOT NULL)
+                AND ((s.scope = 'CLASS' AND (
+                        (TRIM(COALESCE(s.department, '')) <> '' AND sr.student_id IS NOT NULL)
+                        OR (TRIM(COALESCE(s.department, '')) = '' AND e.student_id IS NOT NULL)
+                    ))
                     OR (s.scope = 'HOSTEL' AND m.student_id IS NOT NULL))
             ORDER BY s.created_at DESC
             """.format(", ".join("?" for _ in enabled_scopes)),
-            (student["user_id"].upper(), student["user_id"].upper(), college_id, *enabled_scopes),
+            (
+                student["user_id"].upper(), student["user_id"].upper(),
+                student["user_id"].upper(), college_id, *enabled_scopes,
+            ),
         ).fetchall()
         sessions = []
         for row in rows:
             session = _get_session(conn, backend, dict(row)["id"])
-            if session["status"] != "OPEN":
+            if session["status"] != "OPEN" or _session_expired(session):
                 continue
             _require_feature(request, "class_attendance" if session["scope"] == "CLASS" else "hostel_attendance")
             beacon = _beacon(conn, backend, session["beacon_id"], session["scope"])
             course = None
             if session["scope"] == "CLASS":
-                course = backend["db_exec"](
+                if session.get("course_id"):
+                    course = backend["db_exec"](
+                        conn,
+                        "SELECT code, title FROM attendance_v2_courses WHERE college_id = ? AND id = ?",
+                        (college_id, session["course_id"]),
+                    ).fetchone()
+                faculty = backend["db_exec"](
                     conn,
-                    "SELECT code, title FROM attendance_v2_courses WHERE college_id = ? AND id = ?",
-                    (college_id, session["course_id"]),
+                    "SELECT full_name FROM users WHERE college_id = ? AND UPPER(user_id) = ?",
+                    (college_id, str(session["created_by"]).upper()),
                 ).fetchone()
+            else:
+                faculty = None
+            class_group = " · ".join(
+                item for item in (
+                    session.get("department"), session.get("year"), session.get("division")
+                ) if item
+            )
             sessions.append({
                 **session,
-                "course_code": course["code"] if course else None,
-                "course_title": course["title"] if course else None,
+                "course_code": course["code"] if course else class_group,
+                "course_title": course["title"] if course else "Class attendance",
+                "faculty_name": faculty["full_name"] if faculty else session.get("created_by"),
+                "class_group": class_group,
                 "beacon": {
                     "uuid": beacon["uuid"], "major": beacon["major"],
                     "minor": beacon["minor"], "min_rssi": beacon["min_rssi"],
@@ -1269,7 +1450,7 @@ def override_attendance(session_id: str, body: OverrideInput, request: Request):
     try:
         session = _get_session(conn, backend, session_id)
         _require_feature(request, "class_attendance" if session["scope"] == "CLASS" else "hostel_attendance")
-        if session["status"] != "OPEN":
+        if session["status"] != "OPEN" or _session_expired(session):
             raise HTTPException(status_code=409, detail="Attendance session is closed.")
         if session["created_by"] != actor["user_id"] and str(actor["role"]).upper() != "DEAN":
             raise HTTPException(status_code=403, detail="Only the session owner can override attendance.")
@@ -1536,7 +1717,7 @@ def list_daily_report_sessions(request: Request, scope: str, date: str):
         """
         values = [college_id, normalized_scope, start, end]
         if normalized_scope == "CLASS" and role == "FACULTY":
-            query += " AND EXISTS (SELECT 1 FROM attendance_v2_courses c WHERE c.college_id = s.college_id AND c.id = s.course_id AND UPPER(c.faculty_id) = ?)"
+            query += " AND UPPER(s.created_by) = ?"
             values.append(str(actor["user_id"]).upper())
         if normalized_scope == "HOSTEL" and role == "WARDEN":
             query += " AND LOWER(COALESCE(s.hostel_block, '')) = LOWER(?)"
@@ -1552,7 +1733,11 @@ def list_daily_report_sessions(request: Request, scope: str, date: str):
             result.append({
                 "session_id": session["id"],
                 "scope": session["scope"],
-                "title": f'{report["course_code"]} · {report["course_title"]}',
+                "title": " · ".join(
+                    item for item in (
+                        report["course_code"], report["course_title"], report.get("class_group")
+                    ) if item
+                ),
                 "date": report["date"],
                 "status": session["status"],
                 "total": len(report["students"]),
@@ -1574,13 +1759,8 @@ def download_session_report(session_id: str, request: Request):
         _require_feature(request, "class_attendance" if session["scope"] == "CLASS" else "hostel_attendance")
         role = str(actor["role"]).upper()
         if role == "FACULTY":
-            course = backend["db_exec"](
-                conn,
-                "SELECT faculty_id FROM attendance_v2_courses WHERE college_id = ? AND id = ?",
-                (backend["ACTIVE_COLLEGE_ID"].get(), session["course_id"]),
-            ).fetchone()
-            if session["scope"] != "CLASS" or not course or str(course["faculty_id"]).upper() != str(actor["user_id"]).upper():
-                raise HTTPException(status_code=403, detail="You can only download reports for your courses.")
+            if session["scope"] != "CLASS" or str(session["created_by"]).upper() != str(actor["user_id"]).upper():
+                raise HTTPException(status_code=403, detail="You can only download reports for your own class sessions.")
         if role == "WARDEN":
             if session["scope"] != "HOSTEL" or str(session.get("hostel_block") or "").casefold() != str(actor.get("hostel_block") or "").casefold():
                 raise HTTPException(status_code=403, detail="You can only download reports for your assigned hostel.")
@@ -1652,16 +1832,27 @@ def download_student_daily_report(request: Request, date: str):
             class_rows = backend["db_exec"](
                 conn,
                 """
-                SELECT s.created_at, c.code, c.title, r.status, r.method, r.marked_at
+                SELECT s.created_at, c.code, c.title, s.department, s.year, s.division,
+                       f.full_name AS faculty_name, r.status, r.method, r.marked_at
                 FROM attendance_v2_sessions s
-                JOIN attendance_v2_courses c ON c.college_id = s.college_id AND c.id = s.course_id
-                JOIN attendance_v2_course_enrollments e ON e.college_id = c.college_id
-                    AND e.course_id = c.id AND UPPER(e.student_id) = ?
+                LEFT JOIN attendance_v2_courses c
+                    ON c.college_id = s.college_id AND c.id = s.course_id
+                LEFT JOIN attendance_v2_session_roster sr
+                    ON sr.college_id = s.college_id AND sr.session_id = s.id
+                    AND UPPER(sr.student_id) = ?
+                LEFT JOIN attendance_v2_course_enrollments e
+                    ON e.college_id = s.college_id AND e.course_id = s.course_id
+                    AND UPPER(e.student_id) = ?
                 LEFT JOIN attendance_v2_records r ON r.college_id = s.college_id
                     AND r.session_id = s.id AND UPPER(r.student_id) = ?
-                WHERE s.college_id = ? AND s.scope = 'CLASS' AND s.created_at >= ? AND s.created_at < ?
+                LEFT JOIN users f
+                    ON f.college_id = s.college_id AND UPPER(f.user_id) = UPPER(s.created_by)
+                WHERE s.college_id = ? AND s.scope = 'CLASS'
+                  AND s.created_at >= ? AND s.created_at < ?
+                  AND (sr.student_id IS NOT NULL
+                       OR (TRIM(COALESCE(s.department, '')) = '' AND e.student_id IS NOT NULL))
                 """,
-                (student_id, student_id, college_id, start, end),
+                (student_id, student_id, student_id, college_id, start, end),
             ).fetchall()
         hostel_rows = []
         if modules.get("hostel_attendance"):
@@ -1683,9 +1874,16 @@ def download_student_daily_report(request: Request, date: str):
         records = []
         for row in class_rows:
             created = _parse_time(row["created_at"])
+            class_group = " · ".join(
+                item for item in (row["department"], row["year"], row["division"]) if item
+            )
+            class_label = (
+                f'{row["code"]} · {row["title"]}' if row["code"]
+                else f'{class_group} class attendance'
+            )
             records.append({
                 "time": created.astimezone(ZoneInfo(request.state.tenant.get("timezone") or "UTC")).strftime("%Y-%m-%d %H:%M") if created else "",
-                "label": f'{row["code"]} · {row["title"]}',
+                "label": f'{class_label} · {row["faculty_name"] or "Faculty"}',
                 "status": row["status"] or "ABSENT",
                 "method": row["method"],
                 "marked_at": row["marked_at"],
@@ -1724,48 +1922,80 @@ def student_class_summary(request: Request):
     backend = request.app.state.attendance_v2_backend
     conn = backend["get_conn"]()
     try:
-        courses = backend["db_exec"](
+        rows = backend["db_exec"](
             conn,
             """
-            SELECT DISTINCT c.* FROM attendance_v2_courses c
-            JOIN attendance_v2_course_enrollments e ON e.course_id = c.id AND e.college_id = c.college_id
-            WHERE c.college_id = ? AND UPPER(e.student_id) = ? ORDER BY c.code
+            SELECT s.id AS session_id, s.created_at AS date, s.status AS session_status,
+                   s.created_by, s.department, s.year, s.division,
+                   c.id AS course_id, c.code AS course_code, c.title AS course_title,
+                   f.full_name AS faculty_name, r.status, r.method, r.marked_at
+            FROM attendance_v2_sessions s
+            LEFT JOIN attendance_v2_courses c
+                ON c.college_id = s.college_id AND c.id = s.course_id
+            LEFT JOIN attendance_v2_session_roster sr
+                ON sr.college_id = s.college_id AND sr.session_id = s.id
+                AND UPPER(sr.student_id) = ?
+            LEFT JOIN attendance_v2_course_enrollments e
+                ON e.college_id = s.college_id AND e.course_id = s.course_id
+                AND UPPER(e.student_id) = ?
+            LEFT JOIN attendance_v2_records r
+                ON r.college_id = s.college_id AND r.session_id = s.id
+                AND UPPER(r.student_id) = ?
+            LEFT JOIN users f
+                ON f.college_id = s.college_id AND UPPER(f.user_id) = UPPER(s.created_by)
+            WHERE s.college_id = ? AND s.scope = 'CLASS'
+              AND (sr.student_id IS NOT NULL
+                   OR (TRIM(COALESCE(s.department, '')) = '' AND e.student_id IS NOT NULL))
+            ORDER BY s.created_at
             """,
-            (backend["ACTIVE_COLLEGE_ID"].get(), student["user_id"].upper()),
+            (
+                student["user_id"].upper(), student["user_id"].upper(),
+                student["user_id"].upper(), backend["ACTIVE_COLLEGE_ID"].get(),
+            ),
         ).fetchall()
+        grouped = {}
+        for row in rows:
+            class_group = " · ".join(
+                item for item in (row["department"], row["year"], row["division"]) if item
+            )
+            group_key = (
+                row["course_id"] or class_group,
+                str(row["created_by"]).upper(),
+                class_group,
+            )
+            group = grouped.setdefault(
+                group_key,
+                {
+                    "summary_id": ":".join(str(part) for part in group_key),
+                    "course_id": row["course_id"],
+                    "course_code": row["course_code"] or class_group or "Class",
+                    "course_title": row["course_title"] or "Class attendance",
+                    "department": row["department"] or "",
+                    "year": row["year"] or "",
+                    "division": row["division"] or "",
+                    "faculty_name": row["faculty_name"] or row["created_by"],
+                    "sessions": [],
+                },
+            )
+            parsed_date = _parse_time(row["date"])
+            group["sessions"].append({
+                "session_id": row["session_id"],
+                "date": row["date"],
+                "start_time": parsed_date.strftime("%H:%M") if parsed_date else "",
+                "status": row["status"] or "ABSENT",
+                "method": row["method"],
+                "marked_at": row["marked_at"],
+                "faculty_name": group["faculty_name"],
+            })
         result = []
-        for course in courses:
-            sessions = backend["db_exec"](
-                conn,
-                """
-                SELECT s.id AS session_id, s.created_at AS date, s.status AS session_status,
-                       r.status, r.method, r.marked_at
-                FROM attendance_v2_sessions s
-                LEFT JOIN attendance_v2_records r ON r.session_id = s.id
-                    AND UPPER(r.student_id) = ? AND r.college_id = s.college_id
-                WHERE s.college_id = ? AND s.scope = 'CLASS' AND s.course_id = ?
-                ORDER BY s.created_at
-                """,
-                (student["user_id"].upper(), backend["ACTIVE_COLLEGE_ID"].get(), course["id"]),
-            ).fetchall()
-            faculty = backend["db_exec"](
-                conn, "SELECT full_name FROM users WHERE college_id = ? AND UPPER(user_id) = ?",
-                (backend["ACTIVE_COLLEGE_ID"].get(), str(course["faculty_id"]).upper()),
-            ).fetchone()
-            total = len(sessions)
-            present = sum(row["status"] == "PRESENT" for row in sessions)
+        for group in grouped.values():
+            total = len(group["sessions"])
+            present = sum(item["status"] == "PRESENT" for item in group["sessions"])
             result.append({
-                "course_id": course["id"], "course_code": course["code"],
-                "course_title": course["title"],
-                "faculty_name": faculty["full_name"] if faculty else course["faculty_id"],
-                "total_sessions": total, "present_count": present,
+                **group,
+                "total_sessions": total,
+                "present_count": present,
                 "percentage": round((present / total) * 100, 1) if total else 0,
-                "sessions": [{
-                    "session_id": row["session_id"], "date": row["date"],
-                    "start_time": _parse_time(row["date"]).strftime("%H:%M") if _parse_time(row["date"]) else "",
-                    "status": row["status"] or "ABSENT", "method": row["method"],
-                    "marked_at": row["marked_at"],
-                } for row in sessions],
             })
         return result
     finally:
@@ -2098,7 +2328,7 @@ def check_in(body: CheckInInput, request: Request):
     body.live_image_base64 = ""
     try:
         session = _get_session(conn, backend, body.session_id)
-        if session["status"] != "OPEN":
+        if session["status"] != "OPEN" or _session_expired(session):
             raise HTTPException(status_code=409, detail="This attendance session is closed.")
         _require_feature(request, "class_attendance" if session["scope"] == "CLASS" else "hostel_attendance")
         if body.session_nonce != session["current_nonce"] or (_parse_time(session["nonce_expires_at"]) or _now()) <= _now():

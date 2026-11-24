@@ -349,21 +349,21 @@ export function StudentAttendance({ apiUrl, modules }) {
           )}
           {activeSessions.map((session) => (
             <div className="av-live-banner" key={session.id}>
-              <span><i /> Live class session · {session.course_code}</span>
+              <span><i /> Live class · {session.course_code}{session.class_group ? ` · ${session.class_group}` : ''}{session.faculty_name ? ` · ${session.faculty_name}` : ''}</span>
               <button onClick={() => setCheckIn(session)}>Mark Present</button>
             </div>
           ))}
           <div className="av-card-grid">
             {summary.map((course) => (
-              <button className="av-course-card" key={course.course_id} onClick={() => setSelected(course)}>
+              <button className="av-course-card" key={course.summary_id || course.course_id} onClick={() => setSelected(course)}>
                 <span className="av-kicker">{course.course_code}</span>
                 <strong>{course.course_title}</strong>
-                <span className="av-subtitle">{course.faculty_name}</span>
+                <span className="av-subtitle">{course.faculty_name} · {course.department} · Year {course.year} · Division {course.division}</span>
                 <span className={`av-percent ${course.percentage < 75 ? 'is-low' : ''}`}>{course.percentage}%</span>
                 <span className="av-card-foot">{course.present_count} / {course.total_sessions} present <span>View history →</span></span>
               </button>
             ))}
-            {!summary.length && <p className="av-empty">Your enrolled subjects will appear here.</p>}
+            {!summary.length && <p className="av-empty">Your profile-based class attendance will appear here once your division has an attendance session.</p>}
           </div>
         </>
       ) : (
@@ -495,34 +495,43 @@ function BeaconManager({ apiUrl, scope }) {
   );
 }
 
+function classGroupKey(group) {
+  return JSON.stringify([group.department, group.year, group.division]);
+}
+
 function FacultyAttendance({ apiUrl }) {
-  const [tab, setTab] = useState('courses');
+  const [tab, setTab] = useState('session');
   const [courses, setCourses] = useState([]);
   const [beacons, setBeacons] = useState([]);
+  const [classGroups, setClassGroups] = useState([]);
   const [sessions, setSessions] = useState([]);
-  const [students, setStudents] = useState([]);
-  const [courseForm, setCourseForm] = useState({ code: '', title: '', default_beacon_id: '' });
+  const [courseForm, setCourseForm] = useState({ code: '', title: '' });
   const [activeCourse, setActiveCourse] = useState('');
-  const [student, setStudent] = useState({ roll_no: '', student_name: '' });
-  const [range, setRange] = useState({ start_roll_no: '', end_roll_no: '' });
-  const [duration, setDuration] = useState('3');
+  const [activeGroup, setActiveGroup] = useState('');
+  const [activeBeacon, setActiveBeacon] = useState('');
+  const [duration, setDuration] = useState('manual');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const reload = useCallback(async () => {
-    const [courseList, beaconList, liveSessions] = await Promise.all([
+    const [courseList, beaconList, liveSessions, groupList] = await Promise.all([
       requestJson(apiUrl, '/courses'),
       requestJson(apiUrl, '/beacons?scope=CLASS'),
-      requestJson(apiUrl, '/sessions?scope=CLASS')
+      requestJson(apiUrl, '/sessions?scope=CLASS'),
+      requestJson(apiUrl, '/directory/class-groups')
     ]);
-    setCourses(courseList); setBeacons(beaconList); setSessions(liveSessions);
-    setActiveCourse((current) => current || courseList[0]?.id || '');
+    setCourses(courseList);
+    setBeacons(beaconList);
+    setSessions(liveSessions);
+    setClassGroups(groupList);
+    setActiveCourse((current) => current && courseList.some((course) => course.id === current) ? current : '');
+    setActiveGroup((current) => current && groupList.some((group) => classGroupKey(group) === current)
+      ? current
+      : groupList[0] ? classGroupKey(groupList[0]) : '');
+    setActiveBeacon((current) => current && beaconList.some((beacon) => beacon.id === current && beacon.is_active)
+      ? current
+      : beaconList.find((beacon) => beacon.is_active)?.id || '');
   }, [apiUrl]);
   useEffect(() => { void reload().catch((loadError) => setError(extractErrorMessage(loadError))); }, [reload]);
-  useEffect(() => {
-    requestJson(apiUrl, '/directory/students?scope=CLASS')
-      .then(setStudents)
-      .catch((loadError) => setError(extractErrorMessage(loadError)));
-  }, [apiUrl]);
   useEffect(() => {
     const timer = window.setInterval(() => { void reload().catch((loadError) => setError(extractErrorMessage(loadError))); }, 5000);
     return () => window.clearInterval(timer);
@@ -540,28 +549,21 @@ function FacultyAttendance({ apiUrl }) {
     event.preventDefault();
     return run(() => requestJson(apiUrl, '/courses', { method: 'POST', body: JSON.stringify(courseForm) }), 'Course created.');
   };
-  const addStudent = (event) => {
-    event.preventDefault();
-    return run(() => requestJson(apiUrl, `/courses/${encodeURIComponent(activeCourse)}/students`, { method: 'POST', body: JSON.stringify(student) }), 'Student added to course roster.');
-  };
-  const addRange = (event) => {
-    event.preventDefault();
-    return run(() => requestJson(apiUrl, `/courses/${encodeURIComponent(activeCourse)}/students/range`, { method: 'POST', body: JSON.stringify(range) }), 'Roll-number range imported.');
-  };
-  const uploadCsv = (event) => {
-    event.preventDefault();
-    const file = event.currentTarget.elements.roster.files[0];
-    if (!file) return;
-    const body = new FormData(); body.append('file', file);
-    return run(() => requestJson(apiUrl, `/courses/${encodeURIComponent(activeCourse)}/students/csv`, { method: 'POST', body }), 'Roster CSV imported.');
-  };
   const start = (event) => {
     event.preventDefault();
-    const course = courses.find((item) => item.id === activeCourse);
+    const selectedGroup = classGroups.find((group) => classGroupKey(group) === activeGroup);
     return run(() => requestJson(apiUrl, '/sessions', {
       method: 'POST',
-      body: JSON.stringify({ scope: 'CLASS', course_id: activeCourse, beacon_id: course?.default_beacon_id || beacons[0]?.id, duration_minutes: duration === 'manual' ? null : Number(duration) })
-    }), 'Class session started.');
+      body: JSON.stringify({
+        scope: 'CLASS',
+        course_id: activeCourse || null,
+        department: selectedGroup?.department,
+        year: selectedGroup?.year,
+        division: selectedGroup?.division,
+        beacon_id: activeBeacon,
+        duration_minutes: duration === 'manual' ? null : Number(duration)
+      })
+    }), 'Class session started for the selected division.');
   };
   const close = (session) => run(
     () => requestJson(apiUrl, `/sessions/${encodeURIComponent(session.id)}/close`, { method: 'POST' }),
@@ -576,33 +578,38 @@ function FacultyAttendance({ apiUrl }) {
       method: 'POST', body: JSON.stringify({ student_id: item.student_id, status: item.status === 'PRESENT' ? 'ABSENT' : 'PRESENT', reason })
     }), 'Attendance override recorded.');
   };
+  const activeBeacons = beacons.filter((beacon) => beacon.is_active);
   return (
-    <AttendanceShell title="Faculty attendance" tabs={[{ id: 'courses', label: 'My Classes & Roster' }, { id: 'session', label: 'Live Session' }, { id: 'beacons', label: 'Room Beacons' }]} tab={tab} setTab={setTab} error={error} message={message} setMessage={setMessage}>
+    <AttendanceShell title="Faculty attendance" tabs={[
+      { id: 'session', label: 'Class Sessions' },
+      { id: 'courses', label: 'Subject Labels' },
+      { id: 'reports', label: 'Reports' },
+      { id: 'beacons', label: 'Room Beacons' }
+    ]} tab={tab} setTab={setTab} error={error} message={message} setMessage={setMessage}>
       {tab === 'courses' && <section className="av-panel">
-        <h2>Create a course</h2>
+        <h2>Subject labels</h2>
+        <p className="av-subtitle">Optional labels are shared within your college. Class rosters come from student profile divisions.</p>
         <form className="av-form-grid" onSubmit={createCourse}>
           <label>Course code<input required value={courseForm.code} onChange={(event) => setCourseForm({ ...courseForm, code: event.target.value })} /></label>
           <label>Course title<input required value={courseForm.title} onChange={(event) => setCourseForm({ ...courseForm, title: event.target.value })} /></label>
-          <label>Default room beacon<select value={courseForm.default_beacon_id} onChange={(event) => setCourseForm({ ...courseForm, default_beacon_id: event.target.value })}><option value="">Select later</option>{beacons.map((beacon) => <option key={beacon.id} value={beacon.id}>{beacon.name}</option>)}</select></label>
           <button className="av-primary">Create course</button>
         </form>
-        <div className="av-form-grid av-roster-forms">
-          <label>Course roster<select value={activeCourse} onChange={(event) => setActiveCourse(event.target.value)}>{courses.map((course) => <option key={course.id} value={course.id}>{course.code} · {course.title}</option>)}</select></label>
-          <form onSubmit={addStudent}><label>Add existing student<select required value={student.roll_no} onChange={(event) => setStudent({ ...student, roll_no: event.target.value })}><option value="">Select roll number</option>{students.map((item) => <option key={item.user_id} value={item.roll_no}>{item.roll_no} · {item.student_name} · {item.department}</option>)}</select></label><button className="av-secondary" disabled={!students.length}>Add student</button></form>
-          <form onSubmit={addRange}><label>From roll number<input required value={range.start_roll_no} onChange={(event) => setRange({ ...range, start_roll_no: event.target.value })} /></label><label>To roll number<input required value={range.end_roll_no} onChange={(event) => setRange({ ...range, end_roll_no: event.target.value })} /></label><button className="av-secondary">Add roll range</button></form>
-          <form onSubmit={uploadCsv}><label>CSV roster (roll_no, name)<input type="file" name="roster" accept=".csv,text/csv" required /></label><button className="av-secondary">Import CSV</button></form>
-        </div>
+        <div className="av-list">{courses.map((course) => <div className="av-list-row" key={course.id}><strong>{course.code}</strong><span>{course.title}</span></div>)}</div>
       </section>}
       {tab === 'session' && <section className="av-panel">
-        <h2>Live class session</h2>
+        <h2>Start classroom attendance</h2>
         <form className="av-form-grid" onSubmit={start}>
-          <label>Course<select required value={activeCourse} onChange={(event) => setActiveCourse(event.target.value)}>{courses.map((course) => <option key={course.id} value={course.id}>{course.code} · {course.title}</option>)}</select></label>
+          <label>Department / year / division<select required value={activeGroup} onChange={(event) => setActiveGroup(event.target.value)}><option value="">Select class division</option>{classGroups.map((group) => <option key={classGroupKey(group)} value={classGroupKey(group)}>{group.department} · Year {group.year} · Division {group.division} · {group.student_count} students</option>)}</select></label>
+          <label>Subject label (optional)<select value={activeCourse} onChange={(event) => setActiveCourse(event.target.value)}><option value="">No subject label</option>{courses.map((course) => <option key={course.id} value={course.id}>{course.code} · {course.title}</option>)}</select></label>
+          <label>Classroom beacon<select required value={activeBeacon} onChange={(event) => setActiveBeacon(event.target.value)}><option value="">Select registered room beacon</option>{activeBeacons.map((beacon) => <option key={beacon.id} value={beacon.id}>{beacon.name}</option>)}</select></label>
           <label>Duration<select value={duration} onChange={(event) => setDuration(event.target.value)}><option value="2">2 minutes</option><option value="3">3 minutes</option><option value="5">5 minutes</option><option value="manual">Manual stop</option></select></label>
-          <button className="av-primary" disabled={!courses.length || (!beacons.length && !courses.find((item) => item.id === activeCourse)?.default_beacon_id)}>Start session</button>
+          <button className="av-primary" disabled={!activeGroup || !activeBeacon}>Start session</button>
         </form>
+        {!classGroups.length && <p className="av-empty">Assign department, academic year, and division to student profiles in Student Onboarding before starting attendance.</p>}
+        {!activeBeacons.length && <p className="av-empty">Register and activate a classroom beacon before starting attendance.</p>}
         <SessionCards sessions={sessions} onClose={close} onOverride={override} />
       </section>}
-      {tab === 'session' && <DailyReportsPanel apiUrl={apiUrl} scope="CLASS" />}
+      {tab === 'reports' && <DailyReportsPanel apiUrl={apiUrl} scope="CLASS" />}
       {tab === 'beacons' && <BeaconManager apiUrl={apiUrl} scope="CLASS" />}
     </AttendanceShell>
   );
@@ -611,7 +618,7 @@ function FacultyAttendance({ apiUrl }) {
 function SessionCards({ sessions, onClose, onOverride }) {
   return <div className="av-list">{sessions.map((session) => (
     <article className="av-panel av-session-card" key={session.id}>
-      <div className="av-row-between"><div><p className="av-kicker">{session.scope} · {session.course_id || session.wing_name}</p><h3>Session live <span className="av-tabular">{session.present_count}/{session.students?.length || 0}</span></h3></div><button className="av-secondary" onClick={() => onClose(session)}>Close session</button></div>
+      <div className="av-row-between"><div><p className="av-kicker">{session.scope} · {session.course_code || session.wing_name}{session.class_group ? ` · ${session.class_group}` : ''}{session.faculty_name ? ` · ${session.faculty_name}` : ''}</p><h3>Session live <span className="av-tabular">{session.present_count}/{session.students?.length || 0}</span></h3></div><button className="av-secondary" onClick={() => onClose(session)}>Close session</button></div>
       <div className="av-roster">{(session.students || []).map((item) => <div className="av-roster-row" key={`${session.id}-${item.roll_no}`}><span className="av-tabular">{item.roll_no}</span><span>{item.student_name || item.student_id || 'Not linked'}</span><span className={`av-status ${item.status === 'PRESENT' ? 'is-good' : 'is-absent'}`}>{item.status}</span>{item.student_id && <button className="av-text-button" onClick={() => onOverride(session, item)}>Override</button>}</div>)}</div>
     </article>
   ))}{!sessions.length && <p className="av-empty">No active session.</p>}</div>;

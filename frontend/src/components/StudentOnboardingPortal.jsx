@@ -7,6 +7,7 @@ const emptyForm = {
   full_name: '',
   department: '',
   year: '',
+  division: '',
   hostel_block: '',
   wing: '',
   room: '',
@@ -183,6 +184,7 @@ export default function StudentOnboardingPortal({ apiUrl, user }) {
           <label>Student name<input required value={form.full_name} onChange={(event) => setForm({ ...form, full_name: event.target.value })} /></label>
           <label>Department<input required value={form.department} onChange={(event) => setForm({ ...form, department: event.target.value })} /></label>
           <label>Academic year<input value={form.year} onChange={(event) => setForm({ ...form, year: event.target.value })} /></label>
+          <label>Division / section<input maxLength="80" value={form.division} onChange={(event) => setForm({ ...form, division: event.target.value })} /></label>
           <label>Hostel block<input value={form.hostel_block} onChange={(event) => setForm({ ...form, hostel_block: event.target.value })} /></label>
           <label>Wing<input value={form.wing} onChange={(event) => setForm({ ...form, wing: event.target.value })} /></label>
           <label>Room<input value={form.room} onChange={(event) => setForm({ ...form, room: event.target.value })} /></label>
@@ -192,7 +194,7 @@ export default function StudentOnboardingPortal({ apiUrl, user }) {
           <button className="av-primary" disabled={loading}>{loading ? 'Saving…' : 'Create / update student'}</button>
         </form>
         <form className="av-inline-form" onSubmit={importCsv}>
-          <label>Bulk CSV: roll_no,name,department,year,hostel_block,wing,room,email,phone,guardian_phone
+          <label>Bulk CSV: roll_no,name,department,year,division,hostel_block,wing,room,email,phone,guardian_phone
             <input type="file" name="studentsCsv" accept=".csv,text/csv" required />
           </label>
           <button className="av-secondary" disabled={loading}>Import CSV</button>
@@ -202,14 +204,14 @@ export default function StudentOnboardingPortal({ apiUrl, user }) {
         <div className="av-row-between">
           <h2>Student directory</h2>
           <form className="av-inline-form" onSubmit={search}>
-            <input aria-label="Search students" placeholder="Roll number, name, department" value={query} onChange={(event) => setQuery(event.target.value)} />
+            <input aria-label="Search students" placeholder="Roll number, name, department, division" value={query} onChange={(event) => setQuery(event.target.value)} />
             <button className="av-secondary">Search</button>
           </form>
         </div>
         <div className="av-list">
           {students.map((student) => (
             <div className="av-list-row" key={student.user_id}>
-              <div><strong className="av-tabular">{student.user_id}</strong><small>{student.full_name} · {student.department || 'No department'} · {student.hostel_block || 'Residence not set'}</small></div>
+              <div><strong className="av-tabular">{student.user_id}</strong><small>{student.full_name} · {student.department || 'No department'} · {student.year || 'Year not set'} · {student.division || 'Division not set'} · {student.hostel_block || 'Residence not set'}</small></div>
               <span className={`av-status ${student.has_password ? 'is-good' : 'is-absent'}`}>
                 {!student.has_password ? 'Password needed' : student.password_reset_required ? 'Must change password' : 'Active'}
               </span>

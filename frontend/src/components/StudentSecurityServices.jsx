@@ -328,7 +328,7 @@ export function StudentLeavePassPanel({ apiUrl, user, hostels = [], initialPasse
           </div>
         )}
       </div>
-      {pendingReturn && <LocalFaceCheckModal onResult={completeReturnFaceCheck} />}
+      {pendingReturn && <LocalFaceCheckModal purpose="return" onResult={completeReturnFaceCheck} />}
     </div>
   );
 }
@@ -624,6 +624,7 @@ export function StudentBiometricAttendancePanel({
       return;
     }
     let referenceImage = result.imageBase64 || '';
+    let embeddingImage = result.embeddingImageBase64 || '';
     let requestBody = '';
     try {
       const deviceBindingToken = await getOrCreateDeviceBindingToken(user);
@@ -631,6 +632,7 @@ export function StudentBiometricAttendancePanel({
       requestBody = JSON.stringify({
         device_binding_token: deviceBindingToken,
         reference_image_base64: referenceImage,
+        embedding_image_base64: embeddingImage,
         consent_confirmed: true,
         device_public_key: devicePublicKey
       });
@@ -652,8 +654,10 @@ export function StudentBiometricAttendancePanel({
       setError(errorText(enrollError, 'Face verification enrollment failed.'));
     } finally {
       referenceImage = '';
+      embeddingImage = '';
       requestBody = '';
       result.imageBase64 = '';
+      result.embeddingImageBase64 = '';
       setPendingEnrollment(false);
       setBusy(false);
     }
@@ -777,7 +781,7 @@ export function StudentBiometricAttendancePanel({
       {message && <div className="ptm-sync-note" role="status">{message}</div>}
       <div className="ptm-card">
         <div className="ptm-section-title">Warden-authorized face enrollment</div>
-        <p className="ptm-list-sub">Face verification is required to mark attendance. With your confirmation, one enrollment image is encrypted and stored for 1:1 checks. Live attendance frames are sent to the server for comparison and are not retained.</p>
+        <p className="ptm-list-sub">Face verification is used for attendance and approved-leave return checks. With your confirmation, the enrollment image and derived 128D reference are stored encrypted. Live attendance frames stay on your device while only the embedding is sent for comparison; return frames are sent securely and not retained.</p>
         {biometricStatus === 'Locked' && faceEnrolled ? (
           <div className="ptm-sync-note" role="status">✅ Face reference enrolled · attendance requires a server-side 1:1 match and this device token.</div>
         ) : (
@@ -794,8 +798,8 @@ export function StudentBiometricAttendancePanel({
                 onChange={(event) => setFaceConsent(event.target.checked)}
               />
               <span>
-                I understand face verification is required for attendance and consent to storing one encrypted enrollment reference image.
-                <br /><small>Purpose limitation: attendance only. उद्देश्य सीमा: केवल उपस्थिति। Fernet AES-128 encryption is used at rest. The reference is deleted at hostel checkout or when consent is withdrawn.</small>
+                I understand face verification is used for attendance and approved-leave returns and consent to storing an encrypted enrollment reference image and vector.
+                <br /><small>Purpose limitation: attendance and approved-leave return checks. उद्देश्य सीमा: उपस्थिति और स्वीकृत अवकाश से वापसी की जांच। Fernet AES-128 encryption is used at rest. References are deleted at hostel checkout or when consent is withdrawn.</small>
               </span>
             </label>
             <button type="button" className="ptm-btn-primary" onClick={registerAndLock} disabled={busy || !enrollmentOpen || !faceConsent}>

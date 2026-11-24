@@ -5,3 +5,8 @@ https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/
 
 Runtime package: @mediapipe/tasks-vision (Apache-2.0)
 https://github.com/google-ai-edge/mediapipe
+
+MobileFaceNet ONNX model, v0.67.0, float precision.
+Source: https://huggingface.co/qualcomm/MobileFaceNet
+Model weights are from foamliu/MobileFaceNet and are licensed under Apache-2.0.
+License text: MOBILEFACENET-LICENSE.txt

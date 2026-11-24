@@ -97,7 +97,7 @@ export async function verifyLocalBlinkGesture(video, onStatus, signal) {
         if (result.faceLandmarks?.[0]?.length) {
           if (leftBlink < 0.25 && rightBlink < 0.25) eyesWereOpen = true;
           if (eyesWereOpen && leftBlink > 0.45 && rightBlink > 0.45) {
-            finish(null, true);
+            finish(null, result.faceLandmarks[0]);
             return;
           }
         } else {

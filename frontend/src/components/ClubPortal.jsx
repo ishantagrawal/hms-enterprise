@@ -46,7 +46,7 @@ export default function ClubPortal({ user, apiUrl }) {
   });
   const [evStart, setEvStart] = useState('17:00');
   const [evEnd, setEvEnd] = useState('20:00');
-  const [evVenue, setEvVenue] = useState('Old CRC, SVNIT');
+  const [evVenue, setEvVenue] = useState('Campus venue');
   const [evDesc, setEvDesc] = useState('');
   const [evBudget, setEvBudget] = useState('₹10,000');
   const [evSource, setEvSource] = useState('SAC Grant / Self');

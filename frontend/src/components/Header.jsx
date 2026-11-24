@@ -1,18 +1,17 @@
 import React from 'react';
 
 export default function Header({ user, tenant, onLogout }) {
-  const isFounder = user.role === 'PlatformOwner';
-
   const getHeaderTitle = () => {
-    if (isFounder) return 'HMS Cloud HQ';
-    if (user.role === 'Dean') return 'SVNIT Dean SW Portal';
-    if (user.role === 'Warden') return user.hostel_block;
-    if (user.role === 'DepartmentStaff') return user.department;
-    return 'SVNIT Hostel ERP';
+    const collegeName = tenant?.college_name || 'Campus OS';
+    if (user.role === 'Founder') return `${collegeName} Founder Console`;
+    if (user.role === 'Dean') return `${collegeName} Dean Portal`;
+    if (user.role === 'Warden') return `${collegeName} · ${user.hostel_block}`;
+    if (user.role === 'Staff') return `${collegeName} · ${user.department}`;
+    return collegeName;
   };
 
   const getSubTitle = () => {
-    if (isFounder) return 'FOUNDER • Multi-Tenant Root';
+    if (user.role === 'Founder') return 'FOUNDER • Multi-Tenant Root';
     if (user.role === 'Student') return `${user.hostel_block} • Rm ${user.room}`;
     return `${user.user_id} • ${user.authority_title || user.role}`;
   };

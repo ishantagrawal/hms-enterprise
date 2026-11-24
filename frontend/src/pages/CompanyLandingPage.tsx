@@ -23,12 +23,12 @@ const platformModules = [
   ['Hostel operations', 'Resident and wing workflows, hostel roll calls, room-level rosters, and Warden tools.'],
   ['Class attendance', 'Faculty course rosters, timed lecture sessions, live attendance, overrides, and PDF reports.'],
   ['Leave passes & gate', 'Digital leave requests, Warden review, and signed QR-based gate out and return checks.'],
-  ['Mess Pulse & family alerts', 'Mess feedback and consent-based guardian alert workflows; delivery integrations require institute configuration.'],
+  ['Family alerts', 'Consent-based guardian alert workflows for outpasses; delivery integrations require institute configuration.'],
   ['Campus safety', 'Campus security tools for authorized staff, alongside the student, Warden, and Dean portals.']
 ];
 
 const pillars = [
-  ['01', 'Zero Raw Selfie Retention', 'RAM-only 1:1 comparison; live frames are discarded after verification.'],
+  ['01', 'Encrypted Reference, Ephemeral Frames', 'Enrollment references are encrypted; live attendance and return frames are discarded after verification.'],
   ['02', 'Hardware Secure Enclave Binding', 'A single approved device is bound with a W3C WebAuthn passkey.'],
   ['03', 'Room-Level BLE', 'Proximity verification without invasive GPS tracking.'],
   ['04', 'Row-Level Database Isolation', 'PostgreSQL row-level security isolates institute records.']
@@ -211,7 +211,7 @@ export default function CompanyLandingPage() {
                 <h2 id="cv-modal-title">{modal === 'privacy' ? 'Privacy Policy' : 'Terms of Use'}</h2>
                 <p>
                   {modal === 'privacy'
-                    ? 'Attendance verification uses a device-bound passkey, room-level BLE proximity, and a 1:1 face comparison. Live camera frames are processed for verification and are not retained. Account and attendance records are handled under institute policy and applicable law.'
+                    ? 'Attendance and approved-leave return verification use a device-bound passkey, room-level BLE proximity, and a 1:1 face comparison. The enrollment reference is encrypted; live camera frames are processed for verification and not retained. Account and attendance records are handled under institute policy and applicable law.'
                     : 'Campus OS is provided for authorized institute operations. Users must use assigned accounts and approved devices, follow their institute policies, and must not attempt to falsify attendance or gate records.'}
                 </p>
                 <p>Data residency: AWS Mumbai (ap-south-1). Privacy requests: <a href="mailto:compliance@svnitcampus.in">compliance@svnitcampus.in</a>.</p>

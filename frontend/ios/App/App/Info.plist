@@ -24,6 +24,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Bluetooth is used to verify attendance at the beacon assigned to your hostel wing.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Camera access is used for live face checks when your college enables biometric attendance.</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

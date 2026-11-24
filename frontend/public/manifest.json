@@ -2,7 +2,7 @@
   "name": "Campus OS",
   "short_name": "Campus OS",
   "description": "A connected platform for campus administration and daily operations",
-  "start_url": "/",
+  "start_url": "/app",
   "scope": "/",
   "display": "standalone",
   "background_color": "#FAFAFB",
@@ -13,18 +13,6 @@
       "src": "/campus-os-mark.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any"
-    },
-    {
-      "src": "https://upload.wikimedia.org/wikipedia/en/thumb/1/1b/NIT_Surat_Logo.svg/192px-NIT_Surat_Logo.svg.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "https://upload.wikimedia.org/wikipedia/en/thumb/1/1b/NIT_Surat_Logo.svg/512px-NIT_Surat_Logo.svg.png",
-      "sizes": "512x512",
-      "type": "image/png",
       "purpose": "any maskable"
     }
   ]

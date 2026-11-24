@@ -5,15 +5,16 @@ import DeanStaffManager from './DeanStaffManager';
 import { DeanAttendanceOverview } from './AttendanceOnlyPortals';
 import { GridCardSkeleton } from './SkeletonLoader';
 import usePortalBackNavigation from '../hooks/usePortalBackNavigation';
+import { escapeHtml } from '../utils/html';
 
-export default function DeanPortal({ apiUrl, user, modules = {} }) {
+export default function DeanPortal({ apiUrl, user, modules = {}, tenantName = 'Campus OS', institutionEmailDomain = '' }) {
   const [page, setPage] = useState('home');
   usePortalBackNavigation(page, setPage);
   const [dataLoading, setDataLoading] = useState(false);
-  const showCampusLife = Boolean(modules.event_radar);
-  const showGrievances = Boolean(modules.grievances);
-  const showAttendance = Boolean(modules.class_attendance || modules.hostel_attendance);
-  const showGateSecurity = Boolean(modules.gate_outpass);
+  const showCampusLife = modules.event_radar === true;
+  const showGrievances = modules.grievances === true;
+  const showAttendance = modules.class_attendance === true || modules.hostel_attendance === true;
+  const showGateSecurity = modules.gate_outpass === true;
   const reportScopes = useMemo(() => [
     ...(showCampusLife && showGrievances ? [{ id: 'All', label: 'Complete audit (clubs & grievances)' }] : []),
     ...(showCampusLife ? [{ id: 'Events', label: 'Clubs & events only' }] : []),
@@ -249,7 +250,7 @@ export default function DeanPortal({ apiUrl, user, modules = {} }) {
       email: clubForm.email.trim(),
       faculty_advisor: clubForm.faculty_advisor.trim() || 'Assigned by Dean SW Office',
       head_coordinator: clubForm.head_coordinator.trim() || 'Student Convener',
-      mission: clubForm.mission.trim() || 'Official Student Activity Center (SAC) Chapter at SVNIT Surat',
+      mission: clubForm.mission.trim() || `Official Student Activity Center chapter at ${tenantName}`,
       members: [],
       gallery: []
     };
@@ -430,13 +431,13 @@ export default function DeanPortal({ apiUrl, user, modules = {} }) {
       .map(
         (ev) => `
         <tr>
-          <td><strong>${ev.event_id || '-'}</strong><br/><small>${ev.date || '-'}</small></td>
-          <td><strong>${ev.club_id}</strong></td>
-          <td><strong>${ev.title}</strong><br/><small>${ev.description ? ev.description.slice(0, 90) + '...' : ''}</small></td>
-          <td>${ev.venue || '-'}<br/><small>${ev.start_time || ''} - ${ev.end_time || ''}</small></td>
-          <td>${ev.budget || 'Institute / Self'}</td>
+          <td><strong>${escapeHtml(ev.event_id || '-')}</strong><br/><small>${escapeHtml(ev.date || '-')}</small></td>
+          <td><strong>${escapeHtml(ev.club_id)}</strong></td>
+          <td><strong>${escapeHtml(ev.title)}</strong><br/><small>${escapeHtml(ev.description ? ev.description.slice(0, 90) + '...' : '')}</small></td>
+          <td>${escapeHtml(ev.venue || '-')}<br/><small>${escapeHtml(ev.start_time || '')} - ${escapeHtml(ev.end_time || '')}</small></td>
+          <td>${escapeHtml(ev.budget || 'Institute / Self')}</td>
           <td>${ev.rsvps?.length || 0} RSVPs</td>
-          <td><strong>${ev.status}</strong></td>
+          <td><strong>${escapeHtml(ev.status)}</strong></td>
         </tr>`
       )
       .join('');
@@ -446,12 +447,12 @@ export default function DeanPortal({ apiUrl, user, modules = {} }) {
       .map(
         (c) => `
         <tr>
-          <td><strong>${c.ticket_id}</strong><br/><small>${c.created_at || ''}</small></td>
-          <td>${c.hostel_block || '-'}<br/><small>${c.wing || ''} ${c.room || ''}</small></td>
-          <td>${c.student_name || c.student_id || '-'}</td>
-          <td>${c.routed_to || c.category || '-'}</td>
-          <td><strong>${c.summary}</strong><br/><small>${c.staff_remark || 'Assigned'}</small></td>
-          <td><strong>${c.status}</strong></td>
+          <td><strong>${escapeHtml(c.ticket_id)}</strong><br/><small>${escapeHtml(c.created_at || '')}</small></td>
+          <td>${escapeHtml(c.hostel_block || '-')}<br/><small>${escapeHtml(c.wing || '')} ${escapeHtml(c.room || '')}</small></td>
+          <td>${escapeHtml(c.student_name || c.student_id || '-')}</td>
+          <td>${escapeHtml(c.routed_to || c.category || '-')}</td>
+          <td><strong>${escapeHtml(c.summary)}</strong><br/><small>${escapeHtml(c.staff_remark || 'Assigned')}</small></td>
+          <td><strong>${escapeHtml(c.status)}</strong></td>
         </tr>`
       )
       .join('');
@@ -459,7 +460,7 @@ export default function DeanPortal({ apiUrl, user, modules = {} }) {
     win.document.write(`
       <html>
         <head>
-          <title>SVNIT Dean Student Welfare — Official Audit Report</title>
+          <title>${escapeHtml(tenantName)} Dean Audit Report</title>
           <style>
             @page { size: A4 landscape; margin: 12mm; }
             body { font-family: Arial, sans-serif; color: #111827; }
@@ -475,11 +476,11 @@ export default function DeanPortal({ apiUrl, user, modules = {} }) {
         <body>
           <div class="hdr">
             <div>
-              <h1>SVNIT SURAT — OFFICE OF THE DEAN STUDENT WELFARE</h1>
-              <p>Official SAC Club Events, Hostel Grievance & Resident Audit Report • Generated via svnitcampus.in</p>
+              <h1>${escapeHtml(tenantName)} — OFFICE OF THE DEAN</h1>
+              <p>Official Club Events, Hostel Grievance & Resident Audit Report • Generated via Campus OS</p>
             </div>
             <div style="text-align:right;">
-              <p><strong>Scope:</strong> ${selectedReportScope} | <strong>Club Filter:</strong> ${reportClub} | <strong>Year:</strong> ${reportYear}</p>
+              <p><strong>Scope:</strong> ${escapeHtml(selectedReportScope)} | <strong>Club Filter:</strong> ${escapeHtml(reportClub)} | <strong>Year:</strong> ${escapeHtml(reportYear)}</p>
               <p><strong>Active Clubs:</strong> ${clubs.length} | <strong>Hostel Residents:</strong> ${studentsCount} | <strong>Total Tickets:</strong> ${complaints.length}</p>
             </div>
           </div>
@@ -608,7 +609,7 @@ export default function DeanPortal({ apiUrl, user, modules = {} }) {
                 <div className="ptm-mini-grid">
                   {showCampusLife && <div className="ptm-mini-card" onClick={() => setPage('clubs_list')}>
                     <div className="ptm-row-between">
-                      <span style={{ fontWeight: 700, color: '#6B7280', fontSize: '12px' }}>Official SVNIT Clubs</span>
+                      <span style={{ fontWeight: 700, color: '#6B7280', fontSize: '12px' }}>Official College Clubs</span>
                       <span>🎭</span>
                     </div>
                     <div style={{ fontSize: '26px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>{clubs.length}</div>
@@ -1228,7 +1229,7 @@ export default function DeanPortal({ apiUrl, user, modules = {} }) {
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">Register New Official SVNIT Club</h1>
+                  <h1 className="ptm-page-title">Register New Official Club</h1>
                   <p className="ptm-page-sub">Creates an official club login & directory listing immediately.</p>
                 </div>
                 <div className="ptm-card">
@@ -1280,7 +1281,7 @@ export default function DeanPortal({ apiUrl, user, modules = {} }) {
                       <input
                         type="email"
                         className="ptm-input"
-                        placeholder="club@svnit.ac.in"
+                        placeholder={`club@${institutionEmailDomain || 'college.edu'}`}
                         value={clubForm.email}
                         onChange={(e) => setClubForm({ ...clubForm, email: e.target.value })}
                       />
@@ -1309,7 +1310,7 @@ export default function DeanPortal({ apiUrl, user, modules = {} }) {
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
                   <h1 className="ptm-page-title">Central Institute Maintenance Wings</h1>
-                  <p className="ptm-page-sub">Central wings (Electrical, Plumbing, LAN, Estate) serve all 9 SVNIT Bhawans.</p>
+                  <p className="ptm-page-sub">Central wings serve all configured hostels ({hostels.length}).</p>
                 </div>
 
                 <div className="ptm-card">
@@ -1341,7 +1342,7 @@ export default function DeanPortal({ apiUrl, user, modules = {} }) {
                       <input
                         type="email"
                         className="ptm-input"
-                        placeholder="estate.electrical@svnit.ac.in"
+                        placeholder={`maintenance@${institutionEmailDomain || 'college.edu'}`}
                         value={deptForm.email}
                         onChange={(e) => setDeptForm({ ...deptForm, email: e.target.value })}
                       />
@@ -1358,7 +1359,7 @@ export default function DeanPortal({ apiUrl, user, modules = {} }) {
                         <div className="ptm-avatar-pastel">{d.icon || '⚡'}</div>
                         <div className="ptm-list-main">
                           <div className="ptm-list-title">{d.title}</div>
-                          <div className="ptm-list-sub">ID: {d.id} • Scope: All 9 SVNIT Hostels</div>
+                          <div className="ptm-list-sub">ID: {d.id} • Scope: All configured hostels ({hostels.length})</div>
                         </div>
                       </div>
                     ))}
@@ -1665,7 +1666,7 @@ export default function DeanPortal({ apiUrl, user, modules = {} }) {
                     <div className="ptm-list-row">
                       <div className="ptm-list-main">
                         <div className="ptm-list-title">Verified Students Onboarded</div>
-                        <div className="ptm-list-sub">{studentsCount} Active Student Profiles (@svnit.ac.in)</div>
+                        <div className="ptm-list-sub">{studentsCount} Active Student Profiles{institutionEmailDomain ? ` (@${institutionEmailDomain})` : ''}</div>
                       </div>
                     </div>
                     {showGrievances && <div className="ptm-list-row">

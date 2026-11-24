@@ -2,22 +2,14 @@
 
 ## Sign-in and multi-college setup
 
-Students sign in with Google Identity Services. Each college is configured
-with one exact portal domain and one approved Google email domain. The backend
-accepts verified email addresses at that domain or its subdomains (for example
-`student@branch.example.edu`). New student accounts are created from the
-verified email local part; students complete their college profile in the
-portal. If that ID already exists with another approved college-domain email,
-a verified branch-domain sign-in links the new address to the existing student
-account instead of creating a duplicate.
-
-Dean, Founder, Warden, club, and staff accounts sign in with their account ID
-and an individual password. Passwords are stored as PBKDF2-HMAC-SHA256 hashes.
-Students cannot use staff password login. Password access follows the college
-hierarchy: the Founder manages only the Dean; the Dean manages Wardens, clubs,
-gate security, and central staff; each Warden manages only staff accounts
-created for that Warden's hostel. Passwords must be at least 12 characters.
-Never share one password across accounts.
+All users sign in with a college-issued username (account ID or student roll
+number) and password. Student Onboarding Staff creates student accounts and
+provides their initial credentials. Passwords are stored as PBKDF2-HMAC-SHA256
+hashes. Password access follows the college hierarchy: the Founder manages
+only the Dean; the Dean manages Wardens, clubs, gate security, and central
+staff; each Warden manages only staff accounts created for that Warden's
+hostel. Passwords must be at least 12 characters. Never share one password
+across accounts.
 
 The current SVNIT tenant is seeded for migration compatibility. Additional
 colleges can be configured by the Founder from the Founder portal when the
@@ -28,17 +20,15 @@ policies.
 
 Configure these environment variables on the backend host:
 
-- `GOOGLE_CLIENT_ID`: OAuth web client ID; defaults to the client ID configured
-  for this project.
 - `FACE_ENCRYPTION_KEY`: stable Fernet key used to encrypt face enrollment
   references in the database. Generate one with Python's
   `Fernet.generate_key()` and keep it outside source control. Preserve the same
   key across deployments and backups; losing or rotating it makes stored
   references unreadable and requires re-enrollment.
 - `DATABASE_URL`: persistent PostgreSQL connection string in production.
-- `AUTH_SECRET`: a private random secret of at least 32 characters. It is
-  required whenever `DATABASE_URL` is set and signs session tokens. Keep it
-  stable across backend instances and deployments.
+- `JWT_SECRET`: a private random secret of at least 32 characters required in
+  production to sign session tokens. The legacy `AUTH_SECRET` name is also
+  accepted. Keep the secret stable across backend instances and deployments.
 - `CORS_ORIGINS`: comma-separated deployed frontend origins, for example
   `https://portal.example.edu`. Include every approved portal origin.
 - `FOUNDER_INITIAL_PASSWORD`, `DEAN_INITIAL_PASSWORD`: unique initial passwords
@@ -56,9 +46,12 @@ The Founder signs in with account ID `FOUNDER`; the seeded SVNIT Dean uses
 `DEAN`. The Founder sets a new college's initial Dean password while creating
 that college. Each college must have its DNS and TLS configured for its exact
 approved portal domain; wildcard DNS/TLS is not used.
-The OAuth client's authorized JavaScript origins and backend `CORS_ORIGINS`
-must include each deployed portal origin. A tenant can only be resolved for a
-configured domain.
+Backend `CORS_ORIGINS` must include each deployed portal origin and native app
+origin. Web tenants are resolved from the approved portal hostname. The shared
+native app asks for the college portal hostname on its first sign-in and sends
+it as `X-Campus-Domain`; the backend accepts that selection only for a local
+or Capacitor origin and only when it matches an enabled tenant. Changing the
+selected domain signs out the previous tenant account.
 
 The Dean can create warden, department, and club accounts. Use the account ID
 shown in the portal as the username, then set its password under Staff account
@@ -69,7 +62,6 @@ for staff sign-in. Legacy plaintext passwords are cleared at startup.
 Set these variables for the frontend deployment:
 
 - `VITE_API_URL`: deployed backend URL.
-- `VITE_GOOGLE_CLIENT_ID`: the same OAuth web client ID as the backend.
 
 ### Native Android and iOS test builds
 
@@ -99,32 +91,10 @@ If `CORS_ORIGINS` is restricted instead of `*`, allow the Capacitor app origins
 used by the generated projects (`https://localhost` on Android and
 `capacitor://localhost` on iOS), in addition to the deployed web portal origin.
 
-The current Google sign-in uses Google Identity Services for web. Google
-restricts some sign-in flows inside embedded WebViews, so verify student
-sign-in on-device early; native Google OAuth may require platform OAuth
-clients and a native callback flow. Native camera and BLE use the Capacitor
-runtime permission prompts; the app does not grant those permissions silently.
-
-In Google Cloud Console, configure the OAuth consent screen and add every
-deployed portal origin to the OAuth client's authorized JavaScript origins. The
-frontend stores the signed session token in browser local storage and sends it
-to the backend for each API request; logging out removes it.
-
-The Android APK uses native Google Credential Manager rather than a web OAuth
-redirect. Keep the Web application OAuth client ID in both `VITE_GOOGLE_CLIENT_ID`
-and backend `GOOGLE_CLIENT_ID`; the Android sign-in plugin returns an ID token
-for this Web client, which the backend verifies. In the same Google Cloud
-project, also create an Android OAuth client for package
-`com.hmsenterprise.portal`, registered with the APK signing certificate's SHA-1.
-For local debug APKs, get the SHA-1 with
-`frontend\android\gradlew.bat signingReport` and register the `debug` variant's
-SHA-1. Register separate release and Play App Signing fingerprints when those
-builds are introduced. Do not add a custom-scheme URI to the Web client's
-authorized redirect URIs: Credential Manager returns the native result through
-the Android activity, not a browser redirect. The installed Google plugin
-requires the `MainActivity` activity-result handler; Android's existing
-`singleTask` activity declaration is retained, and no custom URI intent filter
-is used.
+The frontend stores the signed session token in browser local storage and sends
+it to the backend for each API request; logging out removes it. Native camera
+and BLE use the Capacitor runtime permission prompts; the app does not grant
+those permissions silently.
 
 On first sign-in, students complete the profile fields required by their
 college. Hostel and wing choices are loaded from that college's configuration.
@@ -162,21 +132,41 @@ scanning and request camera/Bluetooth access through the operating system.
 Attendance requires an active Warden roll call. Wardens can add reasoned
 manual exceptions for students who cannot use their camera or device.
 
-The enrollment flow requires explicit student confirmation. DeepFace is used
-only once during enrollment to create an encrypted 128D reference vector.
+Class attendance and live hostel wing roll calls use the separate
+`class_attendance` and `hostel_attendance` modules. Faculty manage class
+sessions by selecting a department, year, division, and registered room beacon.
+The roster is snapshotted from tenant-local student profiles when the session
+starts; Student Onboarding accepts the `division` field in forms and CSV imports.
+Students check in through the room beacon, passkey, and face checks. At close or
+expiry, remaining students are recorded absent. The roll-number-sorted PDF is
+available in portal reports and emailed to the verified faculty member who ran
+the session. Students see attendance updates in the portal; no push notification
+is sent.
+
+The Warden portal provides one workspace with Nightly and Live Wing modes. These
+remain distinct attendance workflows under the hood; existing history stays
+available in its legacy pages and is not automatically migrated.
+
+The enrollment flow requires explicit student confirmation. The bundled
+MobileFaceNet ONNX model is shared by the browser and backend so both sides
+produce embeddings in the same vector space. Enrollment sends the original
+reference frame plus its aligned 112x112 crop; the frame is stored encrypted,
+and the backend derives the encrypted 128D reference vector from the crop.
 Regular attendance never uploads a camera frame. Android enrollment registers
 a StrongBox-first P-256 signing key (TEE fallback); the server stores the
 public key and verifies each canonical attendance payload.
 
-The backend is pinned to Python 3.11.9 in `.python-version`. DeepFace's
-headless OpenCV contrib package provides the OpenCV API without GUI libraries
-and avoids installing conflicting OpenCV wheels. DeepFace may download its
-Facenet model weights on first use. Warm the model and validate
-memory, CPU, throughput, and match accuracy with representative devices before
-relying on it for live roll call; Python 3.11 compatibility does not guarantee
-1,000 concurrent real-time verifications. Keep `AUTH_SECRET` stable when using
-the local encryption-key fallback; production should configure a separate
-stable `FACE_ENCRYPTION_KEY`.
+The MobileFaceNet ONNX graph and external weights are bundled under
+`frontend/public/models/` with their Apache-2.0 attribution and license. The
+backend loads the same graph by default; set `FACE_EMBEDDING_MODEL_PATH` only
+when the deployment stores that exact model elsewhere, keeping its external
+`.data` weights adjacent. DeepFace remains responsible for server-side face
+checks on approved leave returns and may download its Facenet weights on first
+use. Warm these models and validate memory, CPU, throughput, and match
+accuracy with representative devices before relying on live roll call.
+Python 3.11 compatibility does not guarantee 1,000 concurrent real-time
+verifications. Keep `AUTH_SECRET` stable when using the local encryption-key
+fallback; production should configure a separate stable `FACE_ENCRYPTION_KEY`.
 
 ## Capacitor OTA updates
 
@@ -210,11 +200,9 @@ the current rolling time window and stronger than -80 dBm. Student-controlled
 beacon simulation is not available; supervised test overrides must be
 explicitly scoped and time-limited by an authorized Warden.
 
-The Face Landmarker model and required WebAssembly runtimes are bundled under
-`frontend/public/models/` for offline use in native builds. Supply the
-quantized MobileFaceNet ONNX asset as
-`frontend/public/models/mobilefacenet.onnx` (or set
-`VITE_FACE_EMBEDDING_MODEL_URL`) before release.
+The Face Landmarker model, MobileFaceNet ONNX graph and external weights, and
+required WebAssembly runtimes are bundled under `frontend/public/models/` for
+offline use in native builds.
 
 Digital leave requests support Day Outpass and Home Leave (up to 30 calendar
 days). Wardens review requests, can call the listed parent/guardian number, and

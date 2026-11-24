@@ -141,6 +141,318 @@ class TenantSafetyTests(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_student_onboarding_stores_and_updates_division_without_clearing_omitted_values(self):
+        context_token = main.ACTIVE_COLLEGE_ID.set("TESTCOLLEGE")
+        try:
+            conn = main.get_conn()
+            try:
+                created = main._create_or_update_student_account(
+                    conn,
+                    {
+                        "roll_no": "DIVISION-TEST-001",
+                        "full_name": "Division Student",
+                        "department": "Civil",
+                        "year": "2",
+                        "division": "A",
+                    },
+                )
+                conn.commit()
+                self.assertEqual(created["division"], "A")
+
+                main._create_or_update_student_account(
+                    conn,
+                    {
+                        "roll_no": "DIVISION-TEST-001",
+                        "full_name": "Division Student",
+                        "department": "Civil",
+                        "year": "2",
+                    },
+                )
+                conn.commit()
+                stored = main.db_exec(
+                    conn,
+                    "SELECT division FROM users WHERE college_id = ? AND UPPER(user_id) = ?",
+                    ("TESTCOLLEGE", "DIVISION-TEST-001"),
+                ).fetchone()
+                self.assertEqual(stored["division"], "A")
+
+                main._create_or_update_student_account(
+                    conn,
+                    {
+                        "roll_no": "DIVISION-TEST-001",
+                        "full_name": "Division Student",
+                        "department": "Civil",
+                        "year": "2",
+                        "division": "B",
+                    },
+                )
+                conn.commit()
+                stored = main.db_exec(
+                    conn,
+                    "SELECT division FROM users WHERE college_id = ? AND UPPER(user_id) = ?",
+                    ("TESTCOLLEGE", "DIVISION-TEST-001"),
+                ).fetchone()
+                self.assertEqual(stored["division"], "B")
+            finally:
+                conn.close()
+        finally:
+            main.ACTIVE_COLLEGE_ID.reset(context_token)
+
+    def test_class_attendance_snapshots_division_and_uses_session_faculty_for_reports(self):
+        context_token = main.ACTIVE_COLLEGE_ID.set("TESTCOLLEGE")
+        session_id = None
+        original_modules = None
+        student_ids = ("DIVISION-CLASS-001", "DIVISION-CLASS-002", "DIVISION-OTHER-001")
+        try:
+            conn = main.get_conn()
+            try:
+                modules_row = main.db_exec(
+                    conn, "SELECT modules_json FROM tenants WHERE college_id = ?", ("TESTCOLLEGE",)
+                ).fetchone()
+                original_modules = modules_row["modules_json"]
+                modules = main.json.loads(original_modules)
+                modules["class_attendance"] = True
+                main.db_exec(
+                    conn,
+                    "UPDATE tenants SET modules_json = ? WHERE college_id = ?",
+                    (main.json.dumps(modules), "TESTCOLLEGE"),
+                )
+                main.upsert_user(
+                    conn,
+                    (
+                        "SESSION-FACULTY", "", "Session Faculty", "Faculty", "Faculty",
+                        "TESTCOLLEGE", "", "", "", "", "session@example.edu", "Other", "", "",
+                    ),
+                )
+                main.upsert_user(
+                    conn,
+                    (
+                        "COURSE-OWNER", "", "Course Owner", "Faculty", "Faculty",
+                        "TESTCOLLEGE", "", "", "", "", "owner@example.edu", "Civil", "", "",
+                    ),
+                )
+                for user_id, division in (
+                    ("DIVISION-CLASS-001", "A"),
+                    ("DIVISION-CLASS-002", "A"),
+                    ("DIVISION-OTHER-001", "B"),
+                ):
+                    main._create_or_update_student_account(
+                        conn,
+                        {
+                            "roll_no": user_id,
+                            "full_name": user_id,
+                            "department": "Civil",
+                            "year": "2",
+                            "division": division,
+                        },
+                    )
+                main.db_exec(
+                    conn,
+                    """
+                    INSERT INTO users (user_id, full_name, role, department, year, division, college_id)
+                    VALUES (?, ?, 'Student', ?, ?, ?, ?)
+                    """,
+                    ("OTHER-TENANT-STUDENT", "Outside Student", "Civil", "2", "A", "OTHER-COLLEGE"),
+                )
+                main.db_exec(
+                    conn,
+                    """
+                    INSERT INTO attendance_v2_courses
+                        (college_id, tenant_id, id, code, title, faculty_id, default_beacon_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
+                    """,
+                    (
+                        "TESTCOLLEGE", "TESTCOLLEGE", "DIVISION-COURSE", "CIV-101",
+                        "Civil Basics", "COURSE-OWNER", datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+                main.db_exec(
+                    conn,
+                    """
+                    INSERT INTO attendance_v2_beacons
+                        (college_id, tenant_id, id, name, scope, owner_id, uuid, major, minor,
+                         min_rssi, is_active, created_at)
+                    VALUES (?, ?, ?, ?, 'CLASS', ?, ?, 1, 1, -78, 1, ?)
+                    """,
+                    (
+                        "TESTCOLLEGE", "TESTCOLLEGE", "DIVISION-ROOM-BEACON", "Civil Room",
+                        "COURSE-OWNER", "00000000-0000-0000-0000-000000000001",
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+                main.db_exec(
+                    conn,
+                    """
+                    UPDATE users
+                    SET attendance_report_email = ?, attendance_report_email_verified = 1
+                    WHERE college_id = ? AND UPPER(user_id) = ?
+                    """,
+                    ("session@example.edu", "TESTCOLLEGE", "SESSION-FACULTY"),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            with main._TENANT_CACHE_LOCK:
+                main._TENANT_CACHE.pop("TESTCOLLEGE", None)
+
+            request = build_request([(b"host", b"api.example.edu")])
+            request.scope["app"] = main.app
+            request.state.college_id = "TESTCOLLEGE"
+            request.state.user = {"user_id": "SESSION-FACULTY", "role": "Faculty"}
+            request.state.tenant = {
+                "college_name": "Test College",
+                "timezone": "Asia/Kolkata",
+                "modules": {"class_attendance": True, "hostel_attendance": False},
+            }
+            attendance = main._attendance_v2_module
+            groups = attendance.attendance_class_groups(request)
+            selected_group = next(
+                item for item in groups
+                if (item["department"], item["year"], item["division"]) == ("Civil", "2", "A")
+            )
+            self.assertEqual(selected_group["student_count"], 2)
+            session = attendance.start_session(
+                attendance.SessionInput(
+                    scope="CLASS",
+                    beacon_id="DIVISION-ROOM-BEACON",
+                    course_id="DIVISION-COURSE",
+                    department="Civil",
+                    year="2",
+                    division="A",
+                ),
+                request,
+            )
+            session_id = session["id"]
+            conn = main.get_conn()
+            try:
+                stored_session = main.db_exec(
+                    conn,
+                    "SELECT * FROM attendance_v2_sessions WHERE college_id = ? AND id = ?",
+                    ("TESTCOLLEGE", session_id),
+                ).fetchone()
+                roster = attendance._session_roster(conn, main.__dict__, dict(stored_session))
+                self.assertEqual(
+                    [item["roll_no"] for item in roster],
+                    ["DIVISION-CLASS-001", "DIVISION-CLASS-002"],
+                )
+                main.db_exec(
+                    conn,
+                    """
+                    INSERT INTO attendance_v2_records
+                        (college_id, id, session_id, student_id, roll_no, status, method, measured_rssi, marked_at)
+                    VALUES (?, ?, ?, ?, ?, 'PRESENT', 'BLE_FACE', -60, ?)
+                    """,
+                    (
+                        "TESTCOLLEGE", "DIVISION-PRESENT-RECORD", session_id,
+                        "DIVISION-CLASS-002", "DIVISION-CLASS-002",
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            student_request = build_request([(b"host", b"api.example.edu")])
+            student_request.scope["app"] = main.app
+            student_request.state.college_id = "TESTCOLLEGE"
+            student_request.state.user = {"user_id": student_ids[0], "role": "Student"}
+            student_request.state.tenant = request.state.tenant
+            live = attendance.student_open_sessions(student_request)
+            self.assertEqual([item["id"] for item in live], [session_id])
+            self.assertEqual(live[0]["faculty_name"], "Session Faculty")
+            student_request.state.user = {"user_id": student_ids[2], "role": "Student"}
+            self.assertEqual(attendance.student_open_sessions(student_request), [])
+
+            background = main._attendance_v2_module.BackgroundTasks()
+            closed = attendance.close_session(session_id, request, background)
+            self.assertTrue(closed["report_queued"])
+            self.assertEqual(len(background.tasks), 1)
+
+            conn = main.get_conn()
+            try:
+                stored_session = main.db_exec(
+                    conn,
+                    "SELECT * FROM attendance_v2_sessions WHERE college_id = ? AND id = ?",
+                    ("TESTCOLLEGE", session_id),
+                ).fetchone()
+                report = attendance._report_data(conn, main.__dict__, dict(stored_session))
+                absent = main.db_exec(
+                    conn,
+                    """
+                    SELECT status, method FROM attendance_v2_records
+                    WHERE college_id = ? AND session_id = ? AND UPPER(student_id) = ?
+                    """,
+                    ("TESTCOLLEGE", session_id, "DIVISION-CLASS-001"),
+                ).fetchone()
+            finally:
+                conn.close()
+            self.assertEqual(report["owner_id"], "SESSION-FACULTY")
+            self.assertEqual(report["report_email"], "session@example.edu")
+            self.assertEqual([item["roll_no"] for item in report["students"]], list(student_ids[:2]))
+            self.assertEqual([item["status"] for item in report["students"]], ["ABSENT", "PRESENT"])
+            self.assertEqual(absent["status"], "ABSENT")
+            self.assertEqual(absent["method"], "NO_CHECK_IN")
+
+            report_date = report["date"][:10]
+            reports = attendance.list_daily_report_sessions(request, scope="CLASS", date=report_date)
+            self.assertTrue(any(item["session_id"] == session_id for item in reports))
+            own_pdf = attendance.download_session_report(session_id, request)
+            self.assertEqual(own_pdf.media_type, "application/pdf")
+            self.assertTrue(own_pdf.body.startswith(b"%PDF"))
+            request.state.user = {"user_id": "COURSE-OWNER", "role": "Faculty"}
+            owner_reports = attendance.list_daily_report_sessions(request, scope="CLASS", date=report_date)
+            self.assertFalse(any(item["session_id"] == session_id for item in owner_reports))
+            with self.assertRaises(HTTPException) as error:
+                attendance.download_session_report(session_id, request)
+            self.assertEqual(error.exception.status_code, 403)
+
+            request.state.user = {"user_id": student_ids[0], "role": "Student"}
+            summary = attendance.student_class_summary(request)
+            self.assertEqual(len(summary), 1)
+            self.assertEqual(summary[0]["faculty_name"], "Session Faculty")
+            self.assertEqual(summary[0]["sessions"][0]["status"], "ABSENT")
+            student_request.state.user = {"user_id": student_ids[0], "role": "Student"}
+            captured_report = {}
+            with patch.object(
+                attendance,
+                "_build_student_daily_pdf",
+                side_effect=lambda data: captured_report.update(data) or b"test-pdf",
+            ):
+                personal_report = attendance.download_student_daily_report(
+                    student_request, report_date
+                )
+            self.assertEqual(personal_report.body, b"test-pdf")
+            self.assertEqual(captured_report["records"][0]["status"], "ABSENT")
+            self.assertIn("Session Faculty", captured_report["records"][0]["label"])
+        finally:
+            conn = main.get_conn()
+            try:
+                if original_modules is not None:
+                    main.db_exec(
+                        conn,
+                        "UPDATE tenants SET modules_json = ? WHERE college_id = ?",
+                        (original_modules, "TESTCOLLEGE"),
+                    )
+                if session_id:
+                    main.db_exec(conn, "DELETE FROM attendance_v2_records WHERE college_id = ? AND session_id = ?", ("TESTCOLLEGE", session_id))
+                    main.db_exec(conn, "DELETE FROM attendance_v2_session_roster WHERE college_id = ? AND session_id = ?", ("TESTCOLLEGE", session_id))
+                    main.db_exec(conn, "DELETE FROM attendance_v2_sessions WHERE college_id = ? AND id = ?", ("TESTCOLLEGE", session_id))
+                main.db_exec(conn, "DELETE FROM attendance_v2_courses WHERE college_id = ? AND id = ?", ("TESTCOLLEGE", "DIVISION-COURSE"))
+                main.db_exec(conn, "DELETE FROM attendance_v2_beacons WHERE college_id = ? AND id = ?", ("TESTCOLLEGE", "DIVISION-ROOM-BEACON"))
+                for user_id in (*student_ids, "OTHER-TENANT-STUDENT", "SESSION-FACULTY", "COURSE-OWNER"):
+                    main.db_exec(
+                        conn, "DELETE FROM users WHERE college_id = ? AND UPPER(user_id) = ?",
+                        ("TESTCOLLEGE" if user_id != "OTHER-TENANT-STUDENT" else "OTHER-COLLEGE", user_id),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+            for user_id in (*student_ids, "SESSION-FACULTY", "COURSE-OWNER"):
+                main.invalidate_user_cache(user_id)
+            with main._TENANT_CACHE_LOCK:
+                main._TENANT_CACHE.pop("TESTCOLLEGE", None)
+            main.ACTIVE_COLLEGE_ID.reset(context_token)
+
     def test_attendance_v2_faculty_pdf_fits_150_students_on_one_page(self):
         rows = [
             {
@@ -369,50 +681,6 @@ class TenantSafetyTests(unittest.TestCase):
         finally:
             main.ACTIVE_COLLEGE_ID.reset(context_token)
 
-    def test_verified_student_emails_can_use_college_subdomains(self):
-        context_token = main.ACTIVE_COLLEGE_ID.set("SVNIT")
-        try:
-            for email in (
-                "u26ce011@ced.svnit.ac.in",
-                "student@ee.svnit.ac.in",
-                "student@med.svnit.ac.in",
-                "student@svnit.ac.in",
-            ):
-                with self.subTest(email=email):
-                    self.assertTrue(main.is_tenant_email(email))
-            self.assertFalse(main.is_tenant_email("student@svnit.ac.in.example.com"))
-            self.assertFalse(main.is_tenant_email("student@example.com"))
-        finally:
-            main.ACTIVE_COLLEGE_ID.reset(context_token)
-
-    def test_google_branch_email_links_to_existing_student_id(self):
-        context_token = main.ACTIVE_COLLEGE_ID.set("TESTCOLLEGE")
-        try:
-            conn = main.get_conn()
-            main.db_exec(
-                conn,
-                """
-                INSERT INTO users
-                    (college_id, user_id, password, full_name, role, authority_title,
-                     institute_id, hostel_block, year, room, phone, email, department, dob, wing)
-                VALUES (?, ?, '', ?, 'Student', 'Verified Student', ?, '', '', '', '', ?, '', '', '')
-                """,
-                ("TESTCOLLEGE", "BRANCH-STUDENT", "Branch Student", "TESTCOLLEGE", "branch-student@example.edu"),
-            )
-            conn.commit()
-            conn.close()
-            account = main.get_account_for_google_claims(
-                {
-                    "email": "branch-student@dept.example.edu",
-                    "email_verified": True,
-                    "name": "Branch Student",
-                }
-            )
-            self.assertEqual(account["user_id"], "BRANCH-STUDENT")
-            self.assertEqual(account["email"], "branch-student@dept.example.edu")
-        finally:
-            main.ACTIVE_COLLEGE_ID.reset(context_token)
-
     def test_session_token_cannot_cross_college_boundary(self):
         token = main.create_session_token("FOUNDER", "SVNIT")
         context_token = main.ACTIVE_COLLEGE_ID.set("TESTCOLLEGE")
@@ -447,6 +715,137 @@ class TenantSafetyTests(unittest.TestCase):
             self.assertEqual(data["departments"], [])
         finally:
             main.ACTIVE_COLLEGE_ID.reset(context_token)
+
+    def test_tenant_module_flags_default_to_disabled_and_require_booleans(self):
+        modules = main.normalize_tenant_modules(
+            {
+                "grievances": True,
+                "event_radar": "true",
+                "mess_pulse": True,
+                "unknown_module": True,
+            }
+        )
+
+        self.assertTrue(modules["grievances"])
+        self.assertFalse(modules["event_radar"])
+        self.assertFalse(modules["mess_pulse"])
+        self.assertFalse(modules["hostel_attendance"])
+        self.assertNotIn("unknown_module", modules)
+
+    def test_founder_cannot_enable_unavailable_mess_pulse(self):
+        request = build_request([])
+        request.state.user = {"role": "Founder"}
+        modules = dict(main.TENANT_MODULE_DEFAULTS)
+        modules["mess_pulse"] = True
+
+        with self.assertRaises(HTTPException) as error:
+            main.update_tenant_modules(
+                "TESTCOLLEGE", main.TenantModulesReq(modules=modules), request
+            )
+
+        self.assertEqual(error.exception.status_code, 400)
+
+    def test_legacy_face_embedding_requires_reenrollment(self):
+        request = build_request([])
+        request.state.user = {"user_id": "ATTENDANCE-STUDENT", "role": "Student"}
+        connection = Mock()
+        student = {
+            "biometric_status": "Locked",
+            "biometric_cred_id": "credential",
+            "enroll_window_until": 0,
+            "face_reference_encrypted": "encrypted-reference",
+            "face_embedding_encrypted": "encrypted-vector",
+            "face_embedding_model": "legacy-deepface",
+        }
+
+        with patch.object(main, "get_conn", return_value=connection):
+            with patch.object(main, "student_biometric_record", return_value=student):
+                status = main.get_student_biometric_status(request)
+
+        self.assertFalse(status["face_enrolled"])
+        self.assertFalse(status["embedding_enrolled"])
+        connection.close.assert_called_once()
+
+    def test_enrollment_uses_shared_mobilefacenet_embedding(self):
+        import base64
+        import cv2
+        import numpy as np
+
+        image = np.full((112, 112, 3), 127, dtype=np.uint8)
+        success, encoded = cv2.imencode(".jpg", image)
+        self.assertTrue(success)
+        image_base64 = "data:image/jpeg;base64," + base64.b64encode(encoded).decode("ascii")
+
+        encrypted = main._compute_enrollment_embedding(image_base64)
+        vector = np.frombuffer(
+            main._embedding_cipher().decrypt(encrypted.encode("ascii")),
+            dtype=np.float32,
+        )
+
+        self.assertEqual(vector.shape, (128,))
+        self.assertTrue(np.isfinite(vector).all())
+        self.assertAlmostEqual(float(np.linalg.norm(vector)), 1.0, places=5)
+        self.assertTrue(main._verify_embedding(vector.tolist(), encrypted))
+
+    def test_module_gate_covers_legacy_and_v2_attendance_paths(self):
+        disabled_tenant = {"modules": main.normalize_tenant_modules({})}
+        disabled_paths = (
+            "/api/warden/attendance-config",
+            "/api/biometric/register",
+            "/api/attendance/mark",
+            "/api/attendance-v2/courses",
+            "/api/attendance-v2/hostel/sessions",
+            "/api/outpasses",
+            "/api/complaints",
+        )
+
+        for path in disabled_paths:
+            with self.subTest(path=path):
+                with self.assertRaises(HTTPException) as error:
+                    main.require_tenant_module(path, disabled_tenant)
+                self.assertEqual(error.exception.status_code, 404)
+
+        enabled_tenant = {
+            "modules": main.normalize_tenant_modules(
+                {"attendance": True, "class_attendance": True, "hostel_attendance": True}
+            )
+        }
+        self.assertIsNone(
+            main.require_tenant_module("/api/warden/attendance-config", enabled_tenant)
+        )
+
+    def test_native_tenant_domain_selects_enabled_college(self):
+        request = build_request(
+            [
+                (b"origin", b"capacitor://localhost"),
+                (b"x-campus-domain", b"portal.example.edu"),
+            ]
+        )
+
+        self.assertEqual(main.resolve_tenant_id(request), "TESTCOLLEGE")
+
+    def test_native_tenant_domain_rejects_unknown_college(self):
+        request = build_request(
+            [
+                (b"origin", b"capacitor://localhost"),
+                (b"x-campus-domain", b"unknown.example.edu"),
+            ]
+        )
+
+        with self.assertRaises(HTTPException) as error:
+            main.resolve_tenant_id(request)
+
+        self.assertEqual(error.exception.status_code, 404)
+
+    def test_registered_web_origin_cannot_be_overridden_by_native_tenant_header(self):
+        request = build_request(
+            [
+                (b"origin", b"https://portal.example.edu"),
+                (b"x-campus-domain", b"unknown.example.edu"),
+            ]
+        )
+
+        self.assertEqual(main.resolve_tenant_id(request), "TESTCOLLEGE")
 
     def test_unassigned_warden_cannot_use_bootstrap_to_read_all_hostels(self):
         context_token = main.ACTIVE_COLLEGE_ID.set("TESTCOLLEGE")
@@ -584,6 +983,12 @@ class TenantSafetyTests(unittest.TestCase):
             self.assertEqual(len(attendance["attendance"]), 2)
 
             device_token = "b" * 64
+            device_public_key = main.base64.b64encode(
+                main.ec.generate_private_key(main.ec.SECP256R1()).public_key().public_bytes(
+                    main.serialization.Encoding.DER,
+                    main.serialization.PublicFormat.SubjectPublicKeyInfo,
+                )
+            ).decode("ascii")
             conn = main.get_conn()
             main.db_exec(
                 conn,
@@ -597,41 +1002,34 @@ class TenantSafetyTests(unittest.TestCase):
             conn.commit()
             conn.close()
             request.state.user = {"user_id": "ATTENDANCE-STUDENT", "role": "Student"}
+            enrollment_request = main.DeviceBindingRegisterReq(
+                device_binding_token=device_token,
+                reference_image_base64="data:image/jpeg;base64," + ("A" * 100),
+                embedding_image_base64="data:image/jpeg;base64," + ("B" * 100),
+                consent_confirmed=True,
+                device_public_key=device_public_key,
+            )
             with patch.object(main, "_encrypt_face_reference", return_value="encrypted-test-face-reference"):
-                registered = main.register_device_binding(
-                    main.DeviceBindingRegisterReq(
-                        device_binding_token=device_token,
-                        reference_image_base64="data:image/jpeg;base64," + ("A" * 100),
-                        consent_confirmed=True,
-                    ),
-                    request,
-                )
+                with patch.object(
+                    main,
+                    "_compute_enrollment_embedding",
+                    return_value="encrypted-test-embedding",
+                ) as compute_embedding:
+                    registered = main.register_device_binding(enrollment_request, request)
+            compute_embedding.assert_called_once_with("data:image/jpeg;base64," + ("B" * 100))
+            self.assertEqual(enrollment_request.embedding_image_base64, "")
             self.assertTrue(registered["device_binding_ready"])
             self.assertTrue(registered["face_enrolled"])
             self.assertNotIn("device_token_hash", registered)
-            attendance_request = main.DeviceBeaconMarkReq(
-                device_binding_token=device_token,
-                wing_beacon_id="A-BEACON",
-                rssi=-52,
-                live_image_base64="data:image/jpeg;base64," + ("A" * 100),
-            )
-            with patch.object(main, "_verify_face_image", return_value=False):
-                with self.assertRaises(HTTPException) as mismatch:
-                    main.verify_identity_and_mark_attendance(attendance_request, request)
-            self.assertEqual(mismatch.exception.status_code, 401)
-            self.assertEqual(
-                mismatch.exception.detail,
-                "Biometric 3D Mesh Mismatch: Face does not match enrolled resident",
-            )
+            status = main.get_student_biometric_status(request)
+            self.assertTrue(status["face_enrolled"])
+            self.assertTrue(status["embedding_enrolled"])
             with self.assertRaises(HTTPException) as legacy_bypass:
-                main.mark_beacon_attendance(attendance_request, request)
+                main.mark_beacon_attendance(Mock(), request)
             self.assertEqual(legacy_bypass.exception.status_code, 410)
-            with patch.object(main, "_verify_face_image", return_value=True):
-                marked = main.verify_identity_and_mark_attendance(attendance_request, request)
-            self.assertEqual(marked["attendance_log"]["status"], "Present (Server Face Verification + Beacon)")
             request.state.user = {"user_id": "W_ATTENDANCE", "role": "Warden", "hostel_block": "Attendance Hostel"}
             active_detail = main.get_attendance_session(restarted["session"]["session_id"], request)
-            self.assertEqual(active_detail["records"][0]["status"], "Present")
+            self.assertEqual(active_detail["records"], [])
             request.state.user = {"role": "Warden", "user_id": "W_ATTENDANCE", "hostel_block": "Attendance Hostel"}
 
             past_start = (local_now - timedelta(hours=2)).strftime("%H:%M")
@@ -922,6 +1320,20 @@ class TenantSafetyTests(unittest.TestCase):
         finally:
             main.ACTIVE_COLLEGE_ID.reset(context_token)
 
+    def test_founder_staff_account_list_includes_dean_phone(self):
+        context_token = main.ACTIVE_COLLEGE_ID.set("SVNIT")
+        try:
+            request = build_request([(b"host", b"api.svnitcampus.in")])
+            request.state.user = {"role": "Founder", "user_id": "FOUNDER"}
+
+            accounts = main.list_staff_accounts(request)
+
+            dean = next(account for account in accounts if account["user_id"] == "DEAN")
+            self.assertIn("phone", dean)
+            self.assertEqual(dean["phone"], "0261-2201500")
+        finally:
+            main.ACTIVE_COLLEGE_ID.reset(context_token)
+
     def test_staff_passwords_are_hashed_and_admin_can_reset_and_sign_in(self):
         context_token = main.ACTIVE_COLLEGE_ID.set("SVNIT")
         try:
@@ -969,18 +1381,6 @@ class TenantSafetyTests(unittest.TestCase):
             self.assertEqual(login_result["user"]["role"], "Warden")
             self.assertNotIn("password", login_result["user"])
             self.assertTrue(main.verify_session_token(login_result["token"]))
-
-            with patch.object(
-                main,
-                "verify_google_credential",
-                return_value={
-                    "email": "founder@svnit.ac.in",
-                    "email_verified": True,
-                },
-            ):
-                with self.assertRaises(HTTPException) as google_error:
-                    main.google_login(main.GoogleLoginReq(credential="test-google-token"))
-                self.assertEqual(google_error.exception.status_code, 410)
 
             main.set_staff_account_password(
                 main.StaffPasswordSetReq(user_id="CW_GAJJAR"),
@@ -1250,7 +1650,10 @@ class TenantSafetyTests(unittest.TestCase):
                 """
                 UPDATE users
                 SET guardian_phone = ?, biometric_status = 'Locked',
-                    biometric_cred_id = 'old-credential', device_hardware_id = 'old-device'
+                    biometric_cred_id = 'old-credential', device_hardware_id = 'old-device',
+                    face_reference_encrypted = 'old-reference',
+                    face_embedding_encrypted = 'old-embedding',
+                    face_embedding_model = 'legacy-deepface'
                 WHERE college_id = ? AND UPPER(user_id) = ?
                 """,
                 ("+919999999999", "TESTCOLLEGE", "BIOMETRIC-LEAVE-STUDENT"),
@@ -1294,6 +1697,19 @@ class TenantSafetyTests(unittest.TestCase):
             ).fetchall()
             conn.close()
             self.assertEqual([row["credential_id"] for row in credentials], ["night-attendance-passkey"])
+            conn = main.get_conn()
+            biometric = main.db_exec(
+                conn,
+                """
+                SELECT face_reference_encrypted, face_embedding_encrypted, face_embedding_model
+                FROM users WHERE college_id = ? AND UPPER(user_id) = ?
+                """,
+                ("TESTCOLLEGE", "BIOMETRIC-LEAVE-STUDENT"),
+            ).fetchone()
+            conn.close()
+            self.assertEqual(biometric["face_reference_encrypted"], "")
+            self.assertEqual(biometric["face_embedding_encrypted"], "")
+            self.assertEqual(biometric["face_embedding_model"], "")
 
             local_zone = main.ZoneInfo(request.state.tenant["timezone"])
             first_day = datetime.now(local_zone).date() + timedelta(days=2)
@@ -1392,7 +1808,17 @@ class TenantSafetyTests(unittest.TestCase):
 
     def test_digital_leave_return_uses_device_binding_and_records_beacon_return(self):
         tenant_context = main.ACTIVE_COLLEGE_ID.set("TESTCOLLEGE")
+        previous_beacon_secret = main.BEACON_HMAC_SECRETS.get("A")
         try:
+            beacon_secret = "unit-test-beacon-secret"
+            main.BEACON_HMAC_SECRETS["A"] = beacon_secret
+            beacon_slot = int(main.time.time() // 600)
+            beacon_signature = main.hmac.new(
+                beacon_secret.encode(),
+                f"A:{beacon_slot}".encode(),
+                main.hashlib.sha256,
+            ).hexdigest()[:8]
+            beacon_id = f"HMS-A-{beacon_signature}"
             device_token = "a" * 64
             token_hash = main.hashlib.sha256(device_token.encode("ascii")).hexdigest()
             today = datetime.now(main.ZoneInfo("Asia/Kolkata")).date().isoformat()
@@ -1409,10 +1835,10 @@ class TenantSafetyTests(unittest.TestCase):
                 conn,
                 """
                 UPDATE users
-                SET biometric_status = 'Locked', device_token_hash = ?
+                SET biometric_status = 'Locked', device_token_hash = ?, face_reference_encrypted = ?
                 WHERE college_id = ? AND UPPER(user_id) = ?
                 """,
-                (token_hash, "TESTCOLLEGE", "LEAVE-RETURN-STUDENT"),
+                (token_hash, "encrypted-test-face-reference", "TESTCOLLEGE", "LEAVE-RETURN-STUDENT"),
             )
             conn.commit()
             conn.close()
@@ -1441,27 +1867,32 @@ class TenantSafetyTests(unittest.TestCase):
             mark_body = main.DeviceLeaveReturnReq(
                 pass_id=pass_id,
                 device_binding_token=device_token,
-                wing_beacon_id="A-BEACON",
+                wing_beacon_id=beacon_id,
                 rssi=-42,
-                liveness_passed=True,
+                live_image_base64="data:image/jpeg;base64," + ("A" * 100),
             )
             with patch.object(
                 main,
                 "attendance_config_for_hostel",
-                return_value={"wing_beacons_json": '{"Wing A":"A-BEACON"}', "attendance_test_mode": 0},
+                return_value={"wing_beacons_json": main.json.dumps({"Wing A": beacon_id}), "attendance_test_mode": 0},
             ):
-                result = main.mark_leave_return(mark_body, request)
+                with patch.object(main, "_verify_face_image", return_value=True):
+                    result = main.mark_leave_return(mark_body, request)
 
             returned_pass = result["leave_pass"]
             self.assertEqual(returned_pass["return_status"], "Returned Late")
             self.assertTrue(returned_pass["actual_return_at"])
-            self.assertEqual(returned_pass["return_beacon_id"], "A-BEACON")
+            self.assertEqual(returned_pass["return_beacon_id"], beacon_id)
             self.assertTrue(returned_pass["return_timing"].startswith("Late by "))
             self.assertNotIn("qr_token", returned_pass)
             with self.assertRaises(HTTPException) as duplicate:
                 main.mark_leave_return(mark_body, request)
             self.assertEqual(duplicate.exception.status_code, 409)
         finally:
+            if previous_beacon_secret is None:
+                main.BEACON_HMAC_SECRETS.pop("A", None)
+            else:
+                main.BEACON_HMAC_SECRETS["A"] = previous_beacon_secret
             main.ACTIVE_COLLEGE_ID.reset(tenant_context)
 
     def test_beacon_attendance_options_are_disabled(self):

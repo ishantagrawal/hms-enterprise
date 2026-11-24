@@ -18,6 +18,7 @@ import uuid
 import io
 from io import BytesIO
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from html import escape as html_escape
 from datetime import datetime, time as datetime_time, timedelta, timezone
 from typing import Optional, List, Dict
@@ -44,9 +45,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
-import google.auth.exceptions
-from google.auth.transport.requests import Request as GoogleAuthRequest
-from google.oauth2 import id_token
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -81,9 +79,11 @@ async def app_lifespan(application: FastAPI):
 
 ENVIRONMENT = os.getenv("ENV", os.getenv("ENVIRONMENT", "development")).strip().lower()
 IS_PRODUCTION = ENVIRONMENT == "production"
-REQUIRED_PRODUCTION_ENV = ("DATABASE_URL", "JWT_SECRET", "FACE_ENCRYPTION_KEY", "BEACON_HMAC_SECRETS_JSON")
+REQUIRED_PRODUCTION_ENV = ("DATABASE_URL", "FACE_ENCRYPTION_KEY", "BEACON_HMAC_SECRETS_JSON")
 if IS_PRODUCTION:
     missing_environment = [name for name in REQUIRED_PRODUCTION_ENV if not os.getenv(name, "").strip()]
+    if not (os.getenv("JWT_SECRET") or os.getenv("AUTH_SECRET")):
+        missing_environment.append("JWT_SECRET (or AUTH_SECRET)")
     if missing_environment:
         raise RuntimeError(
             "Missing required production environment variables: "
@@ -102,9 +102,6 @@ logger = logging.getLogger(__name__)
 # Compress payloads > 500 bytes by ~80% for fast campus Wi-Fi transfer
 app.add_middleware(GZipMiddleware, minimum_size=500)
 
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
-if IS_PRODUCTION and not GOOGLE_CLIENT_ID:
-    raise RuntimeError("GOOGLE_CLIENT_ID must be configured in production.")
 AUTH_SECRET = (os.getenv("JWT_SECRET") or os.getenv("AUTH_SECRET") or "").strip()
 if AUTH_SECRET and len(AUTH_SECRET) < 32:
     raise RuntimeError("AUTH_SECRET must contain at least 32 characters.")
@@ -123,6 +120,28 @@ DEFAULT_ADMIN_PASS = ""
 PASSWORD_HASH_PREFIX = "pbkdf2_sha256$"
 PASSWORD_HASH_ITERATIONS = 600_000
 PASSWORD_MIN_LENGTH = 12
+FACE_EMBEDDING_MODEL_VERSION = "qualcomm-mobilefacenet-v0.67.0"
+TENANT_MODULE_DEFAULTS = {
+    "grievances": False,
+    "mess_pulse": False,
+    "event_radar": False,
+    "gate_outpass": False,
+    "attendance": False,
+    "class_attendance": False,
+    "hostel_attendance": False,
+    "parent_alerts": False,
+}
+UNAVAILABLE_TENANT_MODULES = {"mess_pulse"}
+
+
+def normalize_tenant_modules(modules):
+    source = modules if isinstance(modules, dict) else {}
+    return {
+        module: module not in UNAVAILABLE_TENANT_MODULES and source.get(module) is True
+        for module in TENANT_MODULE_DEFAULTS
+    }
+
+
 _TEMP_PASSWORD_CONSONANTS = "bcdfghjkmnpqrstvwxyz"
 _TEMP_PASSWORD_VOWELS = "aeiou"
 STAFF_LOGIN_ROLES = {
@@ -140,9 +159,6 @@ STAFF_LOGIN_ROLES = {
 PASSWORD_LOGIN_FAILURES: Dict[str, tuple] = {}
 PASSWORD_LOGIN_FAILURES_LOCK = threading.Lock()
 
-_GOOGLE_TOKEN_CACHE: Dict[str, tuple] = {}
-_GOOGLE_TOKEN_CACHE_LOCK = threading.Lock()
-
 # RAM Cache for Bearer token user lookup (eliminates redundant DB hit on every API call)
 _USER_AUTH_CACHE: Dict[tuple, tuple] = {}
 _USER_AUTH_CACHE_LOCK = threading.Lock()
@@ -151,11 +167,33 @@ ACTIVE_COLLEGE_ID = contextvars.ContextVar("active_college_id", default="SVNIT")
 _TENANT_CACHE: Dict[str, tuple] = {}
 _TENANT_CACHE_LOCK = threading.Lock()
 
-CORS_ORIGINS = [
+CORS_ORIGINS_DEFAULT = [
     "https://svnitcampus.in",
     "https://localhost",
     "capacitor://localhost",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
 ]
+_configured_cors_origins = os.getenv("CORS_ORIGINS", "").strip()
+CORS_ORIGINS = (
+    [origin.strip().rstrip("/") for origin in _configured_cors_origins.split(",") if origin.strip()]
+    if _configured_cors_origins
+    else CORS_ORIGINS_DEFAULT
+)
+if IS_PRODUCTION and not _configured_cors_origins:
+    raise RuntimeError("CORS_ORIGINS must be configured in production.")
+if not CORS_ORIGINS:
+    raise RuntimeError("CORS_ORIGINS must contain at least one origin.")
+for _origin in CORS_ORIGINS:
+    _parsed_origin = urlparse(_origin)
+    if (
+        not _parsed_origin.scheme
+        or not _parsed_origin.netloc
+        or _parsed_origin.path not in ("", "/")
+        or _parsed_origin.query
+        or _parsed_origin.fragment
+    ):
+        raise RuntimeError(f"Invalid CORS origin: {_origin}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -581,6 +619,7 @@ def init_db():
             institute_id TEXT,
             hostel_block TEXT,
             year TEXT,
+            division TEXT NOT NULL DEFAULT '',
             room TEXT,
             phone TEXT,
             email TEXT,
@@ -983,16 +1022,7 @@ def init_db():
                 )
             """)
 
-    default_modules = {
-        "grievances": True,
-        "mess_pulse": True,
-        "event_radar": True,
-        "gate_outpass": False,
-        "attendance": False,
-        "class_attendance": False,
-        "hostel_attendance": False,
-        "parent_alerts": False,
-    }
+    default_modules = dict(TENANT_MODULE_DEFAULTS)
     db_exec(
         conn,
         """
@@ -1015,6 +1045,8 @@ def init_db():
     )
 
     user_columns = {column[0] for column in db_exec(conn, "SELECT * FROM users LIMIT 0").description}
+    if "division" not in user_columns:
+        db_exec(conn, "ALTER TABLE users ADD COLUMN division TEXT NOT NULL DEFAULT ''")
     if "wing" not in user_columns:
         db_exec(conn, "ALTER TABLE users ADD COLUMN wing TEXT")
     if "guardian_phone" not in user_columns:
@@ -1028,6 +1060,7 @@ def init_db():
         ("device_token_hash", "TEXT NOT NULL DEFAULT ''"),
         ("face_reference_encrypted", "TEXT NOT NULL DEFAULT ''"),
         ("face_embedding_encrypted", "TEXT NOT NULL DEFAULT ''"),
+        ("face_embedding_model", "TEXT NOT NULL DEFAULT ''"),
         ("device_public_key", "TEXT NOT NULL DEFAULT ''"),
         ("face_enrolled_at", "TEXT NOT NULL DEFAULT ''"),
         ("enroll_window_until", "INTEGER NOT NULL DEFAULT 0"),
@@ -1339,13 +1372,14 @@ def init_db():
 init_db()
 
 
-def get_tenant_by_id(college_id: str):
+def get_tenant_by_id(college_id: str, fresh: bool = False):
     normalized_id = college_id.strip().upper()
     now = time.time()
-    with _TENANT_CACHE_LOCK:
-        cached = _TENANT_CACHE.get(normalized_id)
-        if cached and cached[0] > now:
-            return cached[1]
+    if not fresh:
+        with _TENANT_CACHE_LOCK:
+            cached = _TENANT_CACHE.get(normalized_id)
+            if cached and cached[0] > now:
+                return cached[1]
 
     conn = get_conn()
     try:
@@ -1356,9 +1390,9 @@ def get_tenant_by_id(college_id: str):
         ).fetchone()
         tenant = dict(row) if row else None
         if tenant:
-            tenant["modules"] = json.loads(tenant.get("modules_json") or "{}")
-            tenant["modules"].setdefault("class_attendance", False)
-            tenant["modules"].setdefault("hostel_attendance", False)
+            tenant["modules"] = normalize_tenant_modules(
+                json.loads(tenant.get("modules_json") or "{}")
+            )
             with _TENANT_CACHE_LOCK:
                 _TENANT_CACHE[normalized_id] = (now + 30.0, tenant)
         return tenant
@@ -1403,6 +1437,20 @@ def resolve_tenant_id(request: Request) -> str:
     request_host = (request.url.hostname or "").lower()
     candidate_host = origin_host or request_host
     if candidate_host in {"localhost", "127.0.0.1", "::1"}:
+        selected_domain = request.headers.get("x-campus-domain", "").strip().lower().rstrip(".")
+        if selected_domain:
+            conn = get_conn()
+            try:
+                row = db_exec(
+                    conn,
+                    "SELECT college_id FROM tenants WHERE LOWER(primary_domain) = LOWER(?) AND enabled = 1",
+                    (selected_domain,),
+                ).fetchone()
+                if row:
+                    return str(row["college_id"]).upper()
+            finally:
+                conn.close()
+            raise HTTPException(status_code=404, detail="This college domain is not configured.")
         return "SVNIT"
 
     conn = get_conn()
@@ -1420,9 +1468,6 @@ def resolve_tenant_id(request: Request) -> str:
         conn.close()
     raise HTTPException(status_code=404, detail="This college domain is not configured.")
 
-
-class GoogleLoginReq(BaseModel):
-    credential: str
 
 class PasswordLoginReq(BaseModel):
     username: str
@@ -1456,6 +1501,7 @@ class StudentAccountCreateReq(BaseModel):
     full_name: str
     department: str
     year: Optional[str] = ""
+    division: Optional[str] = Field(default="", max_length=80)
     hostel_block: Optional[str] = ""
     wing: Optional[str] = ""
     room: Optional[str] = ""
@@ -1717,13 +1763,13 @@ class AttendanceBeaconMarkReq(AttendanceBeaconOptionsReq):
     credential: Dict
 
 class DeviceBindingRegisterReq(BaseModel):
-    # Older mobile bundles included device metadata that is no longer needed
-    # for enrollment. Ignore those fields while validating the security-critical
-    # values below so an app/backend rollout cannot strand enrollment.
+    # Ignore obsolete device metadata while requiring the current enrollment
+    # images and cryptographic binding fields.
     model_config = {"extra": "ignore"}
 
     device_binding_token: str
     reference_image_base64: str = Field(min_length=100, max_length=6_000_000)
+    embedding_image_base64: str = Field(min_length=100, max_length=1_000_000)
     consent_confirmed: bool
     device_public_key: str = Field(min_length=80, max_length=4096)
 
@@ -1783,29 +1829,6 @@ class DeviceLeaveReturnReq(BaseModel):
     live_image_base64: str = Field(min_length=100, max_length=6_000_000)
 
 
-def verify_google_credential(credential: str) -> dict:
-    now = time.time()
-    with _GOOGLE_TOKEN_CACHE_LOCK:
-        cached = _GOOGLE_TOKEN_CACHE.get(credential)
-        if cached and cached[0] > now:
-            return cached[1]
-    try:
-        claims = id_token.verify_oauth2_token(
-            credential, GoogleAuthRequest(), GOOGLE_CLIENT_ID
-        )
-    except google.auth.exceptions.TransportError as exc:
-        raise HTTPException(status_code=503, detail="Google sign-in verification is temporarily unavailable. Please try again.") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail="Google sign-in token is invalid or expired. Please choose your college account again.") from exc
-    with _GOOGLE_TOKEN_CACHE_LOCK:
-        if len(_GOOGLE_TOKEN_CACHE) > 500:
-            expired = [token for token, (expiry, _) in _GOOGLE_TOKEN_CACHE.items() if expiry <= now]
-            for token in expired:
-                _GOOGLE_TOKEN_CACHE.pop(token, None)
-        _GOOGLE_TOKEN_CACHE[credential] = (float(claims.get("exp", 0)), claims)
-        return claims
-
-
 def is_tenant_email(email: str) -> bool:
     if email.count("@") != 1:
         return False
@@ -1814,17 +1837,6 @@ def is_tenant_email(email: str) -> bool:
         return False
     tenant = get_tenant_by_id(ACTIVE_COLLEGE_ID.get())
     return bool(tenant and email_domain_matches_tenant(domain, tenant["allowed_email_domain"]))
-
-
-def get_account_by_email(email: str):
-    conn = get_conn()
-    row = db_exec(
-        conn,
-        "SELECT * FROM users WHERE college_id = ? AND LOWER(email) = LOWER(?)",
-        (ACTIVE_COLLEGE_ID.get(), email),
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
 
 
 def get_account_by_id(user_id: str):
@@ -1855,68 +1867,6 @@ def _link_attendance_v2_student(conn, student_id: str):
     linker = globals().get("_attendance_v2_link_student_records")
     if linker:
         linker(conn, ACTIVE_COLLEGE_ID.get(), student_id)
-
-
-def get_account_for_google_claims(claims: dict):
-    email = str(claims.get("email", "")).strip().lower()
-    if claims.get("email_verified") is not True:
-        raise HTTPException(status_code=403, detail="Use a verified college Google account.")
-    if not is_tenant_email(email):
-        raise HTTPException(status_code=403, detail="This Google account domain is not approved for this college.")
-
-    existing_email = get_account_by_email(email)
-    if existing_email:
-        if existing_email.get("role") == "Student":
-            conn = get_conn()
-            try:
-                _link_attendance_v2_student(conn, existing_email["user_id"])
-                conn.commit()
-            finally:
-                conn.close()
-        return existing_email
-
-    local_part = email.split("@", 1)[0].upper()
-    if not re.fullmatch(r"[A-Z0-9._+-]{1,64}", local_part):
-        raise HTTPException(status_code=403, detail="The Google account has an unsupported email identifier.")
-    existing_id = get_account_by_id(local_part)
-    if existing_id:
-        previous_email = str(existing_id.get("email") or "").strip().lower()
-        if existing_id.get("role") != "Student" or (
-            previous_email and not is_tenant_email(previous_email)
-        ):
-            raise HTTPException(status_code=403, detail="This account ID is already assigned. Contact your college administrator.")
-        conn = get_conn()
-        try:
-            db_exec(
-                conn,
-                "UPDATE users SET email = ? WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'",
-                (email, ACTIVE_COLLEGE_ID.get(), local_part),
-            )
-            _link_attendance_v2_student(conn, local_part)
-            conn.commit()
-        finally:
-            conn.close()
-        invalidate_user_cache(local_part)
-        updated_account = get_account_by_id(local_part)
-        if updated_account:
-            return updated_account
-        raise HTTPException(status_code=500, detail="Could not link this verified college email to the student account.")
-
-    conn = get_conn()
-    try:
-        full_name = str(claims.get("name") or local_part).strip()
-        db_exec(
-            conn,
-            "INSERT INTO users (user_id, password, full_name, role, authority_title, institute_id, hostel_block, year, room, phone, email, department, dob, wing, college_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (local_part, "", full_name, "Student", "Verified Student", ACTIVE_COLLEGE_ID.get(), "", "", "", "", email, "", "", "", ACTIVE_COLLEGE_ID.get()),
-        )
-        account = db_exec(conn, "SELECT * FROM users WHERE college_id = ? AND UPPER(user_id) = ?", (ACTIVE_COLLEGE_ID.get(), local_part)).fetchone()
-        _link_attendance_v2_student(conn, local_part)
-        conn.commit()
-    finally:
-        conn.close()
-    invalidate_user_cache(local_part)
-    return dict(account)
 
 
 def account_from_bearer(request: Request):
@@ -1975,10 +1925,43 @@ def _event_feedback_without_identity(feedbacks: List[Dict]) -> List[Dict]:
     ]
 
 
+def module_for_api_path(path: str) -> Optional[str]:
+    if path.startswith(("/api/complaints", "/api/departments")):
+        return "grievances"
+    if path.startswith(("/api/unicore/", "/api/notices")):
+        return "event_radar"
+    if (
+        path.startswith(("/api/attendance/", "/api/biometric/"))
+        or path in {
+            "/api/warden/unlock-biometric",
+            "/api/warden/attendance-config",
+        }
+    ):
+        return "attendance"
+    if path.startswith("/api/attendance-v2/courses") or path == "/api/attendance-v2/student/class-summary":
+        return "class_attendance"
+    if (
+        path.startswith(("/api/attendance-v2/hostel", "/api/attendance-v2/device"))
+        or path == "/api/attendance-v2/student/hostel-history"
+    ):
+        return "hostel_attendance"
+    if path.startswith(("/api/outpasses", "/api/leave")):
+        return "gate_outpass"
+    return None
+
+
+def require_tenant_module(path: str, tenant: dict) -> None:
+    module = module_for_api_path(path)
+    if module and tenant.get("modules", {}).get(module) is not True:
+        raise HTTPException(
+            status_code=404,
+            detail="This module is not enabled for your college.",
+        )
+
+
 @app.middleware("http")
 async def require_authentication(request: Request, call_next):
     open_paths = {
-        "/api/auth/google",
         "/api/auth/login",
         "/api/hostels",
         "/api/hostels/config",
@@ -1989,7 +1972,7 @@ async def require_authentication(request: Request, call_next):
     tenant_token = ACTIVE_COLLEGE_ID.set("SVNIT")
     try:
         college_id = resolve_tenant_id(request)
-        tenant = get_tenant_by_id(college_id)
+        tenant = get_tenant_by_id(college_id, fresh=True)
         if not tenant:
             raise HTTPException(status_code=404, detail="This college is not enabled.")
         ACTIVE_COLLEGE_ID.set(college_id)
@@ -2004,21 +1987,7 @@ async def require_authentication(request: Request, call_next):
         if request.url.path.startswith("/api/founder/tenants"):
             ACTIVE_COLLEGE_ID.set("*")
 
-        module = None
-        if request.url.path.startswith(("/api/complaints", "/api/departments")):
-            module = "grievances"
-        elif request.url.path.startswith(("/api/unicore/", "/api/notices")):
-            module = "event_radar"
-        elif request.url.path.startswith("/api/attendance/") or request.url.path == "/api/warden/unlock-biometric":
-            module = "attendance"
-        elif request.url.path.startswith("/api/attendance-v2/courses") or request.url.path == "/api/attendance-v2/student/class-summary":
-            module = "class_attendance"
-        elif request.url.path.startswith(("/api/attendance-v2/hostel", "/api/attendance-v2/device")) or request.url.path == "/api/attendance-v2/student/hostel-history":
-            module = "hostel_attendance"
-        elif request.url.path.startswith(("/api/outpasses", "/api/leave")):
-            module = "gate_outpass"
-        if module and not tenant["modules"].get(module, False):
-            raise HTTPException(status_code=404, detail="This module is not enabled for your college.")
+        require_tenant_module(request.url.path, tenant)
         if account.get("college_id") != college_id:
             raise HTTPException(status_code=403, detail="This account does not belong to this college.")
 
@@ -2060,9 +2029,9 @@ def list_tenants(request: Request):
         result = []
         for row in rows:
             item = dict(row)
-            item["modules"] = json.loads(row["modules_json"] or "{}")
-            item["modules"].setdefault("class_attendance", False)
-            item["modules"].setdefault("hostel_attendance", False)
+            item["modules"] = normalize_tenant_modules(
+                json.loads(row["modules_json"] or "{}")
+            )
             result.append(item)
         return result
     finally:
@@ -2135,16 +2104,7 @@ def create_tenant(req: TenantCreateReq, request: Request):
         if logo_url.scheme != "https" or not logo_url.netloc:
             raise HTTPException(status_code=400, detail="College logo URL must use HTTPS.")
 
-    modules = {
-        "grievances": True,
-        "mess_pulse": True,
-        "event_radar": True,
-        "gate_outpass": False,
-        "attendance": False,
-        "class_attendance": False,
-        "hostel_attendance": False,
-        "parent_alerts": False,
-    }
+    modules = dict(TENANT_MODULE_DEFAULTS)
     if req.modules is not None:
         unknown = set(req.modules) - set(modules)
         if unknown:
@@ -2244,6 +2204,8 @@ def update_tenant_modules(college_id: str, req: TenantModulesReq, request: Reque
     }
     if set(req.modules) != allowed_modules or not all(isinstance(value, bool) for value in req.modules.values()):
         raise HTTPException(status_code=400, detail="Provide a boolean value for every supported module.")
+    if req.modules["mess_pulse"]:
+        raise HTTPException(status_code=400, detail="Mess Pulse is not available yet.")
     conn = get_conn()
     try:
         cursor = db_exec(
@@ -2678,11 +2640,6 @@ def password_login(req: PasswordLoginReq, request: Request):
     return {"success": True, "user": user, "token": token}
 
 
-@app.post("/api/auth/google")
-def google_login(req: GoogleLoginReq):
-    raise HTTPException(status_code=410, detail="Google sign-in is retired. Use your username and password.")
-
-
 @app.put("/api/auth/password")
 def change_password(req: PasswordChangeReq, request: Request):
     account = request.state.user
@@ -2722,7 +2679,7 @@ def list_staff_accounts(request: Request):
     conn = get_conn()
     try:
         if caller_role == "Founder":
-            query = "SELECT user_id, full_name, role, email, hostel_block, department, password, managed_by, password_reset_required FROM users WHERE college_id = ? AND role = 'Dean'"
+            query = "SELECT user_id, full_name, role, email, phone, hostel_block, department, password, managed_by, password_reset_required FROM users WHERE college_id = ? AND role = 'Dean'"
             params = (ACTIVE_COLLEGE_ID.get(),)
         elif caller_role == "Dean":
             query = """
@@ -3006,11 +2963,14 @@ def _create_or_update_student_account(conn, values: dict) -> dict:
     fields = {
         "hostel_block": str(values.get("hostel_block") or "").strip(),
         "year": str(values.get("year") or "").strip(),
+        "division": str(values.get("division") or "").strip(),
         "room": str(values.get("room") or "").strip(),
         "phone": str(values.get("phone") or "").strip(),
         "wing": str(values.get("wing") or "").strip(),
         "guardian_phone": str(values.get("guardian_phone") or "").strip(),
     }
+    if len(fields["division"]) > 80:
+        raise HTTPException(status_code=400, detail="Enter a division up to 80 characters.")
     existing = db_exec(
         conn,
         "SELECT * FROM users WHERE college_id = ? AND UPPER(user_id) = ?",
@@ -3031,6 +2991,7 @@ def _create_or_update_student_account(conn, values: dict) -> dict:
                 full_name = ?, department = ?,
                 hostel_block = CASE WHEN ? = '' THEN hostel_block ELSE ? END,
                 year = CASE WHEN ? = '' THEN year ELSE ? END,
+                division = CASE WHEN ? = '' THEN division ELSE ? END,
                 room = CASE WHEN ? = '' THEN room ELSE ? END,
                 phone = CASE WHEN ? = '' THEN phone ELSE ? END,
                 wing = CASE WHEN ? = '' THEN wing ELSE ? END,
@@ -3041,6 +3002,7 @@ def _create_or_update_student_account(conn, values: dict) -> dict:
             (
                 password_hash, 1 if temporary_password else 0, full_name, department,
                 fields["hostel_block"], fields["hostel_block"], fields["year"], fields["year"],
+                fields["division"], fields["division"],
                 fields["room"], fields["room"], fields["phone"], fields["phone"],
                 fields["wing"], fields["wing"], fields["guardian_phone"], fields["guardian_phone"],
                 email, email, ACTIVE_COLLEGE_ID.get(), user_id,
@@ -3053,19 +3015,24 @@ def _create_or_update_student_account(conn, values: dict) -> dict:
             """
             INSERT INTO users
                 (user_id, password, full_name, role, authority_title, institute_id, hostel_block,
-                 year, room, phone, email, department, dob, wing, guardian_phone, college_id,
+                 year, division, room, phone, email, department, dob, wing, guardian_phone, college_id,
                  password_reset_required)
-            VALUES (?, ?, ?, 'Student', 'Student', ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, 1)
+            VALUES (?, ?, ?, 'Student', 'Student', ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, 1)
             """,
             (
                 user_id, hash_password(temporary_password), full_name, ACTIVE_COLLEGE_ID.get(),
-                fields["hostel_block"], fields["year"], fields["room"], fields["phone"],
+                fields["hostel_block"], fields["year"], fields["division"], fields["room"], fields["phone"],
                 email, department, fields["wing"], fields["guardian_phone"], ACTIVE_COLLEGE_ID.get(),
             ),
         )
     _link_attendance_v2_student(conn, user_id)
     invalidate_user_cache(user_id)
-    result = {"user_id": user_id, "full_name": full_name, "department": department}
+    result = {
+        "user_id": user_id,
+        "full_name": full_name,
+        "department": department,
+        "division": fields["division"] or (existing["division"] if existing else ""),
+    }
     if temporary_password:
         result["temporary_password"] = temporary_password
     return result
@@ -3081,13 +3048,13 @@ def list_onboarding_students(request: Request, q: str = ""):
         rows = db_exec(
             conn,
             """
-            SELECT user_id, full_name, department, year, hostel_block, wing, room, email,
+            SELECT user_id, full_name, department, year, division, hostel_block, wing, room, email,
                    password, password_reset_required
             FROM users WHERE college_id = ? AND role = 'Student'
-              AND (? = '%%' OR UPPER(user_id) LIKE ? OR UPPER(full_name) LIKE ? OR UPPER(department) LIKE ?)
+              AND (? = '%%' OR UPPER(user_id) LIKE ? OR UPPER(full_name) LIKE ? OR UPPER(department) LIKE ? OR UPPER(division) LIKE ?)
             ORDER BY user_id LIMIT 500
             """,
-            (ACTIVE_COLLEGE_ID.get(), search, search, search, search),
+            (ACTIVE_COLLEGE_ID.get(), search, search, search, search, search),
         ).fetchall()
         return [
             {
@@ -3095,6 +3062,7 @@ def list_onboarding_students(request: Request, q: str = ""):
                 "full_name": row["full_name"],
                 "department": row["department"],
                 "year": row["year"],
+                "division": row["division"],
                 "hostel_block": row["hostel_block"],
                 "wing": row["wing"],
                 "room": row["room"],
@@ -4431,7 +4399,7 @@ def student_biometric_record(conn, user_id: str, for_update: bool = False):
         SELECT user_id, full_name, role, hostel_block, wing, room, phone,
                biometric_status, biometric_cred_id, device_hardware_id,
                device_token_hash, face_reference_encrypted, face_embedding_encrypted,
-               device_public_key, face_enrolled_at,
+               face_embedding_model, device_public_key, face_enrolled_at,
                enroll_window_until
         FROM users
         WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'{suffix}
@@ -4465,14 +4433,26 @@ def get_student_biometric_status(request: Request):
             "biometric_status": student["biometric_status"],
             "biometric_cred_id": student["biometric_cred_id"],
             "enroll_window_until": int(student["enroll_window_until"] or 0),
-            "face_enrolled": bool(student["face_reference_encrypted"]),
-            "embedding_enrolled": bool(student["face_embedding_encrypted"]),
+            "face_enrolled": bool(
+                student["face_reference_encrypted"]
+                and student["face_embedding_encrypted"]
+                and student["face_embedding_model"] == FACE_EMBEDDING_MODEL_VERSION
+            ),
+            "embedding_enrolled": bool(
+                student["face_embedding_encrypted"]
+                and student["face_embedding_model"] == FACE_EMBEDDING_MODEL_VERSION
+            ),
         }
     finally:
         conn.close()
 
 
-def _decode_face_image(image_base64: str):
+def _decode_face_image(
+    image_base64: str,
+    minimum_size: int = 160,
+    maximum_size: int = 4096,
+    require_square: bool = False,
+):
     encoded_image = image_base64.strip()
     if encoded_image.startswith("data:"):
         header, separator, encoded_image = encoded_image.partition(",")
@@ -4499,8 +4479,23 @@ def _decode_face_image(image_base64: str):
     if image is None:
         raise HTTPException(status_code=400, detail="The uploaded face image could not be decoded.")
     height, width = image.shape[:2]
-    if width < 160 or height < 160 or width > 4096 or height > 4096:
-        raise HTTPException(status_code=400, detail="Face images must be between 160 and 4096 pixels per side.")
+    if (
+        width < minimum_size
+        or height < minimum_size
+        or width > maximum_size
+        or height > maximum_size
+        or (require_square and width != height)
+    ):
+        dimensions = (
+            f"{minimum_size}"
+            if minimum_size == maximum_size
+            else f"{minimum_size} and {maximum_size}"
+        )
+        shape = "square and " if require_square else ""
+        raise HTTPException(
+            status_code=400,
+            detail=f"Face images must be {shape}between {dimensions} pixels per side.",
+        )
     return image
 
 
@@ -4538,34 +4533,63 @@ def _embedding_cipher():
     return _face_reference_cipher()
 
 
-def _compute_enrollment_embedding(image_base64: str) -> str:
-    image = None
-    embedding = None
+@lru_cache(maxsize=1)
+def _face_embedding_session():
     try:
-        image = _decode_face_image(image_base64)
-        from deepface import DeepFace
-        result = DeepFace.represent(
-            img_path=image,
-            model_name="Facenet",
-            enforce_detection=True,
-            normalization="base",
-        )
-        candidate = result[0]["embedding"] if isinstance(result, list) else result["embedding"]
-        import numpy as np
-        vector = np.asarray(candidate, dtype=np.float32).reshape(-1)
-        if vector.size != 128 or not np.isfinite(vector).all():
-            raise HTTPException(status_code=400, detail="The enrollment model did not produce a valid 128D face vector.")
-        norm = float(np.linalg.norm(vector))
-        if not 0.9 <= norm <= 1.1:
-            vector = vector / norm
-        return _embedding_cipher().encrypt(vector.tobytes()).decode("ascii")
+        import onnxruntime as ort
     except ImportError as error:
-        raise HTTPException(status_code=503, detail="Enrollment face model dependencies are unavailable.") from error
-    except (KeyError, TypeError, ValueError, ZeroDivisionError) as error:
-        raise HTTPException(status_code=400, detail="A single usable face is required for enrollment.") from error
+        raise HTTPException(status_code=503, detail="The shared face embedding runtime is unavailable.") from error
+    model_path = os.path.abspath(os.getenv(
+        "FACE_EMBEDDING_MODEL_PATH",
+        os.path.join(os.path.dirname(__file__), "..", "frontend", "public", "models", "mobilefacenet.onnx"),
+    ))
+    if not os.path.isfile(model_path):
+        raise HTTPException(status_code=503, detail="The shared MobileFaceNet model is unavailable.")
+    try:
+        session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+    except Exception as error:
+        logger.exception("Could not load the shared MobileFaceNet model at %s", model_path)
+        raise HTTPException(status_code=503, detail="The shared MobileFaceNet model could not be loaded.") from error
+    inputs = session.get_inputs()
+    outputs = session.get_outputs()
+    if (
+        len(inputs) != 2
+        or any(tuple(input_meta.shape) != (1, 3, 112, 112) for input_meta in inputs)
+        or len(outputs) != 1
+        or tuple(outputs[0].shape) != (2, 128)
+    ):
+        raise HTTPException(status_code=503, detail="The shared MobileFaceNet model has an unsupported format.")
+    return session
+
+
+def _compute_enrollment_embedding(aligned_image_base64: str) -> str:
+    image = vector = None
+    try:
+        image = _decode_face_image(
+            aligned_image_base64,
+            minimum_size=112,
+            maximum_size=112,
+            require_square=True,
+        )
+        import cv2
+        import numpy as np
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        tensor = np.transpose(rgb, (2, 0, 1))[None, ...]
+        session = _face_embedding_session()
+        feeds = {input_meta.name: tensor for input_meta in session.get_inputs()}
+        outputs = session.run([session.get_outputs()[0].name], feeds)
+        embeddings = np.asarray(outputs[0], dtype=np.float32)
+        if embeddings.shape != (2, 128) or not np.isfinite(embeddings).all():
+            raise HTTPException(status_code=503, detail="The enrollment model did not produce valid 128D vectors.")
+        vector = embeddings[0].copy()
+        norm = float(np.linalg.norm(vector))
+        if not math.isfinite(norm) or norm <= 0:
+            raise HTTPException(status_code=400, detail="A usable aligned face crop is required for enrollment.")
+        vector /= norm
+        return _embedding_cipher().encrypt(vector.tobytes()).decode("ascii")
     finally:
         image = None
-        embedding = None
+        vector = None
 
 
 def _verify_embedding(embedding, encrypted_reference: str) -> bool:
@@ -4664,6 +4688,7 @@ def unlock_student_biometric(req: BiometricUnlockReq, request: Request):
             SET biometric_status = 'Enrollment Unlocked', biometric_cred_id = '',
                 device_hardware_id = '', device_token_hash = '',
                 face_reference_encrypted = '', face_embedding_encrypted = '',
+                face_embedding_model = '',
                 device_public_key = '', face_enrolled_at = '', enroll_window_until = ?
             WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'
             """,
@@ -4702,8 +4727,9 @@ def register_device_binding(req: DeviceBindingRegisterReq, request: Request):
     if not isinstance(public_key, ec.EllipticCurvePublicKey) or public_key.curve.name != "secp256r1":
         raise HTTPException(status_code=400, detail="Only a P-256 device public key is supported.")
     encrypted_reference = _encrypt_face_reference(req.reference_image_base64)
-    encrypted_embedding = _compute_enrollment_embedding(req.reference_image_base64)
+    encrypted_embedding = _compute_enrollment_embedding(req.embedding_image_base64)
     req.reference_image_base64 = ""
+    req.embedding_image_base64 = ""
     conn = get_conn()
     try:
         student = student_biometric_record(conn, account["user_id"], for_update=True)
@@ -4717,7 +4743,8 @@ def register_device_binding(req: DeviceBindingRegisterReq, request: Request):
             SET biometric_status = 'Locked', device_token_hash = ?,
                 biometric_cred_id = '', device_hardware_id = '',
                 face_reference_encrypted = ?, face_embedding_encrypted = ?,
-                device_public_key = ?, face_enrolled_at = ?, enroll_window_until = 0
+                face_embedding_model = ?, device_public_key = ?,
+                face_enrolled_at = ?, enroll_window_until = 0
             WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'
               AND biometric_status = 'Enrollment Unlocked' AND enroll_window_until >= ?
             """,
@@ -4725,6 +4752,7 @@ def register_device_binding(req: DeviceBindingRegisterReq, request: Request):
                 token_hash,
                 encrypted_reference,
                 encrypted_embedding,
+                FACE_EMBEDDING_MODEL_VERSION,
                 req.device_public_key,
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 ACTIVE_COLLEGE_ID.get(),
@@ -4770,7 +4798,8 @@ def revoke_and_delete_biometric(request: Request):
             SET biometric_status = 'Not Enrolled',
                 biometric_cred_id = '', device_hardware_id = '',
                 device_token_hash = '', face_reference_encrypted = '',
-                face_embedding_encrypted = '', device_public_key = '',
+                face_embedding_encrypted = '', face_embedding_model = '',
+                device_public_key = '',
                 face_enrolled_at = '', enroll_window_until = 0,
                 consent_withdrawn_at = ?
             WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'
@@ -5158,6 +5187,11 @@ def verify_identity_and_mark_attendance(req: DeviceBeaconMarkReq, request: Reque
         if not hostel:
             raise HTTPException(status_code=404, detail="Your hostel does not have attendance settings.")
         verify_device_beacon(student, req, hostel)
+        if student["face_embedding_model"] != FACE_EMBEDDING_MODEL_VERSION:
+            raise HTTPException(
+                status_code=409,
+                detail="Face enrollment must be refreshed for the current model. Ask your Warden to unlock enrollment.",
+            )
         if not student["face_embedding_encrypted"]:
             raise HTTPException(status_code=403, detail="Enroll face verification during the Warden-authorized setup window.")
         challenge = db_fetchone(

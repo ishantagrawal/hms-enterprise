@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { verifyLocalBlinkGesture } from '../utils/faceBiometrics';
-import { captureLivenessEmbedding } from '../utils/faceEmbedding';
+import { captureLivenessEmbedding, encodeAlignedFaceReference } from '../utils/faceEmbedding';
 import './LocalFaceCheckModal.css';
 
 export default function LocalFaceCheckModal({ onResult, purpose = 'attendance', challenge }) {
@@ -55,9 +55,12 @@ export default function LocalFaceCheckModal({ onResult, purpose = 'attendance', 
           const imageBase64 = canvas.toDataURL('image/jpeg', 0.78);
           canvas.width = 0;
           canvas.height = 0;
+          const embeddingImageBase64 = purpose === 'enrollment'
+            ? encodeAlignedFaceReference(videoElement, liveness)
+            : undefined;
           stream.getTracks().forEach((track) => track.stop());
           videoElement.srcObject = null;
-          onResultRef.current({ success: true, imageBase64 });
+          onResultRef.current({ success: true, imageBase64, embeddingImageBase64 });
         }
       } catch (error) {
         if (active && error?.name !== 'AbortError') {
@@ -78,12 +81,20 @@ export default function LocalFaceCheckModal({ onResult, purpose = 'attendance', 
   return (
     <div className="ptm-face-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="ptm-face-check-title">
       <section className="ptm-face-modal">
-        <h2 id="ptm-face-check-title">{purpose === 'enrollment' ? 'Enroll face verification' : 'Verify your identity'}</h2>
+        <h2 id="ptm-face-check-title">
+          {purpose === 'enrollment' ? 'Enroll face verification' : purpose === 'return' ? 'Confirm your return' : 'Verify your identity'}
+        </h2>
         <p>
-          Center your face and blink both eyes once. {purpose === 'attendance' ? 'Your 128D face embedding stays on this device.' : 'One enrollment frame is sent over the secure connection for'}
+          Center your face and blink both eyes once. {purpose === 'attendance'
+            ? 'Live face frames stay on this device; a 128D embedding is sent securely for 1:1 verification.'
+            : purpose === 'enrollment'
+              ? 'One enrollment frame and its aligned crop are sent securely for'
+              : 'A live face frame is sent over the secure connection for'}
           {purpose === 'enrollment'
-            ? ' enrollment and stored encrypted for future 1:1 checks.'
-            : ' a 1:1 check against your encrypted enrollment reference; the live frame is not retained.'}
+            ? ' enrollment; the frame and derived 128D reference are stored encrypted.'
+            : purpose === 'return'
+              ? ' server-side verification against your encrypted enrollment reference; the live frame is not retained.'
+              : ' a 1:1 check against your encrypted enrollment reference; the live frame is not retained.'}
         </p>
         <div className="ptm-face-camera-ring">
           <video ref={videoRef} autoPlay muted playsInline aria-label="Live camera preview for local face check" />

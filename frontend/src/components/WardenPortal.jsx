@@ -6,6 +6,7 @@ import { WardenAttendancePanel, WardenLeavePassPanel } from './CampusSecurity';
 import { WardenAttendance as WardenAttendanceV2 } from './AttendanceOnlyPortals';
 import { ListRowSkeleton } from './SkeletonLoader';
 import usePortalBackNavigation from '../hooks/usePortalBackNavigation';
+import { escapeHtml } from '../utils/html';
 
 async function readResponse(response, fallback = 'Request failed') {
   const data = await response.json().catch(() => ({}));
@@ -17,10 +18,41 @@ function currentEpochSeconds() {
   return Math.floor(Date.now() / 1000);
 }
 
+function WardenAttendanceWorkspace({ apiUrl, user, modules }) {
+  const showNightly = modules?.attendance === true;
+  const showLiveWing = modules?.hostel_attendance === true;
+  const [mode, setMode] = useState(showNightly ? 'nightly' : 'live');
+  const modes = [
+    ...(showNightly ? [{ id: 'nightly', label: 'Nightly' }] : []),
+    ...(showLiveWing ? [{ id: 'live', label: 'Live Wing' }] : [])
+  ];
+  const activeMode = modes.some((item) => item.id === mode) ? mode : modes[0]?.id;
+
+  return (
+    <div>
+      {modes.length > 1 && (
+        <nav className="av-tabs" aria-label="Hostel attendance modes">
+          {modes.map((item) => (
+            <button key={item.id} className={activeMode === item.id ? 'is-active' : ''} onClick={() => setMode(item.id)}>
+              {item.label}
+            </button>
+          ))}
+        </nav>
+      )}
+      {activeMode === 'nightly' && showNightly && <WardenAttendancePanel apiUrl={apiUrl} user={user} />}
+      {activeMode === 'live' && showLiveWing && <WardenAttendanceV2 apiUrl={apiUrl} modules={modules} />}
+    </div>
+  );
+}
+
 export default function WardenPortal({ user, apiUrl, modules }) {
   const safeUser = user || {};
   const hostelBlock = safeUser.hostel_block || '';
-  const showAttendanceV2 = Boolean(modules?.class_attendance || modules?.hostel_attendance);
+  const showGrievances = modules?.grievances === true;
+  const showAttendance = modules?.attendance === true;
+  const showHostelAttendance = modules?.hostel_attendance === true;
+  const showAttendanceV2 = modules?.class_attendance === true || modules?.hostel_attendance === true;
+  const showGateOutpass = modules?.gate_outpass === true;
   const sKey = `warden_students_${hostelBlock}`;
   const cKey = `warden_complaints_${hostelBlock}`;
   const dKey = `warden_depts_${hostelBlock}`;
@@ -340,13 +372,13 @@ export default function WardenPortal({ user, apiUrl, modules }) {
       .map(
         (c) => `
         <tr>
-          <td><strong>${c.ticket_id}</strong><br/><small>${c.created_at || ''}</small></td>
-          <td>${c.wing || '-'} / ${c.room || '-'}</td>
-          <td>${c.student_name || c.student_id || '-'}</td>
-          <td>${c.student_phone || '-'}</td>
-          <td>${c.routed_to || c.category || '-'}</td>
-          <td><strong>${c.summary}</strong><br/><small>${c.description || ''}</small></td>
-          <td>${c.status}</td>
+          <td><strong>${escapeHtml(c.ticket_id)}</strong><br/><small>${escapeHtml(c.created_at || '')}</small></td>
+          <td>${escapeHtml(c.wing || '-')} / ${escapeHtml(c.room || '-')}</td>
+          <td>${escapeHtml(c.student_name || c.student_id || '-')}</td>
+          <td>${escapeHtml(c.student_phone || '-')}</td>
+          <td>${escapeHtml(c.routed_to || c.category || '-')}</td>
+          <td><strong>${escapeHtml(c.summary)}</strong><br/><small>${escapeHtml(c.description || '')}</small></td>
+          <td>${escapeHtml(c.status)}</td>
         </tr>`
       )
       .join('');
@@ -354,7 +386,7 @@ export default function WardenPortal({ user, apiUrl, modules }) {
     win.document.write(`
       <html>
         <head>
-          <title>${hostelBlock} - Official Complaint Register</title>
+          <title>${escapeHtml(hostelBlock)} - Official Complaint Register</title>
           <style>
             @page { size: A4 landscape; margin: 12mm; }
             body { font-family: Arial, sans-serif; color: #111; }
@@ -366,8 +398,8 @@ export default function WardenPortal({ user, apiUrl, modules }) {
           </style>
         </head>
         <body>
-          <h2>${hostelBlock} — Physical Maintenance & Grievance Register</h2>
-          <p>Wing Filter: ${regWing} | Category Filter: ${regCategory} | Total Records: ${filteredRegister.length}</p>
+          <h2>${escapeHtml(hostelBlock)} — Physical Maintenance & Grievance Register</h2>
+          <p>Wing Filter: ${escapeHtml(regWing)} | Category Filter: ${escapeHtml(regCategory)} | Total Records: ${filteredRegister.length}</p>
           <table>
             <thead>
               <tr>
@@ -400,6 +432,13 @@ export default function WardenPortal({ user, apiUrl, modules }) {
     else summary.absent += 1;
     return summary;
   }, { present: 0, leave: 0, absent: 0 });
+  const unavailablePages = [
+    !showGrievances && ['complaints', 'ticket_detail', 'register'].includes(page),
+    !showAttendance && ['biometric_attendance', 'attendance'].includes(page),
+    !showAttendanceV2 && page === 'attendance_v2',
+    !(showAttendance || showHostelAttendance) && page === 'attendance_workspace',
+    !showGateOutpass && page === 'leave_passes',
+  ];
 
   return (
     <div className="ptm-shell-layout">
@@ -408,13 +447,14 @@ export default function WardenPortal({ user, apiUrl, modules }) {
         <button className={`ptm-side-btn ${page === 'add_student' ? 'active' : ''}`} onClick={() => setPage('add_student')}>➕ Add / Upload Students</button>
         <button className={`ptm-side-btn ${page === 'directory' || page === 'edit_student' ? 'active' : ''}`} onClick={() => setPage('directory')}>🎓 Student Directory ({students.length})</button>
         <button className={`ptm-side-btn ${page === 'profile_requests' ? 'active' : ''}`} onClick={() => setPage('profile_requests')}>🪪 Profile Requests ({profileRequestCount})</button>
-        {modules?.gate_outpass && <button className={`ptm-side-btn ${page === 'leave_passes' ? 'active' : ''}`} onClick={() => setPage('leave_passes')}>🪪 Leave Passes</button>}
-        {modules?.attendance && <button className={`ptm-side-btn ${page === 'biometric_attendance' ? 'active' : ''}`} onClick={() => setPage('biometric_attendance')}>🫆 Device Lock & Attendance</button>}
-        {modules?.attendance && <button className={`ptm-side-btn ${page === 'attendance' ? 'active' : ''}`} onClick={() => setPage('attendance')}>📅 Night Roll Call</button>}
-        {showAttendanceV2 && <button className={`ptm-side-btn ${page === 'attendance_v2' ? 'active' : ''}`} onClick={() => setPage('attendance_v2')}>📅 Attendance & Devices</button>}
+        {showGateOutpass && <button className={`ptm-side-btn ${page === 'leave_passes' ? 'active' : ''}`} onClick={() => setPage('leave_passes')}>🪪 Leave Passes</button>}
+        {showAttendance && <button className={`ptm-side-btn ${page === 'biometric_attendance' ? 'active' : ''}`} onClick={() => setPage('biometric_attendance')}>🫆 Device Lock & Attendance</button>}
+        {(showAttendance || showHostelAttendance) && <button className={`ptm-side-btn ${page === 'attendance_workspace' ? 'active' : ''}`} onClick={() => setPage('attendance_workspace')}>📅 Hostel Attendance</button>}
+        {showAttendance && <button className={`ptm-side-btn ${page === 'attendance' ? 'active' : ''}`} onClick={() => setPage('attendance')}>🗂️ Scheduled Night Attendance (legacy)</button>}
+        {showAttendanceV2 && <button className={`ptm-side-btn ${page === 'attendance_v2' ? 'active' : ''}`} onClick={() => setPage('attendance_v2')}>🗂️ Live Wing Roll Call (legacy)</button>}
         <button className={`ptm-side-btn ${page === 'wings' ? 'active' : ''}`} onClick={() => setPage('wings')}>🛠️ Hostel Maintenance Wings</button>
-        <button className={`ptm-side-btn ${page === 'complaints' || page === 'ticket_detail' ? 'active' : ''}`} onClick={() => setPage('complaints')}>💬 Hostel Complaints ({complaints.length})</button>
-        <button className={`ptm-side-btn ${page === 'register' ? 'active' : ''}`} onClick={() => setPage('register')}>📋 Complaint Register</button>
+        {showGrievances && <button className={`ptm-side-btn ${page === 'complaints' || page === 'ticket_detail' ? 'active' : ''}`} onClick={() => setPage('complaints')}>💬 Hostel Complaints ({complaints.length})</button>}
+        {showGrievances && <button className={`ptm-side-btn ${page === 'register' ? 'active' : ''}`} onClick={() => setPage('register')}>📋 Complaint Register</button>}
       </aside>
 
       <div className="ptm-page-wrap">
@@ -424,7 +464,13 @@ export default function WardenPortal({ user, apiUrl, modules }) {
           <ListRowSkeleton count={5} />
         ) : (
           <>
-            {modules?.gate_outpass && page === 'leave_passes' && (
+            {unavailablePages.some(Boolean) && (
+              <div className="ptm-card" role="status">
+                <div className="ptm-section-title">This service is not enabled for your college.</div>
+                <div className="ptm-list-sub">Contact your college administrator if you need access.</div>
+              </div>
+            )}
+            {showGateOutpass && page === 'leave_passes' && (
               <WardenLeavePassPanel
                 apiUrl={apiUrl}
                 user={safeUser}
@@ -434,7 +480,7 @@ export default function WardenPortal({ user, apiUrl, modules }) {
                 onAttendanceLogsChange={(next) => updateAttendanceLogs(next, true)}
               />
             )}
-            {modules?.attendance && page === 'biometric_attendance' && (
+            {showAttendance && page === 'biometric_attendance' && (
               <div>
                 <div className="ptm-drill-header"><h1 className="ptm-page-title">Device Lock & Attendance · {hostelBlock}</h1></div>
                 <div className="ptm-card">
@@ -480,8 +526,11 @@ export default function WardenPortal({ user, apiUrl, modules }) {
                 </div>
               </div>
             )}
-            {modules?.attendance && page === 'attendance' && <WardenAttendancePanel apiUrl={apiUrl} user={safeUser} />}
+            {showAttendance && page === 'attendance' && <WardenAttendancePanel apiUrl={apiUrl} user={safeUser} />}
             {showAttendanceV2 && page === 'attendance_v2' && <WardenAttendanceV2 apiUrl={apiUrl} modules={modules} />}
+            {(showAttendance || showHostelAttendance) && page === 'attendance_workspace' && (
+              <WardenAttendanceWorkspace apiUrl={apiUrl} user={safeUser} modules={modules} />
+            )}
 
             {page === 'home' && (
               <div>
@@ -495,23 +544,27 @@ export default function WardenPortal({ user, apiUrl, modules }) {
                     <button className="ptm-mini-btn">Manage Directory →</button>
                   </div>
 
-                  <div className="ptm-mini-card" onClick={() => setPage('complaints')}>
-                    <div className="ptm-row-between">
-                      <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>Active Grievances</span>
-                      <span>🛠️</span>
-                    </div>
-                    <div style={{ fontSize: '22px', fontWeight: 800, color: '#D97706', marginTop: '4px' }}>{pendingCount} Open</div>
-                    <button className="ptm-mini-btn">View All ({complaints.length}) →</button>
-                  </div>
+                  {showGrievances && (
+                    <>
+                      <div className="ptm-mini-card" onClick={() => setPage('complaints')}>
+                        <div className="ptm-row-between">
+                          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>Active Grievances</span>
+                          <span>🛠️</span>
+                        </div>
+                        <div style={{ fontSize: '22px', fontWeight: 800, color: '#D97706', marginTop: '4px' }}>{pendingCount} Open</div>
+                        <button className="ptm-mini-btn">View All ({complaints.length}) →</button>
+                      </div>
 
-                  <div className="ptm-mini-card" onClick={() => setPage('register')}>
-                    <div className="ptm-row-between">
-                      <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>Physical Audit PDF</span>
-                      <span>📋</span>
-                    </div>
-                    <div style={{ fontSize: '20px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>Print Register</div>
-                    <button className="ptm-mini-btn">Export Landscape PDF →</button>
-                  </div>
+                      <div className="ptm-mini-card" onClick={() => setPage('register')}>
+                        <div className="ptm-row-between">
+                          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>Physical Audit PDF</span>
+                          <span>📋</span>
+                        </div>
+                        <div style={{ fontSize: '20px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>Print Register</div>
+                        <button className="ptm-mini-btn">Export Landscape PDF →</button>
+                      </div>
+                    </>
+                  )}
                   <div className="ptm-mini-card" onClick={() => setPage('profile_requests')}>
                     <div className="ptm-row-between">
                       <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>Profile Changes</span>
@@ -529,14 +582,18 @@ export default function WardenPortal({ user, apiUrl, modules }) {
                       <div className="ptm-icon-circle">🎓</div>
                       <span className="ptm-icon-label">Student Directory</span>
                     </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('complaints')}>
-                      <div className="ptm-icon-circle">💬</div>
-                      <span className="ptm-icon-label">Hostel Complaints</span>
-                    </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('register')}>
-                      <div className="ptm-icon-circle">📋</div>
-                      <span className="ptm-icon-label">Complaint Register</span>
-                    </button>
+                    {showGrievances && (
+                      <>
+                        <button className="ptm-icon-tile" onClick={() => setPage('complaints')}>
+                          <div className="ptm-icon-circle">💬</div>
+                          <span className="ptm-icon-label">Hostel Complaints</span>
+                        </button>
+                        <button className="ptm-icon-tile" onClick={() => setPage('register')}>
+                          <div className="ptm-icon-circle">📋</div>
+                          <span className="ptm-icon-label">Complaint Register</span>
+                        </button>
+                      </>
+                    )}
                     <button className="ptm-icon-tile" onClick={() => setPage('wings')}>
                       <div className="ptm-icon-circle">🛠️</div>
                       <span className="ptm-icon-label">Maintenance Wings</span>
@@ -627,7 +684,7 @@ export default function WardenPortal({ user, apiUrl, modules }) {
                           <div className="ptm-list-main">
                             <div className="ptm-list-title">{st.full_name} ({st.user_id})</div>
                             <div className="ptm-list-sub">
-                              🚪 {st.wing || 'Wing'} • Room {st.room || '-'} • {st.year || '1st Year'} • {st.department || 'SVNIT'} • 📞 {st.phone || 'N/A'}
+                              🚪 {st.wing || 'Wing'} • Room {st.room || '-'} • {st.year || '1st Year'} • {st.department || 'Department not set'} • 📞 {st.phone || 'N/A'}
                             </div>
                             <div className="ptm-list-sub">{st.biometric_status === 'Locked' ? '🔒 Device token enrolled' : `⚠️ ${st.biometric_status || 'Unenrolled'}`}</div>
                           </div>
@@ -770,7 +827,7 @@ export default function WardenPortal({ user, apiUrl, modules }) {
               </div>
             )}
 
-            {page === 'complaints' && (
+            {showGrievances && page === 'complaints' && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
@@ -802,7 +859,7 @@ export default function WardenPortal({ user, apiUrl, modules }) {
               </div>
             )}
 
-            {page === 'ticket_detail' && selectedTicket && (
+            {showGrievances && page === 'ticket_detail' && selectedTicket && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('complaints')}>←</button>
@@ -834,7 +891,7 @@ export default function WardenPortal({ user, apiUrl, modules }) {
               </div>
             )}
 
-            {page === 'register' && (
+            {showGrievances && page === 'register' && (
               <div>
                 <div className="ptm-drill-header">
                   <span className="ptm-tag-pill">{hostelBlock} • PHYSICAL REGISTER</span>
@@ -906,11 +963,11 @@ export default function WardenPortal({ user, apiUrl, modules }) {
       <nav className="ptm-bottom-nav">
         <button className={`ptm-bnav-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}><span>🏠</span><span>Home</span></button>
         <button className={`ptm-bnav-btn ${page === 'directory' ? 'active' : ''}`} onClick={() => setPage('directory')}><span>🎓</span><span>Directory</span></button>
-        <button className={`ptm-bnav-btn ${page === 'complaints' ? 'active' : ''}`} onClick={() => setPage('complaints')}><span>💬</span><span>Tickets</span></button>
-        {modules?.attendance && <button className={`ptm-bnav-btn ${page === 'biometric_attendance' ? 'active' : ''}`} onClick={() => setPage('biometric_attendance')}><span>🫆</span><span>Device Lock</span></button>}
-        {showAttendanceV2 && <button className={`ptm-bnav-btn ${page === 'attendance_v2' ? 'active' : ''}`} onClick={() => setPage('attendance_v2')}><span>📅</span><span>Attendance</span></button>}
-        {modules?.gate_outpass && <button className={`ptm-bnav-btn ${page === 'leave_passes' ? 'active' : ''}`} onClick={() => setPage('leave_passes')}><span>🪪</span><span>Leave Pass</span></button>}
-        <button className={`ptm-bnav-btn ${page === 'register' ? 'active' : ''}`} onClick={() => setPage('register')}><span>📋</span><span>Register</span></button>
+        {showGrievances && <button className={`ptm-bnav-btn ${page === 'complaints' ? 'active' : ''}`} onClick={() => setPage('complaints')}><span>💬</span><span>Tickets</span></button>}
+        {showAttendance && <button className={`ptm-bnav-btn ${page === 'biometric_attendance' ? 'active' : ''}`} onClick={() => setPage('biometric_attendance')}><span>🫆</span><span>Device Lock</span></button>}
+        {showAttendanceV2 && <button className={`ptm-bnav-btn ${page === 'attendance_v2' ? 'active' : ''}`} onClick={() => setPage('attendance_v2')}><span>📅</span><span>Live Roll Call</span></button>}
+        {showGateOutpass && <button className={`ptm-bnav-btn ${page === 'leave_passes' ? 'active' : ''}`} onClick={() => setPage('leave_passes')}><span>🪪</span><span>Leave Pass</span></button>}
+        {showGrievances && <button className={`ptm-bnav-btn ${page === 'register' ? 'active' : ''}`} onClick={() => setPage('register')}><span>📋</span><span>Register</span></button>}
       </nav>
     </div>
   );
