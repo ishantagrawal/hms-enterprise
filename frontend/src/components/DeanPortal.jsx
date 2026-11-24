@@ -1,15 +1,24 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { apiFetch } from '../api';
 import { getCached, setCached } from '../cache';
-import StaffAccountAccess from './StaffAccountAccess';
 import DeanStaffManager from './DeanStaffManager';
+import { DeanAttendanceOverview } from './AttendanceOnlyPortals';
 import { GridCardSkeleton } from './SkeletonLoader';
 import usePortalBackNavigation from '../hooks/usePortalBackNavigation';
 
-export default function DeanPortal({ apiUrl, user }) {
+export default function DeanPortal({ apiUrl, user, modules = {} }) {
   const [page, setPage] = useState('home');
   usePortalBackNavigation(page, setPage);
   const [dataLoading, setDataLoading] = useState(false);
+  const showCampusLife = Boolean(modules.event_radar);
+  const showGrievances = Boolean(modules.grievances);
+  const showAttendance = Boolean(modules.class_attendance || modules.hostel_attendance);
+  const showGateSecurity = Boolean(modules.gate_outpass);
+  const reportScopes = useMemo(() => [
+    ...(showCampusLife && showGrievances ? [{ id: 'All', label: 'Complete audit (clubs & grievances)' }] : []),
+    ...(showCampusLife ? [{ id: 'Events', label: 'Clubs & events only' }] : []),
+    ...(showGrievances ? [{ id: 'Grievances', label: 'Grievances only' }] : [])
+  ], [showCampusLife, showGrievances]);
 
   // Instant Persistent Cache Initialization
   const [clubs, setClubs] = useState(() => getCached('dean_clubs') || []);
@@ -70,6 +79,9 @@ export default function DeanPortal({ apiUrl, user }) {
   const [reportYear, setReportYear] = useState('2026');
   const [reportClub, setReportClub] = useState('All');
   const [pdfScope, setPdfScope] = useState('All');
+  const selectedReportScope = reportScopes.some((scope) => scope.id === pdfScope)
+    ? pdfScope
+    : reportScopes[0]?.id || 'All';
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
 
@@ -467,13 +479,13 @@ export default function DeanPortal({ apiUrl, user }) {
               <p>Official SAC Club Events, Hostel Grievance & Resident Audit Report • Generated via svnitcampus.in</p>
             </div>
             <div style="text-align:right;">
-              <p><strong>Scope:</strong> ${pdfScope} | <strong>Club Filter:</strong> ${reportClub} | <strong>Year:</strong> ${reportYear}</p>
+              <p><strong>Scope:</strong> ${selectedReportScope} | <strong>Club Filter:</strong> ${reportClub} | <strong>Year:</strong> ${reportYear}</p>
               <p><strong>Active Clubs:</strong> ${clubs.length} | <strong>Hostel Residents:</strong> ${studentsCount} | <strong>Total Tickets:</strong> ${complaints.length}</p>
             </div>
           </div>
 
           ${
-            pdfScope === 'All' || pdfScope === 'Events'
+            selectedReportScope === 'All' || selectedReportScope === 'Events'
               ? `
               <h3>1. SAC Club Events & Requisitions (${filteredEvents.length} Records)</h3>
               <table>
@@ -494,7 +506,7 @@ export default function DeanPortal({ apiUrl, user }) {
           }
 
           ${
-            pdfScope === 'All' || pdfScope === 'Grievances'
+            selectedReportScope === 'All' || selectedReportScope === 'Grievances'
               ? `
               <h3>2. Campus-Wide Hostel Maintenance Grievances (${complaints.length} Total)</h3>
               <table>
@@ -543,50 +555,37 @@ export default function DeanPortal({ apiUrl, user }) {
     <div className="ptm-shell-layout">
       {/* Desktop Left Sidebar */}
       <aside className="ptm-sidebar-desktop">
+        <div className="ptm-nav-group-title">Overview</div>
         <button className={`ptm-side-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}>
           <span>🏠 Dashboard Home</span>
         </button>
-        <button className={`ptm-side-btn ${page === 'clubs_list' || page === 'club_detail' ? 'active' : ''}`} onClick={() => setPage('clubs_list')}>
-          <span>🎭 Clubs Directory</span>
-          <span>{clubs.length}</span>
-        </button>
-        <button className={`ptm-side-btn ${page === 'event_approvals' ? 'active' : ''}`} onClick={() => setPage('event_approvals')}>
-          <span>⚡ Approve Events</span>
-          {pendingEvents.length > 0 && (
-            <span className="ptm-status-badge" style={{ background: '#FEF3C7', color: '#B45309' }}>
-              {pendingEvents.length}
-            </span>
-          )}
-        </button>
-        <button className={`ptm-side-btn ${page === 'notice_approvals' || page === 'notice_detail' ? 'active' : ''}`} onClick={() => setPage('notice_approvals')}>
-          <span>📢 Approve Notices</span>
-          {pendingNotices.length > 0 && (
-            <span className="ptm-status-badge" style={{ background: '#FEF3C7', color: '#B45309' }}>
-              {pendingNotices.length}
-            </span>
-          )}
-        </button>
-        <button className={`ptm-side-btn ${page === 'calendar' ? 'active' : ''}`} onClick={() => setPage('calendar')}>
-          <span>🗓️ Event Calendar</span>
-        </button>
-        <button className={`ptm-side-btn ${page === 'create_club' ? 'active' : ''}`} onClick={() => setPage('create_club')}>
-          <span>➕ Create New Club</span>
-        </button>
-        <button className={`ptm-side-btn ${page === 'central_depts' ? 'active' : ''}`} onClick={() => setPage('central_depts')}>
-          <span>🌐 Central Departments</span>
-        </button>
+        {showCampusLife && <>
+          <div className="ptm-nav-group-title">Clubs & campus life</div>
+          <button className={`ptm-side-btn ${page === 'clubs_list' || page === 'club_detail' ? 'active' : ''}`} onClick={() => setPage('clubs_list')}>
+            <span>🎭 Clubs Directory</span><span>{clubs.length}</span>
+          </button>
+          <button className={`ptm-side-btn ${page === 'event_approvals' || page === 'event_detail' ? 'active' : ''}`} onClick={() => setPage('event_approvals')}>
+            <span>⚡ Approve Events</span>
+            {pendingEvents.length > 0 && <span className="ptm-status-badge" style={{ background: '#FEF3C7', color: '#B45309' }}>{pendingEvents.length}</span>}
+          </button>
+          <button className={`ptm-side-btn ${page === 'notice_approvals' || page === 'notice_detail' ? 'active' : ''}`} onClick={() => setPage('notice_approvals')}>
+            <span>📢 Approve Notices</span>
+            {pendingNotices.length > 0 && <span className="ptm-status-badge" style={{ background: '#FEF3C7', color: '#B45309' }}>{pendingNotices.length}</span>}
+          </button>
+          <button className={`ptm-side-btn ${page === 'calendar' ? 'active' : ''}`} onClick={() => setPage('calendar')}><span>🗓️ Event Calendar</span></button>
+          <button className={`ptm-side-btn ${page === 'create_club' ? 'active' : ''}`} onClick={() => setPage('create_club')}><span>➕ Create New Club</span></button>
+          <button className={`ptm-side-btn ${page === 'central_depts' ? 'active' : ''}`} onClick={() => setPage('central_depts')}><span>🌐 Central Departments</span></button>
+        </>}
+        <div className="ptm-nav-group-title">People & administration</div>
         <button className={`ptm-side-btn ${page === 'wardens' ? 'active' : ''}`} onClick={() => setPage('wardens')}>
           <span>🏢 Hostel Wardens</span>
         </button>
         <button className={`ptm-side-btn ${page === 'staff_accounts' ? 'active' : ''}`} onClick={() => setPage('staff_accounts')}>
-          <span>🔐 Staff account access</span>
+          <span>👥 Staff & accounts</span>
         </button>
-        <button className={`ptm-side-btn ${page === 'gate_security' ? 'active' : ''}`} onClick={() => setPage('gate_security')}>
-          <span>🛂 Gate Security</span>
-        </button>
-        <button className={`ptm-side-btn ${page === 'reports' ? 'active' : ''}`} onClick={() => setPage('reports')}>
-          <span>🖨️ Reports & Print PDF</span>
-        </button>
+        {showGateSecurity && <button className={`ptm-side-btn ${page === 'gate_security' ? 'active' : ''}`} onClick={() => setPage('gate_security')}><span>🛂 Gate Security</span></button>}
+        {showAttendance && <button className={`ptm-side-btn ${page === 'attendance_reports' ? 'active' : ''}`} onClick={() => setPage('attendance_reports')}><span>📅 Attendance</span></button>}
+        {(showGrievances || showCampusLife) && <button className={`ptm-side-btn ${page === 'reports' ? 'active' : ''}`} onClick={() => setPage('reports')}><span>{showGrievances ? '🧾 Grievances & reports' : '🖨️ Reports & print PDF'}</span></button>}
       </aside>
 
       {/* Main Content Area */}
@@ -607,16 +606,16 @@ export default function DeanPortal({ apiUrl, user }) {
             {page === 'home' && (
               <div>
                 <div className="ptm-mini-grid">
-                  <div className="ptm-mini-card" onClick={() => setPage('clubs_list')}>
+                  {showCampusLife && <div className="ptm-mini-card" onClick={() => setPage('clubs_list')}>
                     <div className="ptm-row-between">
                       <span style={{ fontWeight: 700, color: '#6B7280', fontSize: '12px' }}>Official SVNIT Clubs</span>
                       <span>🎭</span>
                     </div>
                     <div style={{ fontSize: '26px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>{clubs.length}</div>
                     <button className="ptm-mini-btn">Explore Clubs →</button>
-                  </div>
+                  </div>}
 
-                  <div className="ptm-mini-card" onClick={() => setPage('event_approvals')}>
+                  {showCampusLife && <div className="ptm-mini-card" onClick={() => setPage('event_approvals')}>
                     <div className="ptm-row-between">
                       <span style={{ fontWeight: 700, color: '#6B7280', fontSize: '12px' }}>Pending Approvals</span>
                       <span>⚡</span>
@@ -625,73 +624,52 @@ export default function DeanPortal({ apiUrl, user }) {
                       {pendingEvents.length + pendingNotices.length}
                     </div>
                     <button className="ptm-mini-btn">Review Requests →</button>
-                  </div>
+                  </div>}
 
-                  <div className="ptm-mini-card" onClick={() => setPage('reports')}>
+                  {(showGrievances || showCampusLife) && <div className="ptm-mini-card" onClick={() => setPage('reports')}>
                     <div className="ptm-row-between">
                       <span style={{ fontWeight: 700, color: '#6B7280', fontSize: '12px' }}>Hostel Residents</span>
                       <span>🎓</span>
                     </div>
                     <div style={{ fontSize: '26px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>{studentsCount}</div>
                     <button className="ptm-mini-btn">Audit Reports →</button>
-                  </div>
+                  </div>}
+                  {showAttendance && <div className="ptm-mini-card" onClick={() => setPage('attendance_reports')}>
+                    <div className="ptm-row-between">
+                      <span style={{ fontWeight: 700, color: '#6B7280', fontSize: '12px' }}>Attendance</span>
+                      <span>📅</span>
+                    </div>
+                    <div style={{ fontSize: '16px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>Class & hostel reports</div>
+                    <button className="ptm-mini-btn">Open reports →</button>
+                  </div>}
                 </div>
 
-                <div className="ptm-card">
+                {showCampusLife && <div className="ptm-card">
                   <div className="ptm-section-title">Clubs & Campus Events</div>
                   <div className="ptm-icon-grid">
-                    <button className="ptm-icon-tile" onClick={() => setPage('clubs_list')}>
-                      <div className="ptm-icon-circle">🎭</div>
-                      <span className="ptm-icon-label">All Clubs Directory</span>
-                    </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('event_approvals')}>
-                      <div className="ptm-icon-circle">
-                        ⚡
-                        {pendingEvents.length > 0 && <span className="ptm-tile-badge">{pendingEvents.length}</span>}
-                      </div>
-                      <span className="ptm-icon-label">Approve Events</span>
-                    </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('notice_approvals')}>
-                      <div className="ptm-icon-circle">
-                        📢
-                        {pendingNotices.length > 0 && <span className="ptm-tile-badge">{pendingNotices.length}</span>}
-                      </div>
-                      <span className="ptm-icon-label">Approve Notices</span>
-                    </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('calendar')}>
-                      <div className="ptm-icon-circle">🗓️</div>
-                      <span className="ptm-icon-label">Event Calendar</span>
-                    </button>
+                    <button className="ptm-icon-tile" onClick={() => setPage('clubs_list')}><div className="ptm-icon-circle">🎭</div><span className="ptm-icon-label">All Clubs Directory</span></button>
+                    <button className="ptm-icon-tile" onClick={() => setPage('event_approvals')}><div className="ptm-icon-circle">⚡{pendingEvents.length > 0 && <span className="ptm-tile-badge">{pendingEvents.length}</span>}</div><span className="ptm-icon-label">Approve Events</span></button>
+                    <button className="ptm-icon-tile" onClick={() => setPage('notice_approvals')}><div className="ptm-icon-circle">📢{pendingNotices.length > 0 && <span className="ptm-tile-badge">{pendingNotices.length}</span>}</div><span className="ptm-icon-label">Approve Notices</span></button>
+                    <button className="ptm-icon-tile" onClick={() => setPage('calendar')}><div className="ptm-icon-circle">🗓️</div><span className="ptm-icon-label">Event Calendar</span></button>
                   </div>
-                </div>
+                </div>}
 
                 <div className="ptm-card">
                   <div className="ptm-section-title">Administration & Hostels</div>
                   <div className="ptm-icon-grid">
-                    <button className="ptm-icon-tile" onClick={() => setPage('create_club')}>
-                      <div className="ptm-icon-circle">➕</div>
-                      <span className="ptm-icon-label">Create New Club</span>
-                    </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('central_depts')}>
-                      <div className="ptm-icon-circle">🌐</div>
-                      <span className="ptm-icon-label">Central Departments</span>
-                    </button>
+                    {showCampusLife && <button className="ptm-icon-tile" onClick={() => setPage('create_club')}><div className="ptm-icon-circle">➕</div><span className="ptm-icon-label">Create New Club</span></button>}
+                    {showCampusLife && <button className="ptm-icon-tile" onClick={() => setPage('central_depts')}><div className="ptm-icon-circle">🌐</div><span className="ptm-icon-label">Central Departments</span></button>}
                     <button className="ptm-icon-tile" onClick={() => setPage('wardens')}>
                       <div className="ptm-icon-circle">🏢</div>
                       <span className="ptm-icon-label">Hostel Wardens</span>
                     </button>
                     <button className="ptm-icon-tile" onClick={() => setPage('staff_accounts')}>
                       <div className="ptm-icon-circle">🔐</div>
-                      <span className="ptm-icon-label">Staff passwords</span>
+                      <span className="ptm-icon-label">Staff & accounts</span>
                     </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('gate_security')}>
-                      <div className="ptm-icon-circle">🛂</div>
-                      <span className="ptm-icon-label">Gate Security</span>
-                    </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('reports')}>
-                      <div className="ptm-icon-circle">🖨️</div>
-                      <span className="ptm-icon-label">Reports & Print PDF</span>
-                    </button>
+                    {showGateSecurity && <button className="ptm-icon-tile" onClick={() => setPage('gate_security')}><div className="ptm-icon-circle">🛂</div><span className="ptm-icon-label">Gate Security</span></button>}
+                    {showAttendance && <button className="ptm-icon-tile" onClick={() => setPage('attendance_reports')}><div className="ptm-icon-circle">📅</div><span className="ptm-icon-label">Attendance reports</span></button>}
+                    {(showGrievances || showCampusLife) && <button className="ptm-icon-tile" onClick={() => setPage('reports')}><div className="ptm-icon-circle">🖨️</div><span className="ptm-icon-label">Reports & Print PDF</span></button>}
                   </div>
                 </div>
               </div>
@@ -700,7 +678,7 @@ export default function DeanPortal({ apiUrl, user }) {
             {/* ==========================================
                 2. OFFICIAL CLUBS DIRECTORY & DRILL-DOWN
                 ========================================== */}
-            {page === 'clubs_list' && (
+            {showCampusLife && page === 'clubs_list' && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
@@ -750,7 +728,7 @@ export default function DeanPortal({ apiUrl, user }) {
             {/* ==========================================
                 3. SINGLE CLUB HUB (EVENTS, MEMBERS, GALLERY, INFO)
                 ========================================== */}
-            {page === 'club_detail' && selectedClub && (
+            {showCampusLife && page === 'club_detail' && selectedClub && (
               <div>
                 <div className="ptm-drill-header">
                   <button
@@ -905,7 +883,7 @@ export default function DeanPortal({ apiUrl, user }) {
             {/* ==========================================
                 4. APPROVE EVENTS QUEUE
                 ========================================== */}
-            {page === 'event_approvals' && (
+            {showCampusLife && page === 'event_approvals' && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
@@ -991,7 +969,7 @@ export default function DeanPortal({ apiUrl, user }) {
             {/* ==========================================
                 5. FULL EVENT REQUISITION DOSSIER (DARPAN VIEW)
                 ========================================== */}
-            {page === 'event_detail' && selectedEvent && (
+            {showCampusLife && page === 'event_detail' && selectedEvent && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage(previousPage || 'event_approvals')}>←</button>
@@ -1139,7 +1117,7 @@ export default function DeanPortal({ apiUrl, user }) {
             {/* ==========================================
                 6. APPROVE NOTICES QUEUE & DETAIL VIEW
                 ========================================== */}
-            {page === 'notice_approvals' && (
+            {showCampusLife && page === 'notice_approvals' && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
@@ -1219,7 +1197,7 @@ export default function DeanPortal({ apiUrl, user }) {
               </div>
             )}
 
-            {page === 'notice_detail' && selectedNotice && (
+            {showCampusLife && page === 'notice_detail' && selectedNotice && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('notice_approvals')}>←</button>
@@ -1246,7 +1224,7 @@ export default function DeanPortal({ apiUrl, user }) {
             {/* ==========================================
                 7. CREATE NEW OFFICIAL SAC CLUB
                 ========================================== */}
-            {page === 'create_club' && (
+            {showCampusLife && page === 'create_club' && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
@@ -1326,7 +1304,7 @@ export default function DeanPortal({ apiUrl, user }) {
             {/* ==========================================
                 8. CENTRAL MAINTENANCE DEPARTMENTS
                 ========================================== */}
-            {page === 'central_depts' && (
+            {showCampusLife && page === 'central_depts' && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
@@ -1503,14 +1481,17 @@ export default function DeanPortal({ apiUrl, user }) {
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
-                  <h1 className="ptm-page-title">Staff account passwords</h1>
+                  <h1 className="ptm-page-title">Staff & account management</h1>
                 </div>
-                <StaffAccountAccess apiUrl={apiUrl} user={user} />
                 <DeanStaffManager apiUrl={apiUrl} />
               </div>
             )}
 
-            {page === 'gate_security' && (
+            {showAttendance && page === 'attendance_reports' && (
+              <DeanAttendanceOverview apiUrl={apiUrl} modules={modules} />
+            )}
+
+            {showGateSecurity && page === 'gate_security' && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
@@ -1563,7 +1544,7 @@ export default function DeanPortal({ apiUrl, user }) {
             {/* ==========================================
                 10. INTERACTIVE EVENT CALENDAR
                 ========================================== */}
-            {page === 'calendar' && (
+            {showCampusLife && page === 'calendar' && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
@@ -1633,35 +1614,33 @@ export default function DeanPortal({ apiUrl, user }) {
             {/* ==========================================
                 11. REPORTS & CUSTOM LANDSCAPE PDF EXPORT
                 ========================================== */}
-            {page === 'reports' && (
+            {(showGrievances || showCampusLife) && page === 'reports' && (
               <div>
                 <div className="ptm-drill-header">
                   <button className="ptm-back-btn" onClick={() => setPage('home')}>←</button>
                   <h1 className="ptm-page-title">Institute Audit Reports & Landscape PDF Export</h1>
-                  <p className="ptm-page-sub">Filter across SAC clubs, date ranges, and hostel grievances to generate official print-ready reports.</p>
+                  <p className="ptm-page-sub">Filter enabled campus features and date ranges to generate official print-ready reports.</p>
                 </div>
 
                 <div className="ptm-card">
                   <div className="ptm-grid-2" style={{ marginBottom: '12px' }}>
                     <div>
                       <label className="ptm-label">Report Scope</label>
-                      <select className="ptm-input" value={pdfScope} onChange={(e) => setPdfScope(e.target.value)}>
-                        <option value="All">Complete Audit (Events + Hostel Grievances)</option>
-                        <option value="Events">SAC Club Events Only</option>
-                        <option value="Grievances">Hostel Grievances Register Only</option>
+                      <select className="ptm-input" value={selectedReportScope} onChange={(e) => setPdfScope(e.target.value)}>
+                        {reportScopes.map((scope) => <option key={scope.id} value={scope.id}>{scope.label}</option>)}
                       </select>
                     </div>
-                    <div>
+                    {showCampusLife && <div>
                       <label className="ptm-label">Filter by Club</label>
                       <select className="ptm-input" value={reportClub} onChange={(e) => setReportClub(e.target.value)}>
-                        <option value="All">All 16 SVNIT Clubs</option>
+                        <option value="All">All clubs</option>
                         {clubs.map((c) => (
                           <option key={c.club_id} value={c.club_id}>
                             {c.name} ({c.club_id})
                           </option>
                         ))}
                       </select>
-                    </div>
+                    </div>}
                   </div>
 
                   <div className="ptm-grid-2" style={{ marginBottom: '14px' }}>
@@ -1689,18 +1668,18 @@ export default function DeanPortal({ apiUrl, user }) {
                         <div className="ptm-list-sub">{studentsCount} Active Student Profiles (@svnit.ac.in)</div>
                       </div>
                     </div>
-                    <div className="ptm-list-row">
+                    {showGrievances && <div className="ptm-list-row">
                       <div className="ptm-list-main">
                         <div className="ptm-list-title">Hostel Maintenance Grievances</div>
                         <div className="ptm-list-sub">{complaints.length} Total Tickets Logged Across 9 Bhawans</div>
                       </div>
-                    </div>
-                    <div className="ptm-list-row">
+                    </div>}
+                    {showCampusLife && <div className="ptm-list-row">
                       <div className="ptm-list-main">
                         <div className="ptm-list-title">Official SAC Clubs & Events</div>
                         <div className="ptm-list-sub">{clubs.length} Clubs • {events.length} Events Managed</div>
                       </div>
-                    </div>
+                    </div>}
                   </div>
                 </div>
               </div>
@@ -1715,25 +1694,16 @@ export default function DeanPortal({ apiUrl, user }) {
           <span>🏠</span>
           <span>Home</span>
         </button>
-        <button className={`ptm-bnav-btn ${page === 'clubs_list' || page === 'club_detail' ? 'active' : ''}`} onClick={() => setPage('clubs_list')}>
-          <span>🎭</span>
-          <span>Clubs</span>
-        </button>
-        <button className={`ptm-bnav-btn ${page === 'event_approvals' ? 'active' : ''}`} onClick={() => setPage('event_approvals')}>
-          <span>⚡</span>
-          <span>Approvals</span>
-        </button>
-        <button className={`ptm-bnav-btn ${page === 'calendar' ? 'active' : ''}`} onClick={() => setPage('calendar')}>
-          <span>🗓️</span>
-          <span>Calendar</span>
-        </button>
-        <button className={`ptm-bnav-btn ${page === 'reports' ? 'active' : ''}`} onClick={() => setPage('reports')}>
-          <span>🖨️</span>
-          <span>Reports</span>
-        </button>
+        {showCampusLife && <>
+          <button className={`ptm-bnav-btn ${page === 'clubs_list' || page === 'club_detail' ? 'active' : ''}`} onClick={() => setPage('clubs_list')}><span>🎭</span><span>Clubs</span></button>
+          <button className={`ptm-bnav-btn ${page === 'event_approvals' || page === 'notice_approvals' ? 'active' : ''}`} onClick={() => setPage('event_approvals')}><span>⚡</span><span>Approvals</span></button>
+          <button className={`ptm-bnav-btn ${page === 'calendar' ? 'active' : ''}`} onClick={() => setPage('calendar')}><span>🗓️</span><span>Calendar</span></button>
+        </>}
+        {showAttendance && <button className={`ptm-bnav-btn ${page === 'attendance_reports' ? 'active' : ''}`} onClick={() => setPage('attendance_reports')}><span>📅</span><span>Attendance</span></button>}
+        {(showGrievances || showCampusLife) && <button className={`ptm-bnav-btn ${page === 'reports' ? 'active' : ''}`} onClick={() => setPage('reports')}><span>🧾</span><span>Reports</span></button>}
         <button className={`ptm-bnav-btn ${page === 'staff_accounts' ? 'active' : ''}`} onClick={() => setPage('staff_accounts')}>
-          <span>🔐</span>
-          <span>Staff passwords</span>
+          <span>👥</span>
+          <span>Staff</span>
         </button>
       </nav>
     </div>

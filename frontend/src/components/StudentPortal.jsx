@@ -4,6 +4,7 @@ import { getCached, setCached } from '../cache';
 import { getHostelOptions, inferHostelWing } from '../hostelOptions';
 import { isEventCompleted } from '../eventUtils';
 import { ListRowSkeleton, Skeleton } from './SkeletonLoader';
+import { StudentAttendance as StudentAttendanceV2 } from './AttendanceOnlyPortals';
 import usePortalBackNavigation from '../hooks/usePortalBackNavigation';
 
 const StudentBiometricAttendancePanel = lazy(() =>
@@ -119,6 +120,7 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
   const showGrievances = modules?.grievances !== false;
   const showEvents = modules?.event_radar !== false;
   const showAttendance = modules?.attendance === true;
+  const showAttendanceV2 = Boolean(modules?.class_attendance || modules?.hostel_attendance);
   const showOutpass = modules?.gate_outpass === true;
   const profileIsDayScholar = (profileDraft.hostel_block || '').toLowerCase() === 'day scholar';
   const profileHostelOptions = getHostelOptions(
@@ -501,6 +503,7 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
           </>
         )}
         {showAttendance && <button className={`ptm-side-btn ${page === 'attendance' ? 'active' : ''}`} onClick={() => setPage('attendance')}>📅 Night Attendance</button>}
+        {showAttendanceV2 && <button className={`ptm-side-btn ${page === 'attendance_v2' ? 'active' : ''}`} onClick={() => setPage('attendance_v2')}>📚 Class & Hostel Attendance</button>}
         {showOutpass && !isDayScholar && <button className={`ptm-side-btn ${page === 'leave_pass' ? 'active' : ''}`} onClick={() => setPage('leave_pass')}>🪪 Digital Leave Pass</button>}
         <button className={`ptm-side-btn ${page === 'profile' ? 'active' : ''}`} onClick={openProfile}>👤 My Profile</button>
       </aside>
@@ -1050,6 +1053,9 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
                 />
               </Suspense>
             )}
+            {showAttendanceV2 && page === 'attendance_v2' && (
+              <StudentAttendanceV2 apiUrl={apiUrl} modules={modules} />
+            )}
             {showOutpass && page === 'leave_pass' && !isDayScholar && (
               <Suspense fallback={<ListRowSkeleton count={3} />}>
                 <StudentLeavePassPanel
@@ -1147,6 +1153,7 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
         {showGrievances && !isDayScholar && <button className={`ptm-bnav-btn ${page === 'my_complaints' ? 'active' : ''}`} onClick={() => setPage('my_complaints')}><span>💬</span><span>Grievances</span></button>}
         {showEvents && <button className={`ptm-bnav-btn ${page === 'events_list' ? 'active' : ''}`} onClick={() => setPage('events_list')}><span>🎪</span><span>Events</span></button>}
         {showAttendance && <button className={`ptm-bnav-btn ${page === 'attendance' ? 'active' : ''}`} onClick={() => setPage('attendance')}><span>📅</span><span>Attendance</span></button>}
+        {showAttendanceV2 && <button className={`ptm-bnav-btn ${page === 'attendance_v2' ? 'active' : ''}`} onClick={() => setPage('attendance_v2')}><span>📚</span><span>Class/Hostel</span></button>}
         {showOutpass && !isDayScholar && <button className={`ptm-bnav-btn ${page === 'leave_pass' ? 'active' : ''}`} onClick={() => setPage('leave_pass')}><span>🪪</span><span>Leave Pass</span></button>}
         {showEvents && <button className={`ptm-bnav-btn ${page === 'notices' ? 'active' : ''}`} onClick={() => setPage('notices')}><span>📢</span><span>Notices</span></button>}
         <button className={`ptm-bnav-btn ${page === 'profile' ? 'active' : ''}`} onClick={openProfile}><span>👤</span><span>Profile</span></button>

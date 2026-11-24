@@ -123,6 +123,8 @@ DEFAULT_ADMIN_PASS = ""
 PASSWORD_HASH_PREFIX = "pbkdf2_sha256$"
 PASSWORD_HASH_ITERATIONS = 600_000
 PASSWORD_MIN_LENGTH = 12
+_TEMP_PASSWORD_CONSONANTS = "bcdfghjkmnpqrstvwxyz"
+_TEMP_PASSWORD_VOWELS = "aeiou"
 STAFF_LOGIN_ROLES = {
     "Dean",
     "Founder",
@@ -399,6 +401,16 @@ def hash_password(password: str) -> str:
         f"{base64.urlsafe_b64encode(salt).decode()}$"
         f"{base64.urlsafe_b64encode(derived).decode()}"
     )
+
+
+def generate_temporary_password() -> str:
+    def chunk():
+        return "".join(
+            secrets.choice(_TEMP_PASSWORD_CONSONANTS if index % 2 == 0 else _TEMP_PASSWORD_VOWELS)
+            for index in range(4)
+        )
+
+    return f"{chunk()}-{chunk()}-{chunk()}-{secrets.randbelow(10_000):04d}"
 
 
 def verify_password(password: str, stored_hash: str) -> bool:
@@ -1432,6 +1444,13 @@ class DeanStaffCreateReq(BaseModel):
     hostel_block: Optional[str] = "All"
     phone: Optional[str] = ""
 
+class DeanStaffEditReq(BaseModel):
+    full_name: str = Field(min_length=1, max_length=160)
+    email: Optional[str] = Field(default="", max_length=254)
+    department: Optional[str] = Field(default="", max_length=120)
+    hostel_block: Optional[str] = Field(default="All", max_length=160)
+    phone: Optional[str] = Field(default="", max_length=40)
+
 class StudentAccountCreateReq(BaseModel):
     roll_no: str
     full_name: str
@@ -2099,7 +2118,7 @@ def create_tenant(req: TenantCreateReq, request: Request):
     dean_id = req.initial_dean_id.strip().upper()
     dean_name = req.initial_dean_name.strip()
     dean_email = req.initial_dean_email.strip().lower()
-    dean_temporary_password = secrets.token_urlsafe(18)
+    dean_temporary_password = generate_temporary_password()
     dean_password_hash = hash_password(dean_temporary_password)
     dean_local_part, separator, dean_email_domain = dean_email.partition("@")
     if (
@@ -2707,7 +2726,7 @@ def list_staff_accounts(request: Request):
             params = (ACTIVE_COLLEGE_ID.get(),)
         elif caller_role == "Dean":
             query = """
-                SELECT user_id, full_name, role, email, hostel_block, department, password, managed_by,
+                SELECT user_id, full_name, role, email, phone, hostel_block, department, password, managed_by,
                        password_reset_required
                 FROM users
                 WHERE college_id = ? AND (
@@ -2723,6 +2742,7 @@ def list_staff_accounts(request: Request):
                 "full_name": row["full_name"],
                 "role": row["role"],
                 "email": row["email"],
+                "phone": row["phone"],
                 "hostel_block": row["hostel_block"],
                 "department": row["department"],
                 "has_password": str(row["password"] or "").startswith(PASSWORD_HASH_PREFIX),
@@ -2755,7 +2775,7 @@ def set_staff_account_password(req: StaffPasswordSetReq, request: Request):
             raise HTTPException(status_code=404, detail="Staff account not found.")
         if not can_manage_staff_account(caller, target):
             raise HTTPException(status_code=403, detail="You are not allowed to manage this staff account.")
-        temporary_password = secrets.token_urlsafe(18)
+        temporary_password = generate_temporary_password()
         db_exec(
             conn,
             "UPDATE users SET password = ?, password_reset_required = 1 WHERE college_id = ? AND UPPER(user_id) = ?",
@@ -2794,6 +2814,72 @@ def can_manage_staff_account(caller, target) -> bool:
     return False
 
 
+@app.put("/api/dean/staff/{user_id}")
+def update_dean_staff_account(user_id: str, req: DeanStaffEditReq, request: Request):
+    caller = request.state.user
+    if caller.get("role") != "Dean":
+        raise HTTPException(status_code=403, detail="Dean access is required.")
+    account_id = _validate_account_id(user_id, "staff username")
+    full_name = req.full_name.strip()
+    email = str(req.email or "").strip().lower()
+    department = str(req.department or "").strip()
+    hostel_block = str(req.hostel_block or "").strip()
+    phone = str(req.phone or "").strip()
+    if not full_name:
+        raise HTTPException(status_code=400, detail="Enter a staff name.")
+    if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(status_code=400, detail="Enter a valid staff email address.")
+    if phone and not re.fullmatch(r"\+?[0-9][0-9\s()-]{7,17}", phone):
+        raise HTTPException(status_code=400, detail="Enter a valid phone number.")
+
+    conn = get_conn()
+    try:
+        target = db_exec(
+            conn,
+            "SELECT user_id, full_name, role, email, phone, department, hostel_block, managed_by FROM users WHERE college_id = ? AND UPPER(user_id) = ?",
+            (ACTIVE_COLLEGE_ID.get(), account_id),
+        ).fetchone()
+        if not target or not can_manage_staff_account(caller, target):
+            raise HTTPException(status_code=404, detail="Staff account not found.")
+        if target["role"] == "Faculty" and not department:
+            raise HTTPException(status_code=400, detail="Enter the Faculty member's department.")
+        if target["role"] == "Warden" and (not hostel_block or hostel_block.casefold() == "all"):
+            raise HTTPException(status_code=400, detail="Choose a specific hostel block for this Warden.")
+        if email:
+            duplicate = db_exec(
+                conn,
+                "SELECT 1 FROM users WHERE college_id = ? AND LOWER(email) = LOWER(?) AND UPPER(user_id) != ?",
+                (ACTIVE_COLLEGE_ID.get(), email, account_id),
+            ).fetchone()
+            if duplicate:
+                raise HTTPException(status_code=409, detail="That email is already assigned to another account.")
+        db_exec(
+            conn,
+            """
+            UPDATE users SET full_name = ?, email = ?, phone = ?, department = ?, hostel_block = ?
+            WHERE college_id = ? AND UPPER(user_id) = ?
+            """,
+            (full_name, email, phone, department, hostel_block, ACTIVE_COLLEGE_ID.get(), account_id),
+        )
+        conn.commit()
+        invalidate_user_cache(account_id)
+        return {
+            "success": True,
+            "user_id": account_id,
+            "full_name": full_name,
+            "role": target["role"],
+            "email": email,
+            "phone": phone,
+            "department": department,
+            "hostel_block": hostel_block,
+        }
+    except HTTPException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _validate_account_id(value: str, label: str) -> str:
     account_id = str(value or "").strip().upper()
     if not re.fullmatch(r"[A-Z0-9][A-Z0-9_-]{1,39}", account_id):
@@ -2826,7 +2912,7 @@ def _create_dean_staff_account(conn, values: dict, actor_id: str) -> dict:
         "StudentOnboarding": "Student Onboarding Staff",
         "GateSecurity": "Gate Security",
     }[role]
-    temporary_password = secrets.token_urlsafe(18)
+    temporary_password = generate_temporary_password()
     db_exec(
         conn,
         """
@@ -2936,7 +3022,7 @@ def _create_or_update_student_account(conn, values: dict) -> dict:
             raise HTTPException(status_code=409, detail="That roll number belongs to a non-student account.")
         password_hash = str(existing["password"] or "")
         if not password_hash.startswith(PASSWORD_HASH_PREFIX):
-            temporary_password = secrets.token_urlsafe(18)
+            temporary_password = generate_temporary_password()
             password_hash = hash_password(temporary_password)
         db_exec(
             conn,
@@ -2961,7 +3047,7 @@ def _create_or_update_student_account(conn, values: dict) -> dict:
             ),
         )
     else:
-        temporary_password = secrets.token_urlsafe(18)
+        temporary_password = generate_temporary_password()
         db_exec(
             conn,
             """
@@ -3088,7 +3174,7 @@ def reset_onboarding_student_password(user_id: str, request: Request):
     if request.state.user.get("role") != "StudentOnboarding":
         raise HTTPException(status_code=403, detail="Student Onboarding Staff access is required.")
     student_id = _validate_account_id(user_id, "student roll number")
-    temporary_password = secrets.token_urlsafe(18)
+    temporary_password = generate_temporary_password()
     conn = get_conn()
     try:
         result = db_exec(
@@ -6033,7 +6119,7 @@ def create_or_update_warden(req: WardenCreateReq, request: Request):
             temporary_password = created["temporary_password"]
         else:
             if not str(existing["password"] or "").startswith(PASSWORD_HASH_PREFIX):
-                temporary_password = secrets.token_urlsafe(18)
+                temporary_password = generate_temporary_password()
             password = hash_password(temporary_password) if temporary_password else existing["password"]
             db_exec(
                 conn,
@@ -6104,7 +6190,7 @@ def create_gate_security(req: GateSecurityCreateReq, request: Request):
         temporary_password = None
         account_password = ""
         if not existing or not str(existing["password"] or "").startswith(PASSWORD_HASH_PREFIX):
-            temporary_password = secrets.token_urlsafe(18)
+            temporary_password = generate_temporary_password()
             account_password = hash_password(temporary_password)
         upsert_user(
             conn,
@@ -6171,7 +6257,7 @@ def create_club(req: ClubCreateReq, request: Request):
         temporary_password = None
         account_password = ""
         if not existing or not str(existing["password"] or "").startswith(PASSWORD_HASH_PREFIX):
-            temporary_password = secrets.token_urlsafe(18)
+            temporary_password = generate_temporary_password()
             account_password = hash_password(temporary_password)
         upsert_club(
             conn,

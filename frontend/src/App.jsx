@@ -291,11 +291,6 @@ function AuthenticatedApp() {
     (item) => item.name === profileDraft.hostel_block
   );
   const modules = tenant?.modules || {};
-  const hasAttendanceFeature = Boolean(modules.class_attendance || modules.hostel_attendance);
-  const hasLegacyFeatures = Boolean(
-    modules.grievances || modules.mess_pulse || modules.event_radar || modules.gate_outpass
-    || modules.attendance || modules.parent_alerts
-  );
 
   return (
     <div className="ptm-root">
@@ -420,15 +415,9 @@ function AuthenticatedApp() {
               <BrandLoadingScreen />
             }>
               {isFounder && <FounderPortal user={user} apiUrl={API_URL} onLogout={handleLogout} />}
-              {user.role === 'Dean' && hasAttendanceFeature
-                ? <AttendanceOnlyPortals user={user} apiUrl={API_URL} modules={modules} legacyPortal={hasLegacyFeatures ? <DeanPortal user={user} apiUrl={API_URL} /> : null} />
-                : user.role === 'Dean' && <DeanPortal user={user} apiUrl={API_URL} />}
-              {user.role === 'Student' && hasAttendanceFeature
-                ? <AttendanceOnlyPortals user={user} apiUrl={API_URL} modules={modules} legacyPortal={hasLegacyFeatures ? <StudentPortal user={user} apiUrl={API_URL} modules={modules} onUserUpdate={handleStudentProfileRefresh} /> : null} />
-                : user.role === 'Student' && <StudentPortal user={user} apiUrl={API_URL} modules={modules} onUserUpdate={handleStudentProfileRefresh} />}
-              {user.role === 'Warden' && hasAttendanceFeature
-                ? <AttendanceOnlyPortals user={user} apiUrl={API_URL} modules={modules} legacyPortal={hasLegacyFeatures ? <WardenPortal user={user} apiUrl={API_URL} modules={modules} /> : null} />
-                : user.role === 'Warden' && <WardenPortal user={user} apiUrl={API_URL} modules={modules} />}
+              {user.role === 'Dean' && <DeanPortal user={user} apiUrl={API_URL} modules={modules} />}
+              {user.role === 'Student' && <StudentPortal user={user} apiUrl={API_URL} modules={modules} onUserUpdate={handleStudentProfileRefresh} />}
+              {user.role === 'Warden' && <WardenPortal user={user} apiUrl={API_URL} modules={modules} />}
               {user.role === 'Faculty' && modules.class_attendance && <AttendanceOnlyPortals user={user} apiUrl={API_URL} modules={modules} />}
               {(user.role === 'Gate Security' || user.role === 'GateSecurity') && tenant?.modules?.gate_outpass && <GateSecurityPortal user={user} apiUrl={API_URL} />}
               {user.role === 'ClubOrganizer' && <ClubPortal user={user} apiUrl={API_URL} />}

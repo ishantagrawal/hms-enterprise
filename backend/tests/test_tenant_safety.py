@@ -1023,6 +1023,70 @@ class TenantSafetyTests(unittest.TestCase):
         self.assertFalse(main.can_manage_staff_account(warden, {"role": "Staff", "managed_by": "CW_GAJJAR"}))
         self.assertFalse(main.can_manage_staff_account(warden, {"role": "Staff", "managed_by": "CW_BHABHA"}))
 
+    def test_temporary_passphrase_is_readable_and_dean_can_edit_staff_details(self):
+        password = main.generate_temporary_password()
+        self.assertRegex(password, r"^[a-z]{4}-[a-z]{4}-[a-z]{4}-\d{4}$")
+        self.assertGreaterEqual(len(password), main.PASSWORD_MIN_LENGTH)
+
+        context_token = main.ACTIVE_COLLEGE_ID.set("SVNIT")
+        try:
+            conn = main.get_conn()
+            main.upsert_user(
+                conn,
+                (
+                    "EDIT_WARDEN",
+                    "",
+                    "Old Warden Name",
+                    "Warden",
+                    "Hostel Warden",
+                    "SVNIT",
+                    "Gajjar Bhawan",
+                    "-",
+                    "Warden Office",
+                    "",
+                    "",
+                    "Hostel Administration",
+                    "",
+                    "",
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            request = build_request([(b"host", b"api.svnitcampus.in")])
+            request.state.user = {"role": "Dean", "user_id": "DEAN"}
+            result = main.update_dean_staff_account(
+                "EDIT_WARDEN",
+                main.DeanStaffEditReq(
+                    full_name="Updated Warden",
+                    email="warden.updated@svnit.ac.in",
+                    phone="+91 98765 43210",
+                    department="Hostel Administration",
+                    hostel_block="Bhabha Bhawan",
+                ),
+                request,
+            )
+            self.assertTrue(result["success"])
+            self.assertEqual(result["full_name"], "Updated Warden")
+            self.assertEqual(result["hostel_block"], "Bhabha Bhawan")
+
+            request.state.user = {"role": "Warden", "user_id": "EDIT_WARDEN"}
+            with self.assertRaises(HTTPException) as error:
+                main.update_dean_staff_account(
+                    "EDIT_WARDEN",
+                    main.DeanStaffEditReq(
+                        full_name="Unauthorized Update",
+                        email="warden.updated@svnit.ac.in",
+                        phone="",
+                        department="Hostel Administration",
+                        hostel_block="Bhabha Bhawan",
+                    ),
+                    request,
+                )
+            self.assertEqual(error.exception.status_code, 403)
+        finally:
+            main.ACTIVE_COLLEGE_ID.reset(context_token)
+
     def test_pooled_connection_rolls_back_before_reuse(self):
         events = []
         connection = main.PooledConnection(FakeConnection(events), FakePool(events))

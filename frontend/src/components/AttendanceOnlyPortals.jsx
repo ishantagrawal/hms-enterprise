@@ -269,7 +269,7 @@ function DeviceEnrollment({ apiUrl, onComplete, onClose }) {
   );
 }
 
-function StudentAttendance({ apiUrl, modules }) {
+export function StudentAttendance({ apiUrl, modules }) {
   const [tab, setTab] = useState(modules?.class_attendance ? 'class' : 'hostel');
   const [summary, setSummary] = useState([]);
   const [hostel, setHostel] = useState(null);
@@ -678,7 +678,7 @@ function ReportEmailSettings({ apiUrl }) {
   );
 }
 
-function DailyReportsPanel({ apiUrl, scope }) {
+function DailyReportsPanel({ apiUrl, scope, showEmailSettings = true }) {
   const [date, setDate] = useState(localDateString);
   const [reports, setReports] = useState([]);
   const [error, setError] = useState('');
@@ -709,7 +709,7 @@ function DailyReportsPanel({ apiUrl, scope }) {
 
   return (
     <>
-      <ReportEmailSettings apiUrl={apiUrl} />
+      {showEmailSettings && <ReportEmailSettings apiUrl={apiUrl} />}
       <section className="av-panel">
         <div className="av-row-between">
           <div><h2>Daily attendance PDFs</h2><p className="av-subtitle">Download reports for your authorized sessions.</p></div>
@@ -733,7 +733,31 @@ function DailyReportsPanel({ apiUrl, scope }) {
   );
 }
 
-function WardenAttendance({ apiUrl, modules }) {
+export function DeanAttendanceOverview({ apiUrl, modules = {} }) {
+  const classEnabled = Boolean(modules.class_attendance);
+  const hostelEnabled = Boolean(modules.hostel_attendance);
+  const tabs = [
+    ...(classEnabled ? [{ id: 'CLASS', label: 'Class attendance' }] : []),
+    ...(hostelEnabled ? [{ id: 'HOSTEL', label: 'Hostel attendance' }] : [])
+  ];
+  const [scope, setScope] = useState(classEnabled ? 'CLASS' : 'HOSTEL');
+
+  useEffect(() => {
+    if (scope === 'CLASS' && !classEnabled) setScope('HOSTEL');
+    else if (scope === 'HOSTEL' && !hostelEnabled) setScope('CLASS');
+  }, [scope, classEnabled, hostelEnabled]);
+
+  if (!tabs.length) return null;
+  return (
+    <div className="av-root">
+      <header className="av-heading"><span className="av-brand-mark">OS</span><div><p className="av-kicker">CAMPUS OS</p><h1>Attendance reports</h1></div></header>
+      {tabs.length > 1 && <nav className="av-tabs" aria-label="Attendance report scopes">{tabs.map((item) => <button key={item.id} className={scope === item.id ? 'is-active' : ''} onClick={() => setScope(item.id)}>{item.label}</button>)}</nav>}
+      <DailyReportsPanel apiUrl={apiUrl} scope={scope} showEmailSettings={false} />
+    </div>
+  );
+}
+
+export function WardenAttendance({ apiUrl, modules }) {
   const [tab, setTab] = useState(modules?.hostel_attendance ? 'rollcall' : 'devices');
   const [beacons, setBeacons] = useState([]);
   const [sessions, setSessions] = useState([]);
@@ -823,15 +847,10 @@ function DeanAttendance({ apiUrl, user }) {
   </AttendanceShell>;
 }
 
-export default function AttendanceOnlyPortals({ apiUrl, user, modules = {}, legacyPortal = null }) {
-  const [showLegacy, setShowLegacy] = useState(false);
-  if (showLegacy && legacyPortal) {
-    return <div className="av-legacy-wrap"><button className="av-secondary av-back-attendance" onClick={() => setShowLegacy(false)}>← Back to Attendance</button>{legacyPortal}</div>;
-  }
-  const switchButton = legacyPortal && <button className="av-secondary av-back-attendance" onClick={() => setShowLegacy(true)}>Open Campus Portal</button>;
-  if (user?.role === 'Student') return <>{switchButton}<StudentAttendance apiUrl={apiUrl} modules={modules} /></>;
+export default function AttendanceOnlyPortals({ apiUrl, user, modules = {} }) {
+  if (user?.role === 'Student') return <StudentAttendance apiUrl={apiUrl} modules={modules} />;
   if (user?.role === 'Faculty') return <FacultyAttendance apiUrl={apiUrl} />;
-  if (user?.role === 'Warden') return <>{switchButton}<WardenAttendance apiUrl={apiUrl} modules={modules} /></>;
-  if (user?.role === 'Dean') return <>{switchButton}<DeanAttendance apiUrl={apiUrl} user={user} /></>;
+  if (user?.role === 'Warden') return <WardenAttendance apiUrl={apiUrl} modules={modules} />;
+  if (user?.role === 'Dean') return <DeanAttendance apiUrl={apiUrl} user={user} />;
   return <div className="av-root"><p className="av-empty">Attendance tools are not available for this account.</p></div>;
 }
