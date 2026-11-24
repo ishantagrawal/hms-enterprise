@@ -4,9 +4,9 @@ import { ListRowSkeleton } from './SkeletonLoader';
 
 export default function StaffAccountAccess({ apiUrl, user }) {
   const [accounts, setAccounts] = useState([]);
-  const [passwords, setPasswords] = useState({});
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState('');
+  const [credential, setCredential] = useState(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -29,19 +29,19 @@ export default function StaffAccountAccess({ apiUrl, user }) {
 
   const savePassword = async (event, account) => {
     event.preventDefault();
-    const password = passwords[account.user_id] || '';
     setSavingId(account.user_id);
     setMessage('');
     setError('');
+    setCredential(null);
     try {
       const response = await apiFetch(`${apiUrl}/api/staff/accounts/password`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: account.user_id, password })
+        body: JSON.stringify({ user_id: account.user_id })
       });
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.detail || 'Could not update password.');
-      setPasswords((current) => ({ ...current, [account.user_id]: '' }));
+      setCredential({ user_id: account.user_id, full_name: account.full_name, password: data.temporary_password });
       setMessage(data.message);
       await loadAccounts();
     } catch (saveError) {
@@ -55,15 +55,17 @@ export default function StaffAccountAccess({ apiUrl, user }) {
     <div className="ptm-card">
       <div className="ptm-section-title">Staff account access</div>
       <p className="ptm-list-sub">
-        {user?.role === 'Warden'
-          ? 'Manage passwords only for staff accounts created by your Warden account.'
-          : user?.role === 'Dean'
-            ? 'Manage Wardens, clubs, gate security, and central staff accounts. The Founder manages the Dean password.'
-            : 'Manage the Dean account password. Deans manage Wardens, clubs, and central staff.'}
-        {' '}Use a unique password of at least 12 characters. Students sign in with Google.
+        {user?.role === 'Dean'
+          ? 'Reset staff accounts. Each reset creates a temporary password that must be changed at first sign-in. Student passwords are managed by Student Onboarding Staff.'
+          : 'Reset the Dean account password. Deans manage other staff accounts.'}
       </p>
       {message && <div className="ptm-alert-success" role="status">{message}</div>}
       {error && <div className="ptm-alert-error" role="alert">{error}</div>}
+      {credential && (
+        <div className="ptm-alert-success" role="status">
+          Temporary password for <strong>{credential.user_id}</strong>: <code>{credential.password}</code>. Share privately; it is shown only once.
+        </div>
+      )}
       {loading ? (
         <ListRowSkeleton count={4} />
       ) : accounts.length === 0 ? (
@@ -84,37 +86,19 @@ export default function StaffAccountAccess({ apiUrl, user }) {
                   {account.hostel_block && account.hostel_block !== 'All' ? ` · ${account.hostel_block}` : ''}
                 </div>
                 <div className="ptm-list-sub">
-                  {account.has_password ? 'Password is set' : 'Password not set'}
+                  {!account.has_password ? 'Password not set' : account.password_reset_required ? 'Must change temporary password' : 'Password is set'}
                 </div>
                 {!account.can_manage && (
                   <div className="ptm-list-sub">Your role does not have permission to change this account's password.</div>
                 )}
               </div>
-              <label className="ptm-label" style={{ flex: '1 1 220px' }}>
-                New password
-                <input
-                  className="ptm-input"
-                  type="password"
-                  autoComplete="new-password"
-                  minLength={12}
-                  maxLength={128}
-                  required={account.can_manage}
-                  disabled={!account.can_manage}
-                  value={passwords[account.user_id] || ''}
-                  onChange={(event) => setPasswords((current) => ({
-                    ...current,
-                    [account.user_id]: event.target.value
-                  }))}
-                  placeholder="At least 12 characters"
-                />
-              </label>
               <button
                 className="ptm-btn-primary"
                 type="submit"
                 disabled={!account.can_manage || savingId === account.user_id}
                 style={{ width: 'auto', alignSelf: 'flex-end' }}
               >
-                {savingId === account.user_id ? 'Saving…' : 'Set / reset'}
+                {savingId === account.user_id ? 'Generating…' : 'Issue temporary password'}
               </button>
             </form>
           ))}

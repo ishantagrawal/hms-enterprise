@@ -38,10 +38,8 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
   const eventVersionRef = useRef(0);
   const [clubs, setClubs] = useState(() => getCached('clubs') || []);
   const [notices, setNotices] = useState(() => getCached('notices') || []);
-  const [ads, setAds] = useState(() => getCached('ads') || []);
   const [leavePasses, setLeavePasses] = useState(() => getCached(leavePassKey) || []);
   const [attendanceLogs, setAttendanceLogs] = useState(() => getCached(attendanceLogKey) || []);
-  const [adIdx, setAdIdx] = useState(0);
   const [msg, setMsg] = useState(null);
 
   const [selectedTicket, setSelectedTicket] = useState(null);
@@ -188,9 +186,6 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
         setNotices(fetchedNotices);
         setCached('notices', fetchedNotices);
 
-        const fetchedAds = d.ads || [];
-        setAds(fetchedAds);
-        setCached('ads', fetchedAds);
         setHostelConfig(d.hostels || []);
         if (leavePassVersion === leavePassVersionRef.current) {
           updateLeavePasses(d.leave_passes || []);
@@ -217,14 +212,6 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
     const timer = window.setTimeout(loadStudentData, 0);
     return () => window.clearTimeout(timer);
   }, [loadStudentData]);
-
-  useEffect(() => {
-    if (ads.length <= 1) return;
-    const timer = setInterval(() => {
-      setAdIdx((i) => (i + 1) % ads.length);
-    }, 4500);
-    return () => clearInterval(timer);
-  }, [ads.length]);
 
   useEffect(() => {
     if (page !== 'profile') return undefined;
@@ -485,7 +472,6 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
     () => complaints.filter((complaint) => complaint.status === 'Awaiting Confirmation').length,
     [complaints]
   );
-  const activeAd = ads.length > 0 ? ads[adIdx % ads.length] : null;
 
   const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   const firstDay = new Date(calYear, calMonth, 1).getDay();
@@ -562,24 +548,6 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
                     </div>
                   )}
                 </div>
-
-                {activeAd && (
-                  <div className="ptm-promo-banner" style={{ background: activeAd.bg_gradient || 'linear-gradient(135deg, #002970 0%, #0284C7 100%)' }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <span className="ptm-promo-tag">{activeAd.sponsor_tag}</span>
-                      <h3 className="ptm-promo-title">{activeAd.title}</h3>
-                      <p className="ptm-promo-sub">{activeAd.subtitle}</p>
-                    </div>
-                    <div className="ptm-promo-right">
-                      {activeAd.badge_text && (
-                        <div style={{ fontSize: '11px', fontWeight: 800, color: '#E0F2FE' }}>{activeAd.badge_text}</div>
-                      )}
-                      <a href={activeAd.target_url} target="_blank" rel="noreferrer" className="ptm-promo-cta">
-                        {activeAd.cta_text || 'Apply Now →'}
-                      </a>
-                    </div>
-                  </div>
-                )}
 
                 {!isDayScholar && (showGrievances || showAttendance || showOutpass) && (
                   <div className="ptm-card">

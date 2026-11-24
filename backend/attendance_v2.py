@@ -1,15 +1,22 @@
 import csv
+import hashlib
+import hmac
 import io
 import json
 import logging
+import os
+import re
 import secrets
+import smtplib
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date as Date, datetime, time as DateTimeTime, timedelta, timezone
 from email.message import EmailMessage
+from email.utils import formataddr
 from typing import Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile, File
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -101,6 +108,14 @@ TABLES = {
             PRIMARY KEY (college_id, id), UNIQUE (tenant_id, email)
         )
     """,
+    "attendance_v2_report_email_codes": """
+        CREATE TABLE IF NOT EXISTS attendance_v2_report_email_codes (
+            college_id TEXT NOT NULL, tenant_id TEXT NOT NULL, user_id TEXT NOT NULL,
+            email TEXT NOT NULL, code_hash TEXT NOT NULL, expires_at TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0, last_sent_at TEXT NOT NULL,
+            PRIMARY KEY (college_id, user_id)
+        )
+    """,
 }
 
 INDEXES = (
@@ -111,6 +126,7 @@ INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_attendance_v2_sessions_expiry ON attendance_v2_sessions (college_id, status, expires_at)",
     "CREATE INDEX IF NOT EXISTS idx_attendance_v2_records_student ON attendance_v2_records (college_id, student_id, session_id)",
     "CREATE INDEX IF NOT EXISTS idx_attendance_v2_staff_email ON attendance_v2_pre_approved_staff (college_id, email)",
+    "CREATE INDEX IF NOT EXISTS idx_attendance_v2_report_email_expiry ON attendance_v2_report_email_codes (college_id, expires_at)",
 )
 
 
@@ -156,10 +172,18 @@ class EnrollmentWindowInput(BaseModel):
 
 
 class StaffInput(BaseModel):
+    user_id: str = Field(min_length=2, max_length=40)
     name: str = Field(min_length=1, max_length=160)
     email: str = Field(min_length=3, max_length=254)
     role: str
     department_or_block: str = Field(min_length=1, max_length=160)
+
+class ReportEmailStartInput(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+
+class ReportEmailVerifyInput(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+    code: str = Field(min_length=6, max_length=6)
 
 
 class RegistrationInput(BaseModel):
@@ -393,7 +417,7 @@ def _build_report_pdf(report):
     left = 32
     pdf.setTitle(f'{report["course_code"]} attendance report')
     pdf.setFont("Helvetica-Bold", 15)
-    pdf.drawString(left, page_height - 38, "Campus Attendance Report")
+    pdf.drawString(left, page_height - 38, "Campus OS Attendance Report")
     pdf.setFont("Helvetica", 9)
     pdf.drawString(left, page_height - 56, str(report["institute"])[:110])
     pdf.setFont("Helvetica-Bold", 11)
@@ -401,7 +425,7 @@ def _build_report_pdf(report):
     pdf.setFont("Helvetica", 8)
     pdf.drawString(
         left, page_height - 94,
-        f'Faculty: {report["faculty_name"]}    Date: {report["date"]}    Room / Beacon: {report["beacon_name"]}'[:140],
+        f'{report.get("owner_label", "Faculty")}: {report["faculty_name"]}    Date: {report["date"]}    Room / Beacon: {report["beacon_name"]}'[:140],
     )
     pdf.drawString(
         left, page_height - 110,
@@ -413,23 +437,28 @@ def _build_report_pdf(report):
 
     columns = (left, 220, 408)
     rows_per_column = 50
-    for column, x in enumerate(columns):
-        y = page_height - 137
-        pdf.setFont("Helvetica-Bold", 7)
-        pdf.drawString(x, y, "Roll No.       Name                     P/A")
-        pdf.setFont("Helvetica", 7)
-        for row_index in range(rows_per_column):
-            index = column * rows_per_column + row_index
-            if index >= total:
-                break
-            student = rows[index]
-            marker = "P" if student["status"] == "PRESENT" else "A"
-            if student["method"] == "MANUAL_OVERRIDE":
-                marker += "*"
-            roll = str(student["roll_no"] or "")[:14]
-            name = str(student["student_name"] or "")[:22]
-            y -= 12
-            pdf.drawString(x, y, f"{roll:<14} {name:<22} {marker}")
+    for page_start in range(0, total, rows_per_column * len(columns)):
+        if page_start:
+            pdf.showPage()
+            pdf.setFont("Helvetica-Bold", 10)
+            pdf.drawString(left, page_height - 32, f'{report["course_code"]} attendance · continued')
+        for column, x in enumerate(columns):
+            y = page_height - (137 if page_start == 0 else 52)
+            pdf.setFont("Helvetica-Bold", 7)
+            pdf.drawString(x, y, "Roll No.       Name                     P/A")
+            pdf.setFont("Helvetica", 7)
+            for row_index in range(rows_per_column):
+                index = page_start + column * rows_per_column + row_index
+                if index >= total:
+                    break
+                student = rows[index]
+                marker = "P" if student["status"] == "PRESENT" else "A"
+                if student["method"] == "MANUAL_OVERRIDE":
+                    marker += "*"
+                roll = str(student["roll_no"] or "")[:14]
+                name = str(student["student_name"] or "")[:22]
+                y -= 12
+                pdf.drawString(x, y, f"{roll:<14} {name:<22} {marker}")
 
     pdf.showPage()
     pdf.save()
@@ -437,25 +466,28 @@ def _build_report_pdf(report):
 
 
 def _email_report(report):
-    import os
-    import smtplib
-    from email.utils import formataddr
     host = os.getenv("SMTP_HOST", "").strip()
     sender = os.getenv("SMTP_FROM_EMAIL", "").strip()
-    recipient = report.get("faculty_email", "").strip()
-    if not host or not sender or not recipient:
-        logger.error("Attendance PDF email not sent: SMTP_HOST, SMTP_FROM_EMAIL, or faculty email is not configured.")
-        return
+    recipient = str(report.get("report_email") or "").strip()
+    if not report.get("report_email_verified") or not recipient:
+        logger.info("Attendance PDF email skipped: report recipient is not verified for %s.", report.get("owner_id"))
+        return False
+    if not host or not sender:
+        raise RuntimeError("Attendance PDF email requires SMTP_HOST and SMTP_FROM_EMAIL.")
     message = EmailMessage()
     message["Subject"] = f'Attendance report: {report["course_code"]} - {report["date"]}'
     message["From"] = formataddr((os.getenv("SMTP_FROM_NAME", "Campus Attendance"), sender))
     message["To"] = recipient
-    message.set_content("The attached PDF contains the attendance report for your class session.")
+    message.set_content("The attached PDF contains the attendance report for your attendance session.")
+    filename_prefix = "".join(
+        character if character.isalnum() or character in "-_" else "-"
+        for character in str(report["course_code"])
+    ).strip("-") or "attendance"
     message.add_attachment(
         _build_report_pdf(report),
         maintype="application",
         subtype="pdf",
-        filename=f'{report["course_code"]}-{report["date"]}-attendance.pdf',
+        filename=f'{filename_prefix}-{report["date"][:10]}-attendance.pdf',
     )
     port = int(os.getenv("SMTP_PORT", "587"))
     with smtplib.SMTP(host, port, timeout=20) as server:
@@ -465,40 +497,71 @@ def _email_report(report):
         if username:
             server.login(username, password)
         server.send_message(message)
+    return True
 
 
 def _email_report_safely(report):
     try:
         _email_report(report)
     except Exception:
-        logger.exception("Could not email attendance report for course %s", report.get("course_code"))
+        logger.exception("Could not email attendance report for session %s", report.get("session_id"))
 
 
 def _report_data(conn, backend, session):
     db_exec = backend["db_exec"]
-    course = db_exec(
-        conn,
-        "SELECT * FROM attendance_v2_courses WHERE college_id = ? AND id = ?",
-        (backend["ACTIVE_COLLEGE_ID"].get(), session["course_id"]),
-    ).fetchone()
-    if not course:
-        return None
-    faculty = db_exec(
-        conn,
-        "SELECT full_name, email FROM users WHERE college_id = ? AND UPPER(user_id) = ?",
-        (backend["ACTIVE_COLLEGE_ID"].get(), str(course["faculty_id"]).upper()),
-    ).fetchone()
     beacon = _beacon(conn, backend, session["beacon_id"])
     students = _session_roster(conn, backend, session)
     report_date = _parse_time(session.get("created_at")) or _now()
     tenant = backend["get_tenant_by_id"](backend["ACTIVE_COLLEGE_ID"].get())
     tenant_zone = ZoneInfo((tenant or {}).get("timezone") or "UTC")
+    if session["scope"] == "CLASS":
+        course = db_exec(
+            conn,
+            "SELECT * FROM attendance_v2_courses WHERE college_id = ? AND id = ?",
+            (backend["ACTIVE_COLLEGE_ID"].get(), session["course_id"]),
+        ).fetchone()
+        if not course:
+            return None
+        owner = db_exec(
+            conn,
+            """
+            SELECT full_name, attendance_report_email, attendance_report_email_verified
+            FROM users WHERE college_id = ? AND UPPER(user_id) = ?
+            """,
+            (backend["ACTIVE_COLLEGE_ID"].get(), str(course["faculty_id"]).upper()),
+        ).fetchone()
+        course_code = course["code"]
+        course_title = course["title"]
+        owner_id = course["faculty_id"]
+        owner_label = "Faculty"
+        owner_name = owner["full_name"] if owner else owner_id
+    else:
+        owner = db_exec(
+            conn,
+            """
+            SELECT full_name, attendance_report_email, attendance_report_email_verified
+            FROM users WHERE college_id = ? AND UPPER(user_id) = ?
+            """,
+            (backend["ACTIVE_COLLEGE_ID"].get(), str(session["created_by"]).upper()),
+        ).fetchone()
+        course_code = f'{session.get("hostel_block") or "Hostel"} · {session.get("wing_name") or "Wing"}'
+        course_title = "Night roll call"
+        owner_id = session["created_by"]
+        owner_label = "Warden"
+        owner_name = owner["full_name"] if owner else owner_id
+    if session["scope"] == "CLASS":
+        students.sort(key=lambda item: (str(item.get("roll_no") or "").casefold()))
     return {
+        "session_id": session["id"],
+        "scope": session["scope"],
+        "owner_id": owner_id,
+        "owner_label": owner_label,
         "institute": (tenant or {}).get("college_name", "Institute"),
-        "course_code": course["code"],
-        "course_title": course["title"],
-        "faculty_name": faculty["full_name"] if faculty else course["faculty_id"],
-        "faculty_email": faculty["email"] if faculty else "",
+        "course_code": course_code,
+        "course_title": course_title,
+        "faculty_name": owner_name,
+        "report_email": str(owner["attendance_report_email"] or "") if owner else "",
+        "report_email_verified": bool(owner["attendance_report_email_verified"]) if owner else False,
         "date": report_date.astimezone(tenant_zone).strftime("%Y-%m-%d %H:%M"),
         "beacon_name": beacon["name"],
         "students": students,
@@ -521,14 +584,15 @@ async def expire_sessions_worker(backend):
                 session = dict(row)
                 expiry = _parse_time(session.get("expires_at"))
                 if expiry and expiry <= _now():
-                    _close_session(conn, backend, session)
-                    report = _report_data(conn, backend, session) if session["scope"] == "CLASS" else None
-                    if report:
-                        try:
+                    session_token = backend["ACTIVE_COLLEGE_ID"].set(session["college_id"])
+                    try:
+                        _close_session(conn, backend, session)
+                        report = _report_data(conn, backend, session)
+                        conn.commit()
+                        if report and report.get("report_email_verified") and report.get("report_email"):
                             await __import__("asyncio").to_thread(_email_report_safely, report)
-                        except Exception:
-                            logger.exception("Could not email attendance report for session %s", session["id"])
-            conn.commit()
+                    finally:
+                        backend["ACTIVE_COLLEGE_ID"].reset(session_token)
         except Exception:
             if conn:
                 conn.rollback()
@@ -716,24 +780,100 @@ def list_courses(request: Request):
         conn.close()
 
 
-def _add_students(conn, backend, course_id, students):
+@router.get("/directory/students")
+def attendance_student_directory(
+    request: Request,
+    q: str = "",
+    department: str = "",
+    scope: str = "CLASS",
+):
+    actor = _require_roles(request, "Dean", "Faculty", "Warden")
+    normalized_scope = _validate_scope(scope)
+    _require_feature(
+        request,
+        "class_attendance" if normalized_scope == "CLASS" else "hostel_attendance",
+    )
+    backend = request.app.state.attendance_v2_backend
+    predicates = ["college_id = ?", "role = 'Student'"]
+    values = [backend["ACTIVE_COLLEGE_ID"].get()]
+    if str(actor["role"]).upper() == "WARDEN":
+        hostel_block = str(actor.get("hostel_block") or "").strip()
+        if not hostel_block or hostel_block.casefold() == "all":
+            raise HTTPException(status_code=403, detail="Your Warden account is not assigned to a hostel.")
+        predicates.append("LOWER(COALESCE(hostel_block, '')) = LOWER(?)")
+        values.append(hostel_block)
+    elif str(actor["role"]).upper() == "FACULTY" and str(actor.get("department") or "").strip():
+        predicates.append("LOWER(COALESCE(department, '')) = LOWER(?)")
+        values.append(str(actor["department"]).strip())
+    elif department.strip():
+        predicates.append("LOWER(COALESCE(department, '')) = LOWER(?)")
+        values.append(department.strip())
+    if q.strip():
+        predicates.append("(UPPER(user_id) LIKE ? OR UPPER(full_name) LIKE ?)")
+        search = f"%{q.strip().upper()}%"
+        values.extend((search, search))
+    conn = backend["get_conn"]()
+    try:
+        rows = backend["db_exec"](
+            conn,
+            """
+            SELECT user_id, full_name, department, year, hostel_block, room, wing
+            FROM users WHERE """ + " AND ".join(predicates) + " ORDER BY user_id LIMIT 1000",
+            tuple(values),
+        ).fetchall()
+        return [
+            {
+                "user_id": row["user_id"],
+                "roll_no": row["user_id"],
+                "student_name": row["full_name"],
+                "department": row["department"],
+                "year": row["year"],
+                "hostel_block": row["hostel_block"],
+                "room_no": row["room"],
+                "wing": row["wing"],
+            }
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
+def _add_students(conn, backend, course_id, students, actor=None):
     college_id = backend["ACTIVE_COLLEGE_ID"].get()
     added = 0
     for student in students:
         roll_no = student["roll_no"].strip().upper()
         if not roll_no:
             continue
+        account = backend["db_exec"](
+            conn,
+            "SELECT user_id, full_name, department FROM users WHERE college_id = ? AND role = 'Student' AND UPPER(user_id) = ?",
+            (college_id, roll_no),
+        ).fetchone()
+        if not account:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Student account {roll_no} was not found. Ask Student Onboarding Staff to create it first.",
+            )
+        faculty_department = str((actor or {}).get("department") or "").strip()
+        if str((actor or {}).get("role") or "").upper() == "FACULTY" and faculty_department:
+            if str(account["department"] or "").strip().casefold() != faculty_department.casefold():
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Student {roll_no} is outside your department roster.",
+                )
         backend["db_exec"](
             conn,
             """
             INSERT INTO attendance_v2_course_enrollments
                 (college_id, tenant_id, id, course_id, student_id, roll_no, student_name, created_at)
-            VALUES (?, ?, ?, ?, NULL, ?, ?, ?)
-            ON CONFLICT (course_id, roll_no) DO UPDATE SET student_name = excluded.student_name
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (course_id, roll_no) DO UPDATE SET
+                student_id = excluded.student_id, student_name = excluded.student_name
             """,
             (
-                college_id, college_id, _new_id("ENR"), course_id, roll_no,
-                student.get("student_name", "").strip(), _now_text(),
+                college_id, college_id, _new_id("ENR"), course_id, account["user_id"],
+                roll_no, str(account["full_name"] or "").strip(), _now_text(),
             ),
         )
         added += 1
@@ -748,7 +888,7 @@ def add_course_student(course_id: str, body: StudentInput, request: Request):
     conn = backend["get_conn"]()
     try:
         _course_for_user(conn, backend, course_id, actor, allow_admin=str(actor["role"]).upper() == "DEAN")
-        count = _add_students(conn, backend, course_id, [body.model_dump()])
+        count = _add_students(conn, backend, course_id, [body.model_dump()], actor)
         conn.commit()
         return {"success": True, "added": count}
     except Exception:
@@ -777,7 +917,7 @@ def add_course_roll_range(course_id: str, body: dict, request: Request):
     conn = backend["get_conn"]()
     try:
         _course_for_user(conn, backend, course_id, actor, allow_admin=str(actor["role"]).upper() == "DEAN")
-        count = _add_students(conn, backend, course_id, students)
+        count = _add_students(conn, backend, course_id, students, actor)
         conn.commit()
         return {"success": True, "added": count}
     except Exception:
@@ -811,7 +951,7 @@ async def import_course_roster(course_id: str, request: Request, file: UploadFil
     conn = backend["get_conn"]()
     try:
         _course_for_user(conn, backend, course_id, actor, allow_admin=str(actor["role"]).upper() == "DEAN")
-        count = _add_students(conn, backend, course_id, students)
+        count = _add_students(conn, backend, course_id, students, actor)
         conn.commit()
         return {"success": True, "added": count}
     except Exception:
@@ -860,19 +1000,32 @@ def add_hostel_member(body: dict, request: Request):
         raise HTTPException(status_code=400, detail="Hostel block is required.")
     conn = backend["get_conn"]()
     try:
+        student = backend["db_exec"](
+            conn,
+            "SELECT user_id, full_name, hostel_block FROM users WHERE college_id = ? AND role = 'Student' AND UPPER(user_id) = ?",
+            (backend["ACTIVE_COLLEGE_ID"].get(), roll),
+        ).fetchone()
+        if not student:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Student account {roll} was not found. Ask Student Onboarding Staff to create it first.",
+            )
+        if str(actor["role"]).upper() == "WARDEN" and str(student["hostel_block"] or "").strip().casefold() != hostel_block.casefold():
+            raise HTTPException(status_code=403, detail="This student is not assigned to your hostel block.")
         backend["db_exec"](
             conn,
             """
             INSERT INTO attendance_v2_hostel_wing_members
                 (college_id, tenant_id, id, wing_name, hostel_block, room_no, student_id, roll_no, student_name, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (tenant_id, wing_name, roll_no) DO UPDATE
             SET hostel_block = excluded.hostel_block, room_no = excluded.room_no,
-                student_name = excluded.student_name
+                student_id = excluded.student_id, student_name = excluded.student_name
             """,
             (
                 backend["ACTIVE_COLLEGE_ID"].get(), _tenant_id(request), _new_id("HWM"),
-                wing, hostel_block, room, roll, name, _now_text(),
+                wing, hostel_block, room, student["user_id"], roll,
+                str(student["full_name"] or "").strip(), _now_text(),
             ),
         )
         conn.commit()
@@ -1159,16 +1312,407 @@ def close_session(session_id: str, request: Request, background_tasks: Backgroun
         _require_feature(request, "class_attendance" if session["scope"] == "CLASS" else "hostel_attendance")
         if session["created_by"] != actor["user_id"] and str(actor["role"]).upper() != "DEAN":
             raise HTTPException(status_code=403, detail="Only the session owner can close it.")
-        if session["status"] == "OPEN":
+        just_closed = session["status"] == "OPEN"
+        if just_closed:
             _close_session(conn, backend, session)
-        report = _report_data(conn, backend, session) if session["scope"] == "CLASS" else None
+        report = _report_data(conn, backend, session)
         conn.commit()
-        if report:
+        email_queued = bool(
+            just_closed and report and report.get("report_email_verified") and report.get("report_email")
+        )
+        if email_queued:
             background_tasks.add_task(_email_report_safely, report)
-        return {"success": True, "status": "CLOSED", "report_queued": bool(report)}
+        return {
+            "success": True,
+            "status": "CLOSED",
+            "report_available": bool(report),
+            "report_queued": email_queued,
+            "report_email_verified": bool(report and report.get("report_email_verified")),
+        }
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+
+
+def _send_report_email_verification(email: str, code: str):
+    host = os.getenv("SMTP_HOST", "").strip()
+    sender = os.getenv("SMTP_FROM_EMAIL", "").strip()
+    if not host or not sender:
+        raise HTTPException(status_code=503, detail="Report email verification is not configured. Contact your college administrator.")
+    message = EmailMessage()
+    message["Subject"] = "Campus OS report email verification"
+    message["From"] = formataddr((os.getenv("SMTP_FROM_NAME", "Campus OS"), sender))
+    message["To"] = email
+    message.set_content(
+        f"Your Campus OS report email verification code is {code}. "
+        "It expires in 10 minutes. If you did not request this, ignore this message."
+    )
+    try:
+        with smtplib.SMTP(host, int(os.getenv("SMTP_PORT", "587")), timeout=20) as server:
+            server.starttls()
+            username = os.getenv("SMTP_USERNAME", "")
+            password = os.getenv("SMTP_PASSWORD", "")
+            if username:
+                server.login(username, password)
+            server.send_message(message)
+    except (OSError, smtplib.SMTPException, ValueError) as error:
+        logger.exception("Could not send attendance report email verification.")
+        raise HTTPException(status_code=502, detail="Could not send the verification code. Check SMTP configuration and try again.") from error
+
+
+@router.get("/report-email")
+def get_report_email(request: Request):
+    actor = _require_roles(request, "Faculty", "Warden")
+    feature = "class_attendance" if str(actor["role"]).upper() == "FACULTY" else "hostel_attendance"
+    _require_feature(request, feature)
+    backend = request.app.state.attendance_v2_backend
+    conn = backend["get_conn"]()
+    try:
+        row = backend["db_exec"](
+            conn,
+            "SELECT attendance_report_email, attendance_report_email_verified FROM users WHERE college_id = ? AND UPPER(user_id) = ?",
+            (backend["ACTIVE_COLLEGE_ID"].get(), str(actor["user_id"]).upper()),
+        ).fetchone()
+        return {
+            "email": row["attendance_report_email"] if row else "",
+            "verified": bool(row["attendance_report_email_verified"]) if row else False,
+        }
+    finally:
+        conn.close()
+
+
+@router.post("/report-email/verification")
+def start_report_email_verification(body: ReportEmailStartInput, request: Request):
+    actor = _require_roles(request, "Faculty", "Warden")
+    feature = "class_attendance" if str(actor["role"]).upper() == "FACULTY" else "hostel_attendance"
+    _require_feature(request, feature)
+    email = body.email.strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+    backend = request.app.state.attendance_v2_backend
+    college_id = backend["ACTIVE_COLLEGE_ID"].get()
+    user_id = str(actor["user_id"]).upper()
+    conn = backend["get_conn"]()
+    try:
+        existing = backend["db_exec"](
+            conn,
+            "SELECT last_sent_at FROM attendance_v2_report_email_codes WHERE college_id = ? AND UPPER(user_id) = ?",
+            (college_id, user_id),
+        ).fetchone()
+        last_sent = _parse_time(existing["last_sent_at"]) if existing else None
+        if last_sent and (_now() - last_sent).total_seconds() < 60:
+            raise HTTPException(status_code=429, detail="Wait one minute before requesting another verification code.")
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        code_hash = hmac.new(
+            backend["AUTH_SECRET"].encode(),
+            f"{college_id}:{user_id}:{email}:{code}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        _send_report_email_verification(email, code)
+        now = _now()
+        backend["db_exec"](
+            conn,
+            """
+            INSERT INTO attendance_v2_report_email_codes
+                (college_id, tenant_id, user_id, email, code_hash, expires_at, attempts, last_sent_at)
+            VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+            ON CONFLICT (college_id, user_id) DO UPDATE SET
+                email = excluded.email, code_hash = excluded.code_hash,
+                expires_at = excluded.expires_at, attempts = 0, last_sent_at = excluded.last_sent_at
+            """,
+            (
+                college_id, _tenant_id(request), user_id, email, code_hash,
+                (now + timedelta(minutes=10)).isoformat(), now.isoformat(),
+            ),
+        )
+        conn.commit()
+        return {"success": True, "email": email, "expires_in_seconds": 600}
+    except HTTPException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@router.post("/report-email/verify")
+def verify_report_email(body: ReportEmailVerifyInput, request: Request):
+    actor = _require_roles(request, "Faculty", "Warden")
+    feature = "class_attendance" if str(actor["role"]).upper() == "FACULTY" else "hostel_attendance"
+    _require_feature(request, feature)
+    email = body.email.strip().lower()
+    if not re.fullmatch(r"\d{6}", body.code):
+        raise HTTPException(status_code=400, detail="Enter the six-digit verification code.")
+    backend = request.app.state.attendance_v2_backend
+    college_id = backend["ACTIVE_COLLEGE_ID"].get()
+    user_id = str(actor["user_id"]).upper()
+    conn = backend["get_conn"]()
+    try:
+        row = backend["db_exec"](
+            conn,
+            "SELECT * FROM attendance_v2_report_email_codes WHERE college_id = ? AND UPPER(user_id) = ?",
+            (college_id, user_id),
+        ).fetchone()
+        if not row or str(row["email"]).lower() != email:
+            raise HTTPException(status_code=400, detail="Request a verification code for this email first.")
+        expiry = _parse_time(row["expires_at"])
+        if not expiry or expiry <= _now():
+            backend["db_exec"](
+                conn,
+                "DELETE FROM attendance_v2_report_email_codes WHERE college_id = ? AND UPPER(user_id) = ?",
+                (college_id, user_id),
+            )
+            conn.commit()
+            raise HTTPException(status_code=400, detail="The verification code expired. Request a new one.")
+        if int(row["attempts"]) >= 5:
+            raise HTTPException(status_code=429, detail="Too many incorrect codes. Request a new verification code.")
+        expected = hmac.new(
+            backend["AUTH_SECRET"].encode(),
+            f"{college_id}:{user_id}:{email}:{body.code}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(str(row["code_hash"]), expected):
+            backend["db_exec"](
+                conn,
+                "UPDATE attendance_v2_report_email_codes SET attempts = attempts + 1 WHERE college_id = ? AND UPPER(user_id) = ?",
+                (college_id, user_id),
+            )
+            conn.commit()
+            raise HTTPException(status_code=400, detail="The verification code is incorrect.")
+        backend["db_exec"](
+            conn,
+            """
+            UPDATE users SET attendance_report_email = ?, attendance_report_email_verified = 1
+            WHERE college_id = ? AND UPPER(user_id) = ?
+            """,
+            (email, college_id, user_id),
+        )
+        backend["db_exec"](
+            conn,
+            "DELETE FROM attendance_v2_report_email_codes WHERE college_id = ? AND UPPER(user_id) = ?",
+            (college_id, user_id),
+        )
+        conn.commit()
+        backend["invalidate_user_cache"](user_id)
+        return {"success": True, "email": email, "verified": True}
+    except HTTPException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _report_day_bounds(request: Request, day: str):
+    try:
+        local_day = Date.fromisoformat(day)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Date must use YYYY-MM-DD.") from error
+    timezone_name = (request.state.tenant or {}).get("timezone") or "UTC"
+    local_zone = ZoneInfo(timezone_name)
+    start = datetime.combine(local_day, DateTimeTime.min, tzinfo=local_zone).astimezone(timezone.utc)
+    end = datetime.combine(local_day + timedelta(days=1), DateTimeTime.min, tzinfo=local_zone).astimezone(timezone.utc)
+    return start.isoformat(), end.isoformat()
+
+
+@router.get("/reports/sessions")
+def list_daily_report_sessions(request: Request, scope: str, date: str):
+    actor = _require_roles(request, "Faculty", "Warden", "Dean")
+    normalized_scope = _validate_scope(scope)
+    _require_feature(request, "class_attendance" if normalized_scope == "CLASS" else "hostel_attendance")
+    role = str(actor["role"]).upper()
+    if role == "FACULTY" and normalized_scope != "CLASS":
+        raise HTTPException(status_code=403, detail="Faculty can only view their class reports.")
+    if role == "WARDEN" and normalized_scope != "HOSTEL":
+        raise HTTPException(status_code=403, detail="Wardens can only view their hostel reports.")
+    start, end = _report_day_bounds(request, date)
+    backend = request.app.state.attendance_v2_backend
+    college_id = backend["ACTIVE_COLLEGE_ID"].get()
+    conn = backend["get_conn"]()
+    try:
+        query = """
+            SELECT s.* FROM attendance_v2_sessions s
+            WHERE s.college_id = ? AND s.scope = ? AND s.created_at >= ? AND s.created_at < ?
+        """
+        values = [college_id, normalized_scope, start, end]
+        if normalized_scope == "CLASS" and role == "FACULTY":
+            query += " AND EXISTS (SELECT 1 FROM attendance_v2_courses c WHERE c.college_id = s.college_id AND c.id = s.course_id AND UPPER(c.faculty_id) = ?)"
+            values.append(str(actor["user_id"]).upper())
+        if normalized_scope == "HOSTEL" and role == "WARDEN":
+            query += " AND LOWER(COALESCE(s.hostel_block, '')) = LOWER(?)"
+            values.append(str(actor.get("hostel_block") or ""))
+        rows = backend["db_exec"](conn, query + " ORDER BY s.created_at DESC", tuple(values)).fetchall()
+        result = []
+        for row in rows:
+            session = dict(row)
+            report = _report_data(conn, backend, session)
+            if not report:
+                continue
+            present = sum(item["status"] == "PRESENT" for item in report["students"])
+            result.append({
+                "session_id": session["id"],
+                "scope": session["scope"],
+                "title": f'{report["course_code"]} · {report["course_title"]}',
+                "date": report["date"],
+                "status": session["status"],
+                "total": len(report["students"]),
+                "present": present,
+                "absent": len(report["students"]) - present,
+            })
+        return result
+    finally:
+        conn.close()
+
+
+@router.get("/reports/session/{session_id}.pdf")
+def download_session_report(session_id: str, request: Request):
+    actor = _require_roles(request, "Faculty", "Warden", "Dean")
+    backend = request.app.state.attendance_v2_backend
+    conn = backend["get_conn"]()
+    try:
+        session = _get_session(conn, backend, session_id)
+        _require_feature(request, "class_attendance" if session["scope"] == "CLASS" else "hostel_attendance")
+        role = str(actor["role"]).upper()
+        if role == "FACULTY":
+            course = backend["db_exec"](
+                conn,
+                "SELECT faculty_id FROM attendance_v2_courses WHERE college_id = ? AND id = ?",
+                (backend["ACTIVE_COLLEGE_ID"].get(), session["course_id"]),
+            ).fetchone()
+            if session["scope"] != "CLASS" or not course or str(course["faculty_id"]).upper() != str(actor["user_id"]).upper():
+                raise HTTPException(status_code=403, detail="You can only download reports for your courses.")
+        if role == "WARDEN":
+            if session["scope"] != "HOSTEL" or str(session.get("hostel_block") or "").casefold() != str(actor.get("hostel_block") or "").casefold():
+                raise HTTPException(status_code=403, detail="You can only download reports for your assigned hostel.")
+        report = _report_data(conn, backend, session)
+        if not report:
+            raise HTTPException(status_code=404, detail="Attendance report not found.")
+        pdf = _build_report_pdf(report)
+        filename_prefix = re.sub(r"[^A-Za-z0-9_-]+", "-", str(report["course_code"])).strip("-")[:40] or "attendance"
+        filename = f'{filename_prefix}-{report["date"][:10]}-attendance.pdf'
+        return Response(
+            content=pdf,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    finally:
+        conn.close()
+
+
+def _build_student_daily_pdf(report):
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    output = io.BytesIO()
+    pdf = canvas.Canvas(output, pagesize=A4, pageCompression=1)
+    _, page_height = A4
+    pdf.setTitle(f'{report["student_id"]} attendance {report["date"]}')
+    pdf.setFont("Helvetica-Bold", 15)
+    pdf.drawString(32, page_height - 40, "Campus OS · Personal Attendance")
+    pdf.setFont("Helvetica", 9)
+    pdf.drawString(32, page_height - 58, f'{report["institute"]} · {report["student_name"]} · {report["student_id"]}')
+    pdf.drawString(32, page_height - 74, f'Daily attendance · {report["date"]}')
+    y = page_height - 105
+    rows = report["records"]
+    for index, item in enumerate(rows):
+        if index and index % 48 == 0:
+            pdf.showPage()
+            y = page_height - 40
+            pdf.setFont("Helvetica-Bold", 10)
+            pdf.drawString(32, y, f'{report["date"]} · continued')
+            y -= 18
+        pdf.setFont("Helvetica", 8)
+        pdf.drawString(32, y, str(item["time"])[:16])
+        pdf.drawString(112, y, str(item["label"])[:52])
+        pdf.drawString(365, y, str(item["status"]))
+        pdf.drawString(425, y, str(item["method"] or "—")[:15])
+        pdf.drawString(32, y - 10, f'Marked at: {item["marked_at"] or "—"}')
+        y -= 25
+    if not rows:
+        pdf.setFont("Helvetica", 9)
+        pdf.drawString(32, y, "No attendance sessions were recorded on this date.")
+    pdf.showPage()
+    pdf.save()
+    return output.getvalue()
+
+
+@router.get("/student/daily-report.pdf")
+def download_student_daily_report(request: Request, date: str):
+    student = _require_roles(request, "Student")
+    _require_attendance_enabled(request)
+    start, end = _report_day_bounds(request, date)
+    backend = request.app.state.attendance_v2_backend
+    college_id = backend["ACTIVE_COLLEGE_ID"].get()
+    student_id = str(student["user_id"]).upper()
+    conn = backend["get_conn"]()
+    try:
+        modules = request.state.tenant.get("modules", {})
+        class_rows = []
+        if modules.get("class_attendance"):
+            class_rows = backend["db_exec"](
+                conn,
+                """
+                SELECT s.created_at, c.code, c.title, r.status, r.method, r.marked_at
+                FROM attendance_v2_sessions s
+                JOIN attendance_v2_courses c ON c.college_id = s.college_id AND c.id = s.course_id
+                JOIN attendance_v2_course_enrollments e ON e.college_id = c.college_id
+                    AND e.course_id = c.id AND UPPER(e.student_id) = ?
+                LEFT JOIN attendance_v2_records r ON r.college_id = s.college_id
+                    AND r.session_id = s.id AND UPPER(r.student_id) = ?
+                WHERE s.college_id = ? AND s.scope = 'CLASS' AND s.created_at >= ? AND s.created_at < ?
+                """,
+                (student_id, student_id, college_id, start, end),
+            ).fetchall()
+        hostel_rows = []
+        if modules.get("hostel_attendance"):
+            hostel_rows = backend["db_exec"](
+                conn,
+                """
+                SELECT s.created_at, s.hostel_block, s.wing_name, r.status, r.method, r.marked_at
+                FROM attendance_v2_sessions s
+                JOIN attendance_v2_hostel_wing_members m ON m.college_id = s.college_id
+                    AND LOWER(m.wing_name) = LOWER(s.wing_name)
+                    AND LOWER(m.hostel_block) = LOWER(COALESCE(s.hostel_block, ''))
+                    AND UPPER(m.student_id) = ?
+                LEFT JOIN attendance_v2_records r ON r.college_id = s.college_id
+                    AND r.session_id = s.id AND UPPER(r.student_id) = ?
+                WHERE s.college_id = ? AND s.scope = 'HOSTEL' AND s.created_at >= ? AND s.created_at < ?
+                """,
+                (student_id, student_id, college_id, start, end),
+            ).fetchall()
+        records = []
+        for row in class_rows:
+            created = _parse_time(row["created_at"])
+            records.append({
+                "time": created.astimezone(ZoneInfo(request.state.tenant.get("timezone") or "UTC")).strftime("%Y-%m-%d %H:%M") if created else "",
+                "label": f'{row["code"]} · {row["title"]}',
+                "status": row["status"] or "ABSENT",
+                "method": row["method"],
+                "marked_at": row["marked_at"],
+            })
+        for row in hostel_rows:
+            created = _parse_time(row["created_at"])
+            records.append({
+                "time": created.astimezone(ZoneInfo(request.state.tenant.get("timezone") or "UTC")).strftime("%Y-%m-%d %H:%M") if created else "",
+                "label": f'{row["hostel_block"]} · {row["wing_name"]} roll call',
+                "status": row["status"] or "ABSENT",
+                "method": row["method"],
+                "marked_at": row["marked_at"],
+            })
+        records.sort(key=lambda item: item["time"])
+        report = {
+            "institute": request.state.tenant.get("college_name", "Institute"),
+            "student_id": student["user_id"],
+            "student_name": student.get("full_name") or student["user_id"],
+            "date": date,
+            "records": records,
+        }
+        pdf = _build_student_daily_pdf(report)
+        return Response(
+            content=pdf,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{student_id}-{date}-attendance.pdf"'},
+        )
     finally:
         conn.close()
 
@@ -1775,26 +2319,39 @@ def add_approved_staff(body: StaffInput, request: Request):
         raise HTTPException(status_code=400, detail="Use an approved institute email address.")
     conn = backend["get_conn"]()
     try:
+        normalized_role = "Faculty" if role == "FACULTY" else "Warden"
+        account = backend["_create_dean_staff_account"](
+            conn,
+            {
+                "user_id": body.user_id,
+                "full_name": body.name.strip(),
+                "role": normalized_role,
+                "email": email,
+                "department": body.department_or_block.strip() if role == "FACULTY" else "",
+                "hostel_block": body.department_or_block.strip() if role == "WARDEN" else "All",
+            },
+            actor["user_id"],
+        )
         staff_id = _new_id("STAFF")
         backend["db_exec"](
             conn,
             """
             INSERT INTO attendance_v2_pre_approved_staff
                 (college_id, tenant_id, id, name, email, role, department_or_block, created_by, claimed_by_user_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 backend["ACTIVE_COLLEGE_ID"].get(), _tenant_id(request), staff_id,
                 body.name.strip(), email, role, body.department_or_block.strip(),
-                actor["user_id"], _now_text(),
+                actor["user_id"], account["user_id"], _now_text(),
             ),
         )
         conn.commit()
-        return {"success": True, "id": staff_id}
+        return {"success": True, "id": staff_id, **account}
     except Exception as error:
         conn.rollback()
         if backend["DB_INTEGRITY_ERRORS"] and isinstance(error, backend["DB_INTEGRITY_ERRORS"]):
-            raise HTTPException(status_code=409, detail="That staff email has already been provisioned.") from error
+            raise HTTPException(status_code=409, detail="That username or staff email is already in use.") from error
         raise
     finally:
         conn.close()
@@ -1810,41 +2367,58 @@ async def import_approved_staff(request: Request, file: UploadFile = File(...)):
         rows = list(csv.DictReader(io.StringIO(raw.decode("utf-8-sig"))))
     except (UnicodeDecodeError, csv.Error) as error:
         raise HTTPException(status_code=400, detail="Upload a valid UTF-8 CSV.") from error
-    expected = {"name", "email", "role", "department_or_block"}
+    expected = {"user_id", "name", "email", "role", "department_or_block"}
     if not rows or not expected.issubset({str(key).strip().lower() for key in rows[0]}):
-        raise HTTPException(status_code=400, detail="CSV header must be name,email,role,department_or_block.")
+        raise HTTPException(status_code=400, detail="CSV header must be user_id,name,email,role,department_or_block.")
     backend = request.app.state.attendance_v2_backend
     conn = backend["get_conn"]()
-    created = 0
+    accounts = []
     try:
-        for raw_row in rows:
+        for row_number, raw_row in enumerate(rows, start=2):
             values = {str(key).strip().lower(): str(value or "").strip() for key, value in raw_row.items()}
             staff = StaffInput(
+                user_id=values.get("user_id", ""),
                 name=values.get("name", ""), email=values.get("email", ""),
                 role=values.get("role", ""), department_or_block=values.get("department_or_block", ""),
             )
             role = staff.role.upper()
             if role not in {"FACULTY", "WARDEN"} or not backend["is_tenant_email"](staff.email.lower()):
-                raise HTTPException(status_code=400, detail=f"Invalid role or institute email in CSV row {created + 2}.")
+                raise HTTPException(status_code=400, detail=f"Invalid role or institute email in CSV row {row_number}.")
+            try:
+                account = backend["_create_dean_staff_account"](
+                    conn,
+                    {
+                        "user_id": staff.user_id,
+                        "full_name": staff.name,
+                        "role": "Faculty" if role == "FACULTY" else "Warden",
+                        "email": staff.email.lower(),
+                        "department": staff.department_or_block if role == "FACULTY" else "",
+                        "hostel_block": staff.department_or_block if role == "WARDEN" else "All",
+                    },
+                    actor["user_id"],
+                )
+            except HTTPException as error:
+                raise HTTPException(status_code=error.status_code, detail=f"CSV row {row_number}: {error.detail}") from error
             backend["db_exec"](
                 conn,
                 """
                 INSERT INTO attendance_v2_pre_approved_staff
                     (college_id, tenant_id, id, name, email, role, department_or_block, created_by, claimed_by_user_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
-                ON CONFLICT (tenant_id, email) DO NOTHING
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     backend["ACTIVE_COLLEGE_ID"].get(), _tenant_id(request), _new_id("STAFF"),
                     staff.name, staff.email.lower(), role, staff.department_or_block,
-                    actor["user_id"], _now_text(),
+                    actor["user_id"], account["user_id"], _now_text(),
                 ),
             )
-            created += 1
+            accounts.append(account)
         conn.commit()
-        return {"success": True, "processed": created}
-    except Exception:
+        return {"success": True, "accounts": accounts}
+    except Exception as error:
         conn.rollback()
+        if backend["DB_INTEGRITY_ERRORS"] and isinstance(error, backend["DB_INTEGRITY_ERRORS"]):
+            raise HTTPException(status_code=409, detail="A username or staff email is already in use; no CSV rows were imported.") from error
         raise
     finally:
         conn.close()

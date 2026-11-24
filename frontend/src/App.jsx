@@ -3,11 +3,12 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { apiFetch, API_URL } from './api';
 import { getCached, setCached } from './cache';
 import BrandLoadingScreen from './components/BrandLoadingScreen';
-import { signInWithNativeGoogle, usesNativeGoogleSignIn } from './auth/googleSignIn';
 import { CapacitorUpdater } from '@capgo/capacitor-updater';
 import { Capacitor } from '@capacitor/core';
 import PrivacyAndDataDeletion from './components/PrivacyAndDataDeletion';
 import AttendanceOnlyPortals from './components/AttendanceOnlyPortals.jsx';
+import PasswordChangeForm from './components/PasswordChangeForm.jsx';
+import StudentOnboardingPortal from './components/StudentOnboardingPortal.jsx';
 import CompanyLandingPage from './pages/CompanyLandingPage.tsx';
 import { extractErrorMessage } from './utils/errorParser.ts';
 
@@ -21,8 +22,6 @@ const FounderPortal = lazy(() => import('./components/FounderPortal'));
 const GateSecurityPortal = lazy(() => import('./components/CampusSecurity').then((module) => ({ default: module.GateSecurityPortal })));
 const loadStudentPortal = () => import('./components/StudentPortal');
 const StudentPortal = lazy(loadStudentPortal);
-
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
 function ProfileRow({ label, value }) {
   return (
@@ -61,7 +60,6 @@ function AuthenticatedApp() {
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
   const [loginError, setLoginError] = useState(null);
-  const [googleLoginLoading, setGoogleLoginLoading] = useState(false);
   const [staffUsername, setStaffUsername] = useState('');
   const [staffPassword, setStaffPassword] = useState('');
   const [staffLoginLoading, setStaffLoginLoading] = useState(false);
@@ -72,6 +70,7 @@ function AuthenticatedApp() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileError, setProfileError] = useState('');
   const [showProfile, setShowProfile] = useState(false);
+  const [showPasswordChange, setShowPasswordChange] = useState(false);
 
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
@@ -104,42 +103,6 @@ function AuthenticatedApp() {
     });
   }, []);
 
-  const handleGoogleCredential = useCallback(async (credential) => {
-    setLoginError(null);
-    try {
-      const res = await fetch(`${API_URL}/api/auth/google`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ credential })
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(extractErrorMessage(data, 'Google sign-in failed.'));
-      localStorage.setItem('hms_session_token', data.token || credential);
-      localStorage.removeItem('hms_google_credential');
-      localStorage.setItem('hms_user', JSON.stringify(data.user));
-      setProfileDraft(profileDraftFromUser(data.user));
-      setUser(data.user);
-    } catch (error) {
-      setLoginError(extractErrorMessage(error, 'Could not verify your college Google account.'));
-    }
-  }, []);
-
-  const handleNativeGoogleLogin = async () => {
-    if (googleLoginLoading) return;
-    setGoogleLoginLoading(true);
-    setLoginError(null);
-    try {
-      const credential = await signInWithNativeGoogle(GOOGLE_CLIENT_ID);
-      await handleGoogleCredential(credential);
-    } catch (error) {
-      if (error?.code !== 'USER_CANCELLED') {
-        setLoginError(extractErrorMessage(error, 'Google sign-in failed. Please try again.'));
-      }
-    } finally {
-      setGoogleLoginLoading(false);
-    }
-  };
-
   const handleStaffLogin = async (event) => {
     event.preventDefault();
     if (staffLoginLoading) return;
@@ -152,7 +115,7 @@ function AuthenticatedApp() {
         body: JSON.stringify({ username: staffUsername, password: staffPassword })
       });
       const data = await response.json();
-      if (!response.ok || !data.success) throw new Error(extractErrorMessage(data, 'Staff sign-in failed.'));
+      if (!response.ok || !data.success) throw new Error(extractErrorMessage(data, 'Sign-in failed.'));
       localStorage.setItem('hms_session_token', data.token);
       localStorage.removeItem('hms_google_credential');
       localStorage.setItem('hms_user', JSON.stringify(data.user));
@@ -160,7 +123,7 @@ function AuthenticatedApp() {
       setProfileDraft(profileDraftFromUser(data.user));
       setUser(data.user);
     } catch (error) {
-      setLoginError(extractErrorMessage(error, 'Staff sign-in failed.'));
+      setLoginError(extractErrorMessage(error, 'Sign-in failed.'));
     } finally {
       setStaffLoginLoading(false);
     }
@@ -168,8 +131,8 @@ function AuthenticatedApp() {
 
   useEffect(() => {
     const restoreSession = async () => {
-      const credential = localStorage.getItem('hms_session_token')
-        || localStorage.getItem('hms_google_credential');
+      localStorage.removeItem('hms_google_credential');
+      const credential = localStorage.getItem('hms_session_token');
       const cachedUser = localStorage.getItem('hms_user');
       if (credential && cachedUser) {
         try {
@@ -244,54 +207,6 @@ function AuthenticatedApp() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!authReady || user || usesNativeGoogleSignIn()) return undefined;
-    const renderGoogleButton = () => {
-      if (!window.google?.accounts?.id) return false;
-      window.google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: ({ credential }) => handleGoogleCredential(credential)
-      });
-      const container = document.getElementById('google-signin-button');
-      if (container) {
-        container.replaceChildren();
-        window.google.accounts.id.renderButton(container, {
-          theme: 'outline',
-          size: 'large',
-          shape: 'pill',
-          text: 'signin_with',
-          width: 300
-        });
-      }
-      return true;
-    };
-    let script = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
-    const handleGoogleIdentityError = () => {
-      setLoginError('Google sign-in could not load. Check your connection and refresh the page to try again.');
-    };
-    window.addEventListener('google-identity-error', handleGoogleIdentityError);
-    if (!renderGoogleButton()) {
-      if (!script) {
-        script = document.createElement('script');
-        script.src = 'https://accounts.google.com/gsi/client';
-        script.async = true;
-        script.defer = true;
-        script.onerror = handleGoogleIdentityError;
-        document.head.appendChild(script);
-      }
-      script.addEventListener('load', renderGoogleButton, { once: true });
-      return () => {
-        script?.removeEventListener('load', renderGoogleButton);
-        script?.removeEventListener('error', handleGoogleIdentityError);
-        window.removeEventListener('google-identity-error', handleGoogleIdentityError);
-      };
-    }
-    return () => {
-      script?.removeEventListener('error', handleGoogleIdentityError);
-      window.removeEventListener('google-identity-error', handleGoogleIdentityError);
-    };
-  }, [authReady, user, handleGoogleCredential]);
-
   const handleInstallClick = async () => {
     if (deferredPrompt) {
       deferredPrompt.prompt();
@@ -336,6 +251,14 @@ function AuthenticatedApp() {
     });
   }, []);
 
+  const handlePasswordChangeComplete = useCallback((data) => {
+    localStorage.setItem('hms_session_token', data.token);
+    localStorage.removeItem('hms_user');
+    localStorage.setItem('hms_user', JSON.stringify(data.user));
+    setUser(data.user);
+    setShowPasswordChange(false);
+  }, []);
+
   const handleLogout = () => {
     localStorage.removeItem('hms_user');
     localStorage.removeItem('hms_session_token');
@@ -346,6 +269,13 @@ function AuthenticatedApp() {
 
   if (!authReady) {
     return <BrandLoadingScreen label="Preparing your secure portal" />;
+  }
+  if (user?.password_reset_required) {
+    return (
+      <div className="ptm-root">
+        <PasswordChangeForm apiUrl={API_URL} user={user} mandatory onSuccess={handlePasswordChangeComplete} />
+      </div>
+    );
   }
 
   const isFounder = user?.role === 'Founder' || user?.user_id === 'FOUNDER';
@@ -421,34 +351,14 @@ function AuthenticatedApp() {
             </div>
 
             <h1 className="ptm-login-heading">{tenant?.college_name || 'Campus'} Portal</h1>
-            <p className="ptm-login-sub">Students use Google. College staff use their account ID and password.</p>
+            <p className="ptm-login-sub">Sign in with the username and password provided by your college.</p>
 
             {loginError && <div className="ptm-alert-error">{loginError}</div>}
 
-            <div className="ptm-form-stack" style={{ alignItems: 'center', padding: '10px 0 4px 0' }}>
-              {usesNativeGoogleSignIn() ? (
-                <button
-                  type="button"
-                  className="ptm-btn-primary"
-                  style={{ maxWidth: '300px' }}
-                  disabled={googleLoginLoading}
-                  onClick={handleNativeGoogleLogin}
-                >
-                  {googleLoginLoading ? 'Connecting to Google…' : 'Sign in with Google'}
-                </button>
-              ) : (
-                <div id="google-signin-button" style={{ minHeight: '44px', display: 'flex', justifyContent: 'center' }} />
-              )}
-              <p className="ptm-list-sub" style={{ textAlign: 'center', marginTop: '6px' }}>
-                Students: sign in with your verified college Google account
-                {tenant?.allowed_email_domain && <> (<strong>@{tenant.allowed_email_domain}</strong> or a subdomain such as <strong>@branch.{tenant.allowed_email_domain}</strong>)</>}
-              </p>
-            </div>
-            <div style={{ borderTop: '1px solid #E5E7EB', margin: '16px 0' }} />
             <form className="ptm-form-stack" onSubmit={handleStaffLogin}>
-              <div className="ptm-section-title" style={{ marginBottom: 0 }}>Staff sign in</div>
+              <div className="ptm-section-title" style={{ marginBottom: 0 }}>Username and password</div>
               <label className="ptm-label">
-                Account ID
+                Username or roll number
                 <input
                   className="ptm-input"
                   autoComplete="username"
@@ -469,10 +379,10 @@ function AuthenticatedApp() {
                 />
               </label>
               <button className="ptm-btn-primary" type="submit" disabled={staffLoginLoading}>
-                {staffLoginLoading ? 'Signing in…' : 'Sign in as staff'}
+                {staffLoginLoading ? 'Signing in…' : 'Sign in'}
               </button>
               <p className="ptm-list-sub" style={{ textAlign: 'center', margin: 0 }}>
-                Ask your Dean or Founder to set up or reset your staff password.
+                Students: ask Student Onboarding Staff for your login. Staff: contact your Dean for account access.
               </p>
             </form>
           </div>
@@ -523,6 +433,7 @@ function AuthenticatedApp() {
               {(user.role === 'Gate Security' || user.role === 'GateSecurity') && tenant?.modules?.gate_outpass && <GateSecurityPortal user={user} apiUrl={API_URL} />}
               {user.role === 'ClubOrganizer' && <ClubPortal user={user} apiUrl={API_URL} />}
               {user.role === 'Staff' && <StaffPortal user={user} apiUrl={API_URL} />}
+              {user.role === 'StudentOnboarding' && <StudentOnboardingPortal user={user} apiUrl={API_URL} />}
             </Suspense>
           </main>
 
@@ -556,6 +467,23 @@ function AuthenticatedApp() {
                   )}
                   <ProfileRow label="Official Email" value={user.email} />
                 </div>
+                <button type="button" className="ptm-btn-secondary" onClick={() => setShowPasswordChange(true)}>
+                  Change password
+                </button>
+              </section>
+            </div>
+          )}
+
+          {showPasswordChange && (
+            <div className="ptm-modal-backdrop" onClick={() => setShowPasswordChange(false)}>
+              <section className="ptm-modal-card" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+                <button type="button" className="ptm-modal-close" onClick={() => setShowPasswordChange(false)}>×</button>
+                <PasswordChangeForm
+                  apiUrl={API_URL}
+                  user={user}
+                  onSuccess={handlePasswordChangeComplete}
+                  onCancel={() => setShowPasswordChange(false)}
+                />
               </section>
             </div>
           )}
@@ -755,12 +683,6 @@ const PAYTM_APPLE_CSS = `
   .ptm-header-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
   .ptm-install-chip { background: #E0F2FE; color: #002970; border: 1px solid #BAE6FD; padding: 6px 11px; border-radius: 999px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
   .ptm-logout-btn { background: #FEE2E2; color: #B91C1C; border: none; padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
-  .ptm-promo-banner { border-radius: 18px; padding: 18px; color: #FFFFFF; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; box-shadow: 0 6px 18px rgba(0, 41, 112, 0.14); position: relative; overflow: hidden; }
-  .ptm-promo-tag { display: inline-block; background: rgba(255, 255, 255, 0.18); padding: 3px 10px; border-radius: 999px; font-size: 10px; font-weight: 800; letter-spacing: 0.04em; margin-bottom: 6px; }
-  .ptm-promo-title { font-size: 18px; font-weight: 800; color: #FFFFFF !important; margin: 0 0 4px 0; line-height: 1.2; }
-  .ptm-promo-sub { font-size: 12px; color: rgba(255, 255, 255, 0.88); margin: 0; }
-  .ptm-promo-right { text-align: right; flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-  .ptm-promo-cta { background: #00E5FF; color: #002970; border: none; padding: 7px 14px; border-radius: 999px; font-size: 12px; font-weight: 800; cursor: pointer; text-decoration: none; white-space: nowrap; }
   .ptm-login-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; background: linear-gradient(180deg, #E8F4FD 0%, #F5F7FA 100%); }
   .ptm-login-box { width: 100%; max-width: 430px; background: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 22px; padding: 26px 22px; box-shadow: 0 12px 32px rgba(0, 41, 112, 0.08); }
   .ptm-login-top-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }

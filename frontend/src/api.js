@@ -10,8 +10,7 @@ const ALLOWED_API_ORIGINS = new Set([
 
 export async function apiFetch(input, init = {}) {
   const headers = new Headers(init.headers || {});
-  const credential = localStorage.getItem('hms_session_token')
-    || localStorage.getItem('hms_google_credential');
+  const credential = localStorage.getItem('hms_session_token');
   const requestUrl = typeof input === 'string' ? input : input.url;
   const targetOrigin = new URL(requestUrl, window.location.origin).origin;
 
@@ -22,7 +21,6 @@ export async function apiFetch(input, init = {}) {
   const response = await fetch(input, { ...init, headers });
   if (response.status === 401 && credential && ALLOWED_API_ORIGINS.has(targetOrigin)) {
     localStorage.removeItem('hms_session_token');
-    localStorage.removeItem('hms_google_credential');
     localStorage.removeItem('hms_user');
     window.dispatchEvent(new Event('hms-auth-expired'));
   }

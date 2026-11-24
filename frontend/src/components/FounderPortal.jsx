@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../api';
 import StaffAccountAccess from './StaffAccountAccess';
-import { DashboardCardSkeleton, GridCardSkeleton, ListRowSkeleton } from './SkeletonLoader';
+import { ListRowSkeleton } from './SkeletonLoader';
 import usePortalBackNavigation from '../hooks/usePortalBackNavigation';
 import { extractErrorMessage } from '../utils/errorParser.ts';
 
@@ -19,7 +19,6 @@ const TENANT_MODULES = [
 export default function FounderPortal({ apiUrl, onLogout, user }) {
   const [page, setPage] = useState('home');
   usePortalBackNavigation(page, setPage);
-  const [ads, setAds] = useState([]);
   const [tenants, setTenants] = useState([]);
   const [tenantLoading, setTenantLoading] = useState(true);
   const [tenantSaving, setTenantSaving] = useState(false);
@@ -33,33 +32,9 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
     initial_dean_id: '',
     initial_dean_name: '',
     initial_dean_email: '',
-    initial_dean_password: '',
     logo_url: ''
   });
-  const [dataLoading, setDataLoading] = useState(true);
   const [msg, setMsg] = useState(null);
-  const [form, setForm] = useState({
-    sponsor_tag: 'SVNIT CAMPUS PARTNER',
-    title: '',
-    subtitle: '',
-    badge_text: 'LIMITED TIME OFFER',
-    cta_text: 'Apply Now →',
-    target_url: '',
-    image_url: '',
-    bg_gradient: 'linear-gradient(135deg, #002970 0%, #0284C7 100%)',
-    days_valid: 15
-  });
-
-  const loadAds = useCallback(async () => {
-    try {
-      const res = await apiFetch(`${apiUrl}/api/ads`);
-      if (res.ok) setAds(await res.json());
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setDataLoading(false);
-    }
-  }, [apiUrl]);
 
   const loadTenants = useCallback(async () => {
     setTenantLoading(true);
@@ -76,9 +51,8 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
   }, [apiUrl]);
 
   useEffect(() => {
-    loadAds();
     loadTenants();
-  }, [loadAds, loadTenants]);
+  }, [loadTenants]);
 
   const handleCreateTenant = async (e) => {
     e.preventDefault();
@@ -93,7 +67,7 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.success) throw new Error(extractErrorMessage(data, 'Could not create college.'));
-      setMsg(`College ${data.college_id} configured. Connect and verify ${data.domain} before launch.`);
+      setMsg(`College ${data.college_id} configured. Initial Dean ${data.initial_dean_id} temporary password: ${data.temporary_password}. Share privately; it must be changed at first sign-in.`);
       setTenantForm({
         college_id: '',
         college_name: '',
@@ -103,7 +77,6 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
         initial_dean_id: '',
         initial_dean_name: '',
         initial_dean_email: '',
-        initial_dean_password: '',
         logo_url: ''
       });
       await loadTenants();
@@ -139,36 +112,6 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
     }
   };
 
-  const handleCreate = async (e) => {
-    e.preventDefault();
-    const res = await apiFetch(`${apiUrl}/api/ads/create`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(form)
-    });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      setMsg(`✅ ${data.message}`);
-      setForm({
-        sponsor_tag: 'SVNIT CAMPUS PARTNER',
-        title: '',
-        subtitle: '',
-        badge_text: 'LIMITED TIME OFFER',
-        cta_text: 'Apply Now →',
-        target_url: '',
-        image_url: '',
-        bg_gradient: 'linear-gradient(135deg, #002970 0%, #0284C7 100%)',
-        days_valid: 15
-      });
-      loadAds();
-    }
-  };
-
-  const handleDelete = async (id) => {
-    await apiFetch(`${apiUrl}/api/ads/delete?ad_id=${id}`, { method: 'POST' });
-    loadAds();
-  };
-
   return (
     <div
       className="ptm-founder-screen"
@@ -190,14 +133,14 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
               Sign Out
             </button>
           </div>
-          <h1 className="ptm-page-title">Campus Ad & Sponsor Studio</h1>
-          <p className="ptm-page-sub">Publish 15-day promotional banners directly to all Student & Warden home screens.</p>
+          <h1 className="ptm-page-title">Campus OS Founder Console</h1>
+          <p className="ptm-page-sub">Provision colleges and Deans, manage tenant features, and reset Dean passwords.</p>
         </div>
 
         <div className="ptm-card">
           <div className="ptm-section-title">College platform settings</div>
           <p className="ptm-list-sub">
-            Add an exact custom domain and the college’s approved Google email domain. Configure DNS, TLS, and Google OAuth origins separately before launch.
+            Add the college portal domain and institution email domain, then configure DNS and TLS before launch.
           </p>
           <form onSubmit={handleCreateTenant} className="ptm-form-stack">
             <div className="ptm-grid-2">
@@ -212,7 +155,7 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
               <label className="ptm-label">Approved custom portal domain
                 <input className="ptm-input" value={tenantForm.primary_domain} onChange={(e) => setTenantForm((current) => ({ ...current, primary_domain: e.target.value.trim().toLowerCase() }))} required placeholder="portal.example.edu" />
               </label>
-              <label className="ptm-label">Approved Google email domain
+              <label className="ptm-label">Institution email domain
                 <input className="ptm-input" value={tenantForm.allowed_email_domain} onChange={(e) => setTenantForm((current) => ({ ...current, allowed_email_domain: e.target.value.trim().toLowerCase().replace(/^@/, '') }))} required placeholder="example.edu" />
               </label>
             </div>
@@ -228,11 +171,8 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
               </label>
             </div>
             <div className="ptm-grid-2">
-              <label className="ptm-label">Initial Dean college email
+              <label className="ptm-label">Initial Dean contact email
                 <input type="email" className="ptm-input" value={tenantForm.initial_dean_email} onChange={(e) => setTenantForm((current) => ({ ...current, initial_dean_email: e.target.value.trim().toLowerCase() }))} required />
-              </label>
-              <label className="ptm-label">Initial Dean password (12+ characters)
-                <input type="password" autoComplete="new-password" minLength={12} maxLength={128} className="ptm-input" value={tenantForm.initial_dean_password} onChange={(e) => setTenantForm((current) => ({ ...current, initial_dean_password: e.target.value }))} required />
               </label>
             </div>
             <label className="ptm-label">College logo URL (optional)
@@ -255,7 +195,7 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
                   <div className="ptm-list-main">
                     <div className="ptm-list-title">{tenant.college_name} ({tenant.college_id})</div>
                     <div className="ptm-list-sub">
-                      Portal: {tenant.primary_domain} • Google email: @{tenant.allowed_email_domain}
+                      Portal: {tenant.primary_domain} • Email domain: @{tenant.allowed_email_domain}
                     </div>
                     <div className="ptm-grid-2" style={{ marginTop: '10px' }}>
                       {TENANT_MODULES.map(([moduleName, label]) => (
@@ -278,92 +218,6 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
         </div>
 
         <StaffAccountAccess apiUrl={apiUrl} user={user} />
-
-        {dataLoading ? (
-          <div className="ptm-skeleton-founder">
-            <DashboardCardSkeleton />
-            <GridCardSkeleton count={4} />
-          </div>
-        ) : (
-          <>
-            <div className="ptm-card">
-              <div className="ptm-section-title">Publish New 15-Day Sponsor Ad</div>
-              <form onSubmit={handleCreate} className="ptm-form-stack">
-                <div className="ptm-grid-2">
-                  <div>
-                    <label className="ptm-label">Sponsor / Brand Tag</label>
-                    <input type="text" className="ptm-input" placeholder="e.g. UNACADEMY • CAMPUS PARTNER" value={form.sponsor_tag} onChange={(e) => setForm({ ...form, sponsor_tag: e.target.value })} required />
-                  </div>
-                  <div>
-                    <label className="ptm-label">Duration (Auto-Expires After Days)</label>
-                    <input type="number" className="ptm-input" value={form.days_valid} onChange={(e) => setForm({ ...form, days_valid: Number(e.target.value) })} required />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="ptm-label">Main Headline (Paytm IPO Style)</label>
-                  <input type="text" className="ptm-input" placeholder="e.g. GATE & CAT 2027 Batch is Open!" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required />
-                </div>
-
-                <div className="ptm-grid-2">
-                  <div>
-                    <label className="ptm-label">Subtitle / Description / Dates</label>
-                    <input type="text" className="ptm-input" placeholder="e.g. Flat 40% Off for SVNIT Students" value={form.subtitle} onChange={(e) => setForm({ ...form, subtitle: e.target.value })} required />
-                  </div>
-                  <div>
-                    <label className="ptm-label">Badge Text (Right Highlight)</label>
-                    <input type="text" className="ptm-input" placeholder="e.g. LIMITED TIME" value={form.badge_text} onChange={(e) => setForm({ ...form, badge_text: e.target.value })} />
-                  </div>
-                </div>
-
-                <div className="ptm-grid-2">
-                  <div>
-                    <label className="ptm-label">Click Destination URL (Website / WhatsApp / Form)</label>
-                    <input type="url" className="ptm-input" placeholder="https://..." value={form.target_url} onChange={(e) => setForm({ ...form, target_url: e.target.value })} required />
-                  </div>
-                  <div>
-                    <label className="ptm-label">Action Button Text</label>
-                    <input type="text" className="ptm-input" placeholder="Apply Now →" value={form.cta_text} onChange={(e) => setForm({ ...form, cta_text: e.target.value })} required />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="ptm-label">Banner Gradient Theme</label>
-                  <select className="ptm-input" value={form.bg_gradient} onChange={(e) => setForm({ ...form, bg_gradient: e.target.value })}>
-                    <option value="linear-gradient(135deg, #002970 0%, #0284C7 100%)">Paytm Royal Blue (Default)</option>
-                    <option value="linear-gradient(135deg, #0F172A 0%, #1E40AF 100%)">Midnight Tech Navy</option>
-                    <option value="linear-gradient(135deg, #065F46 0%, #059669 100%)">Emerald Cashback Green</option>
-                    <option value="linear-gradient(135deg, #7C2D12 0%, #EA580C 100%)">Sunset Fest Orange</option>
-                  </select>
-                </div>
-
-                <button type="submit" className="ptm-btn-primary">🚀 Publish Live Sponsor Ad Banner</button>
-              </form>
-            </div>
-
-            <div className="ptm-card">
-              <div className="ptm-section-title">Active Live Banners ({ads.length})</div>
-              {ads.length === 0 ? (
-                <div className="ptm-list-sub">No active sponsor ads running right now.</div>
-              ) : (
-                <div className="ptm-list">
-                  {ads.map((ad) => (
-                    <div key={ad.ad_id} className="ptm-list-row">
-                      <div className="ptm-avatar-pastel" style={{ background: '#E0F2FE', color: '#002970' }}>📢</div>
-                      <div className="ptm-list-main">
-                        <div className="ptm-list-title">{ad.title}</div>
-                        <div className="ptm-list-sub">{ad.sponsor_tag} • Expires: {ad.expires_at}</div>
-                      </div>
-                      <button className="ptm-btn-danger" style={{ width: 'auto', padding: '6px 12px' }} onClick={() => handleDelete(ad.ad_id)}>
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </>
-        )}
       </div>
     </div>
   );

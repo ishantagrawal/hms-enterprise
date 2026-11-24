@@ -165,6 +165,134 @@ class TenantSafetyTests(unittest.TestCase):
         )
         self.assertEqual(len(re.findall(rb"/Type\s*/Page\b", pdf)), 1)
 
+    def test_attendance_report_email_requires_and_accepts_verification_code(self):
+        context_token = main.ACTIVE_COLLEGE_ID.set("TESTCOLLEGE")
+        conn = main.get_conn()
+        original_modules = main.db_exec(
+            conn, "SELECT modules_json FROM tenants WHERE college_id = ?", ("TESTCOLLEGE",)
+        ).fetchone()["modules_json"]
+        try:
+            modules = main.json.loads(original_modules)
+            modules["class_attendance"] = True
+            main.db_exec(
+                conn,
+                "UPDATE tenants SET modules_json = ? WHERE college_id = ?",
+                (main.json.dumps(modules), "TESTCOLLEGE"),
+            )
+            main.upsert_user(
+                conn,
+                (
+                    "REPORT-FACULTY", "", "Report Faculty", "Faculty", "Faculty",
+                    "TESTCOLLEGE", "", "", "", "", "old@example.edu", "Civil", "", "",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        request = build_request([(b"host", b"api.example.edu")])
+        request.scope["app"] = main.app
+        request.state.college_id = "TESTCOLLEGE"
+        request.state.user = {"user_id": "REPORT-FACULTY", "role": "Faculty"}
+        request.state.tenant = main.get_tenant_by_id("TESTCOLLEGE")
+        request.state.tenant["modules"]["class_attendance"] = True
+        captured = []
+        try:
+            with patch.object(
+                main._attendance_v2_module,
+                "_send_report_email_verification",
+                side_effect=lambda email, code: captured.append((email, code)),
+            ):
+                started = main._attendance_v2_module.start_report_email_verification(
+                    main._attendance_v2_module.ReportEmailStartInput(email="reports@example.edu"),
+                    request,
+                )
+            self.assertTrue(started["success"])
+            self.assertEqual(captured[0][0], "reports@example.edu")
+            incorrect_code = f'{(int(captured[0][1]) + 1) % 1_000_000:06d}'
+            with self.assertRaises(HTTPException):
+                main._attendance_v2_module.verify_report_email(
+                    main._attendance_v2_module.ReportEmailVerifyInput(
+                        email="reports@example.edu", code=incorrect_code
+                    ),
+                    request,
+                )
+            verified = main._attendance_v2_module.verify_report_email(
+                main._attendance_v2_module.ReportEmailVerifyInput(
+                    email="reports@example.edu", code=captured[0][1]
+                ),
+                request,
+            )
+            self.assertTrue(verified["verified"])
+            conn = main.get_conn()
+            try:
+                stored = main.db_exec(
+                    conn,
+                    "SELECT attendance_report_email, attendance_report_email_verified FROM users WHERE college_id = ? AND UPPER(user_id) = ?",
+                    ("TESTCOLLEGE", "REPORT-FACULTY"),
+                ).fetchone()
+            finally:
+                conn.close()
+            self.assertEqual(stored["attendance_report_email"], "reports@example.edu")
+            self.assertTrue(stored["attendance_report_email_verified"])
+        finally:
+            conn = main.get_conn()
+            main.db_exec(
+                conn,
+                "UPDATE tenants SET modules_json = ? WHERE college_id = ?",
+                (original_modules, "TESTCOLLEGE"),
+            )
+            conn.commit()
+            conn.close()
+            with main._TENANT_CACHE_LOCK:
+                main._TENANT_CACHE.pop("TESTCOLLEGE", None)
+            main.ACTIVE_COLLEGE_ID.reset(context_token)
+
+    def test_attendance_staff_provisioning_creates_password_account(self):
+        context_token = main.ACTIVE_COLLEGE_ID.set("TESTCOLLEGE")
+        request = build_request([(b"host", b"api.example.edu")])
+        request.scope["app"] = main.app
+        request.state.college_id = "TESTCOLLEGE"
+        request.state.user = {"user_id": "TEST-DEAN", "role": "Dean"}
+        request.state.tenant = main.get_tenant_by_id("TESTCOLLEGE")
+        try:
+            created = main._attendance_v2_module.add_approved_staff(
+                main._attendance_v2_module.StaffInput(
+                    user_id="V2-FACULTY",
+                    name="Provisioned Faculty",
+                    email="v2.faculty@example.edu",
+                    role="FACULTY",
+                    department_or_block="Civil",
+                ),
+                request,
+            )
+            self.assertEqual(created["user_id"], "V2-FACULTY")
+            self.assertTrue(created["temporary_password"])
+            login = main.password_login(
+                main.PasswordLoginReq(username="V2-FACULTY", password=created["temporary_password"]),
+                request,
+            )
+            self.assertEqual(login["user"]["role"], "Faculty")
+            approved = main._attendance_v2_module.list_approved_staff(request)
+            row = next(item for item in approved if item["id"] == created["id"])
+            self.assertEqual(row["claimed_by_user_id"], "V2-FACULTY")
+        finally:
+            conn = main.get_conn()
+            main.db_exec(
+                conn,
+                "DELETE FROM attendance_v2_pre_approved_staff WHERE college_id = ? AND email = ?",
+                ("TESTCOLLEGE", "v2.faculty@example.edu"),
+            )
+            main.db_exec(
+                conn,
+                "DELETE FROM users WHERE college_id = ? AND UPPER(user_id) = ?",
+                ("TESTCOLLEGE", "V2-FACULTY"),
+            )
+            conn.commit()
+            conn.close()
+            main.invalidate_user_cache("V2-FACULTY")
+            main.ACTIVE_COLLEGE_ID.reset(context_token)
+
     def test_face_reference_is_encrypted_before_persistence(self):
         import cv2
         import numpy as np
@@ -799,12 +927,12 @@ class TenantSafetyTests(unittest.TestCase):
         try:
             request = build_request([(b"host", b"api.svnitcampus.in")])
             request.state.user = {"role": "Dean", "user_id": "DEAN"}
-            password = "Unique-Warden-Access-2026!"
             result = main.set_staff_account_password(
-                main.StaffPasswordSetReq(user_id="CW_GAJJAR", password=password),
+                main.StaffPasswordSetReq(user_id="CW_GAJJAR"),
                 request,
             )
             self.assertTrue(result["success"])
+            password = result["temporary_password"]
 
             conn = main.get_conn()
             main.upsert_user(
@@ -852,13 +980,10 @@ class TenantSafetyTests(unittest.TestCase):
             ):
                 with self.assertRaises(HTTPException) as google_error:
                     main.google_login(main.GoogleLoginReq(credential="test-google-token"))
-                self.assertEqual(google_error.exception.status_code, 403)
+                self.assertEqual(google_error.exception.status_code, 410)
 
             main.set_staff_account_password(
-                main.StaffPasswordSetReq(
-                    user_id="CW_GAJJAR",
-                    password="Another-Warden-Access-2026!",
-                ),
+                main.StaffPasswordSetReq(user_id="CW_GAJJAR"),
                 request,
             )
             session_request = build_request(
@@ -895,7 +1020,7 @@ class TenantSafetyTests(unittest.TestCase):
         self.assertTrue(main.can_manage_staff_account(dean, {"role": "Staff", "hostel_block": "All"}))
         self.assertFalse(main.can_manage_staff_account(dean, {"role": "Staff", "hostel_block": "Gajjar Bhawan"}))
         warden = {"role": "Warden", "user_id": "CW_GAJJAR"}
-        self.assertTrue(main.can_manage_staff_account(warden, {"role": "Staff", "managed_by": "CW_GAJJAR"}))
+        self.assertFalse(main.can_manage_staff_account(warden, {"role": "Staff", "managed_by": "CW_GAJJAR"}))
         self.assertFalse(main.can_manage_staff_account(warden, {"role": "Staff", "managed_by": "CW_BHABHA"}))
 
     def test_pooled_connection_rolls_back_before_reuse(self):

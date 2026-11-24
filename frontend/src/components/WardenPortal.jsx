@@ -3,7 +3,6 @@ import { apiFetch } from '../api';
 import { getCached, setCached } from '../cache';
 import { getHostelOptions, inferHostelWing } from '../hostelOptions';
 import { WardenAttendancePanel, WardenLeavePassPanel } from './CampusSecurity';
-import StaffAccountAccess from './StaffAccountAccess';
 import { ListRowSkeleton } from './SkeletonLoader';
 import usePortalBackNavigation from '../hooks/usePortalBackNavigation';
 
@@ -407,7 +406,6 @@ export default function WardenPortal({ user, apiUrl, modules }) {
         <button className={`ptm-side-btn ${page === 'add_student' ? 'active' : ''}`} onClick={() => setPage('add_student')}>➕ Add / Upload Students</button>
         <button className={`ptm-side-btn ${page === 'directory' || page === 'edit_student' ? 'active' : ''}`} onClick={() => setPage('directory')}>🎓 Student Directory ({students.length})</button>
         <button className={`ptm-side-btn ${page === 'profile_requests' ? 'active' : ''}`} onClick={() => setPage('profile_requests')}>🪪 Profile Requests ({profileRequestCount})</button>
-        <button className={`ptm-side-btn ${page === 'staff_accounts' ? 'active' : ''}`} onClick={() => setPage('staff_accounts')}>🔐 Staff Passwords</button>
         {modules?.gate_outpass && <button className={`ptm-side-btn ${page === 'leave_passes' ? 'active' : ''}`} onClick={() => setPage('leave_passes')}>🪪 Leave Passes</button>}
         {modules?.attendance && <button className={`ptm-side-btn ${page === 'biometric_attendance' ? 'active' : ''}`} onClick={() => setPage('biometric_attendance')}>🫆 Device Lock & Attendance</button>}
         {modules?.attendance && <button className={`ptm-side-btn ${page === 'attendance' ? 'active' : ''}`} onClick={() => setPage('attendance')}>📅 Night Roll Call</button>}
@@ -480,7 +478,6 @@ export default function WardenPortal({ user, apiUrl, modules }) {
               </div>
             )}
             {modules?.attendance && page === 'attendance' && <WardenAttendancePanel apiUrl={apiUrl} user={safeUser} />}
-            {page === 'staff_accounts' && <StaffAccountAccess apiUrl={apiUrl} user={safeUser} />}
 
             {page === 'home' && (
               <div>
@@ -546,10 +543,6 @@ export default function WardenPortal({ user, apiUrl, modules }) {
                         {profileRequestCount > 0 && <span className="ptm-tile-badge">{profileRequestCount}</span>}
                       </div>
                       <span className="ptm-icon-label">Profile Requests</span>
-                    </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('staff_accounts')}>
-                      <div className="ptm-icon-circle">🔐</div>
-                      <span className="ptm-icon-label">Staff Passwords</span>
                     </button>
                   </div>
                 </div>

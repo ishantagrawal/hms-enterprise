@@ -76,6 +76,7 @@
 .av-history-row small { color: var(--av-muted); font-size: 10px; text-align: right; }
 .av-empty { padding: 18px 0; color: var(--av-muted); font-size: 12px; }
 .av-error { margin: 12px 0; padding: 10px 12px; border: 1px solid #fecaca; border-radius: 8px; background: #fef2f2; color: var(--av-red); font-size: 12px; }
+.av-success { margin: 12px 0; color: var(--av-green); font-size: 12px; }
 .av-message { margin-bottom: 12px; padding: 8px 11px; border: 1px solid #a7f3d0; border-radius: 8px; background: #ecfdf5; color: #065f46; font: inherit; font-size: 12px; cursor: pointer; }
 .av-tabular { font-variant-numeric: tabular-nums; }
 .av-overlay { position: fixed; inset: 0; z-index: 300; display: flex; align-items: flex-end; justify-content: center; padding: 16px; background: rgba(15,23,42,.35); }
@@ -105,5 +106,7 @@
   .av-history-row { grid-template-columns: 1fr auto; padding: 8px 0; }
   .av-history-row small { grid-column: 1/-1; text-align: left; }
   .av-list-row { flex-wrap: wrap; }
+  .av-inline-form { flex-wrap: wrap; }
+  .av-inline-form label { min-width: 100%; }
   .av-rssi-slider { width: 100%; }
 }

@@ -3,6 +3,8 @@ import { apiFetch } from '../api';
 import { useBeaconScanner } from '../hooks/useBeaconScanner.ts';
 import { compressCameraFrame } from '../utils/cameraFrame.js';
 import { extractErrorMessage } from '../utils/errorParser.ts';
+import DeanStaffManager from './DeanStaffManager';
+import StaffAccountAccess from './StaffAccountAccess';
 import { impactSuccess } from '../utils/nativeFeedback';
 import './AttendanceOnlyPortals.css';
 
@@ -15,6 +17,25 @@ async function requestJson(apiUrl, path, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(extractErrorMessage(data, `Request failed (${response.status}).`));
   return data;
+}
+
+function localDateString() {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+async function downloadPdf(apiUrl, path, filename) {
+  const response = await apiFetch(`${apiUrl}${ROOT}${path}`);
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(extractErrorMessage(data, `Could not download PDF (${response.status}).`));
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function bytesFromBase64Url(value) {
@@ -259,6 +280,7 @@ function StudentAttendance({ apiUrl, modules }) {
   const [enrolling, setEnrolling] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [reportDate, setReportDate] = useState(localDateString);
 
   const refresh = useCallback(async () => {
     try {
@@ -291,9 +313,31 @@ function StudentAttendance({ apiUrl, modules }) {
     ...(modules?.hostel_attendance ? [{ id: 'hostel', label: 'Hostel Attendance' }] : [])
   ];
   const activeSessions = openSessions.filter((session) => session.scope === (tab === 'class' ? 'CLASS' : 'HOSTEL'));
+  const downloadPersonalReport = async (event) => {
+    event.preventDefault();
+    setError('');
+    try {
+      await downloadPdf(
+        apiUrl,
+        `/student/daily-report.pdf?date=${encodeURIComponent(reportDate)}`,
+        `${reportDate}-personal-attendance.pdf`
+      );
+    } catch (downloadError) {
+      setError(extractErrorMessage(downloadError));
+    }
+  };
 
   return (
     <AttendanceShell title="Your attendance" tabs={availableTabs} tab={tab} setTab={setTab} error={error} message={message} setMessage={setMessage} bottomTabs>
+      <section className="av-panel">
+        <div className="av-row-between">
+          <div><h2>Daily personal report</h2><p className="av-subtitle">Download only your own attendance for a selected day.</p></div>
+          <form className="av-inline-form" onSubmit={downloadPersonalReport}>
+            <label>Date<input type="date" required value={reportDate} onChange={(event) => setReportDate(event.target.value)} /></label>
+            <button className="av-secondary">Download PDF</button>
+          </form>
+        </div>
+      </section>
       {tab === 'class' ? (
         <>
           {deviceStatus && !deviceStatus.device_locked && (
@@ -456,6 +500,7 @@ function FacultyAttendance({ apiUrl }) {
   const [courses, setCourses] = useState([]);
   const [beacons, setBeacons] = useState([]);
   const [sessions, setSessions] = useState([]);
+  const [students, setStudents] = useState([]);
   const [courseForm, setCourseForm] = useState({ code: '', title: '', default_beacon_id: '' });
   const [activeCourse, setActiveCourse] = useState('');
   const [student, setStudent] = useState({ roll_no: '', student_name: '' });
@@ -474,12 +519,21 @@ function FacultyAttendance({ apiUrl }) {
   }, [apiUrl]);
   useEffect(() => { void reload().catch((loadError) => setError(extractErrorMessage(loadError))); }, [reload]);
   useEffect(() => {
+    requestJson(apiUrl, '/directory/students?scope=CLASS')
+      .then(setStudents)
+      .catch((loadError) => setError(extractErrorMessage(loadError)));
+  }, [apiUrl]);
+  useEffect(() => {
     const timer = window.setInterval(() => { void reload().catch((loadError) => setError(extractErrorMessage(loadError))); }, 5000);
     return () => window.clearInterval(timer);
   }, [reload]);
   const run = async (action, success) => {
     setError('');
-    try { await action(); setMessage(success); await reload(); }
+    try {
+      const result = await action();
+      setMessage(typeof success === 'function' ? success(result) : success);
+      await reload();
+    }
     catch (actionError) { setError(extractErrorMessage(actionError)); }
   };
   const createCourse = (event) => {
@@ -509,7 +563,12 @@ function FacultyAttendance({ apiUrl }) {
       body: JSON.stringify({ scope: 'CLASS', course_id: activeCourse, beacon_id: course?.default_beacon_id || beacons[0]?.id, duration_minutes: duration === 'manual' ? null : Number(duration) })
     }), 'Class session started.');
   };
-  const close = (session) => run(() => requestJson(apiUrl, `/sessions/${encodeURIComponent(session.id)}/close`, { method: 'POST' }), 'Session closed; report email queued.');
+  const close = (session) => run(
+    () => requestJson(apiUrl, `/sessions/${encodeURIComponent(session.id)}/close`, { method: 'POST' }),
+    (result) => result.report_queued
+      ? 'Session closed; the PDF report was queued for email.'
+      : 'Session closed. Verify your report email to receive PDFs automatically.'
+  );
   const override = async (session, item) => {
     const reason = window.prompt(`Audit reason for ${item.roll_no}:`);
     if (!reason) return;
@@ -529,7 +588,7 @@ function FacultyAttendance({ apiUrl }) {
         </form>
         <div className="av-form-grid av-roster-forms">
           <label>Course roster<select value={activeCourse} onChange={(event) => setActiveCourse(event.target.value)}>{courses.map((course) => <option key={course.id} value={course.id}>{course.code} · {course.title}</option>)}</select></label>
-          <form onSubmit={addStudent}><label>Single student roll number<input required value={student.roll_no} onChange={(event) => setStudent({ ...student, roll_no: event.target.value })} /></label><label>Name<input value={student.student_name} onChange={(event) => setStudent({ ...student, student_name: event.target.value })} /></label><button className="av-secondary">Add student</button></form>
+          <form onSubmit={addStudent}><label>Add existing student<select required value={student.roll_no} onChange={(event) => setStudent({ ...student, roll_no: event.target.value })}><option value="">Select roll number</option>{students.map((item) => <option key={item.user_id} value={item.roll_no}>{item.roll_no} · {item.student_name} · {item.department}</option>)}</select></label><button className="av-secondary" disabled={!students.length}>Add student</button></form>
           <form onSubmit={addRange}><label>From roll number<input required value={range.start_roll_no} onChange={(event) => setRange({ ...range, start_roll_no: event.target.value })} /></label><label>To roll number<input required value={range.end_roll_no} onChange={(event) => setRange({ ...range, end_roll_no: event.target.value })} /></label><button className="av-secondary">Add roll range</button></form>
           <form onSubmit={uploadCsv}><label>CSV roster (roll_no, name)<input type="file" name="roster" accept=".csv,text/csv" required /></label><button className="av-secondary">Import CSV</button></form>
         </div>
@@ -543,6 +602,7 @@ function FacultyAttendance({ apiUrl }) {
         </form>
         <SessionCards sessions={sessions} onClose={close} onOverride={override} />
       </section>}
+      {tab === 'session' && <DailyReportsPanel apiUrl={apiUrl} scope="CLASS" />}
       {tab === 'beacons' && <BeaconManager apiUrl={apiUrl} scope="CLASS" />}
     </AttendanceShell>
   );
@@ -557,10 +617,127 @@ function SessionCards({ sessions, onClose, onOverride }) {
   ))}{!sessions.length && <p className="av-empty">No active session.</p>}</div>;
 }
 
+function ReportEmailSettings({ apiUrl }) {
+  const [email, setEmail] = useState('');
+  const [code, setCode] = useState('');
+  const [codeSent, setCodeSent] = useState(false);
+  const [verified, setVerified] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    requestJson(apiUrl, '/report-email')
+      .then((result) => { setEmail(result.email || ''); setVerified(result.verified); })
+      .catch((loadError) => setError(extractErrorMessage(loadError)));
+  }, [apiUrl]);
+
+  const sendCode = async (event) => {
+    event.preventDefault();
+    setBusy(true); setError(''); setMessage('');
+    try {
+      await requestJson(apiUrl, '/report-email/verification', { method: 'POST', body: JSON.stringify({ email }) });
+      setCodeSent(true);
+      setVerified(false);
+      setMessage('Verification code sent. Check your inbox.');
+    } catch (sendError) { setError(extractErrorMessage(sendError)); }
+    finally { setBusy(false); }
+  };
+
+  const verifyCode = async (event) => {
+    event.preventDefault();
+    setBusy(true); setError(''); setMessage('');
+    try {
+      await requestJson(apiUrl, '/report-email/verify', { method: 'POST', body: JSON.stringify({ email, code }) });
+      setVerified(true);
+      setCodeSent(false);
+      setCode('');
+      setMessage('Report email verified. Closed-session PDFs will be sent here.');
+    } catch (verifyError) { setError(extractErrorMessage(verifyError)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <section className="av-panel">
+      <h2>Attendance report email</h2>
+      <p className="av-subtitle">{verified ? `Verified: ${email}` : 'Verify an email address to receive closed-session PDF reports.'}</p>
+      {error && <p className="av-error">{error}</p>}
+      {message && <p className="av-success">{message}</p>}
+      {!codeSent ? (
+        <form className="av-inline-form" onSubmit={sendCode}>
+          <label>Email for PDF reports<input type="email" required maxLength="254" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+          <button className="av-secondary" disabled={busy}>{busy ? 'Sending...' : verified ? 'Change email' : 'Send verification code'}</button>
+        </form>
+      ) : (
+        <form className="av-inline-form" onSubmit={verifyCode}>
+          <label>Six-digit email code<input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength="6" required value={code} onChange={(event) => setCode(event.target.value)} /></label>
+          <button className="av-primary" disabled={busy}>{busy ? 'Verifying...' : 'Verify email'}</button>
+        </form>
+      )}
+    </section>
+  );
+}
+
+function DailyReportsPanel({ apiUrl, scope }) {
+  const [date, setDate] = useState(localDateString);
+  const [reports, setReports] = useState([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async (selectedDate) => {
+    setBusy(true); setError('');
+    try {
+      const result = await requestJson(apiUrl, `/reports/sessions?scope=${scope}&date=${encodeURIComponent(selectedDate)}`);
+      setReports(result);
+    } catch (loadError) { setError(extractErrorMessage(loadError)); }
+    finally { setBusy(false); }
+  }, [apiUrl, scope]);
+
+  useEffect(() => { void load(localDateString()); }, [load]);
+
+  const submit = (event) => {
+    event.preventDefault();
+    void load(date);
+  };
+
+  const download = async (report) => {
+    setError('');
+    try {
+      await downloadPdf(apiUrl, `/reports/session/${encodeURIComponent(report.session_id)}.pdf`, `${date}-${report.scope.toLowerCase()}-attendance.pdf`);
+    } catch (downloadError) { setError(extractErrorMessage(downloadError)); }
+  };
+
+  return (
+    <>
+      <ReportEmailSettings apiUrl={apiUrl} />
+      <section className="av-panel">
+        <div className="av-row-between">
+          <div><h2>Daily attendance PDFs</h2><p className="av-subtitle">Download reports for your authorized sessions.</p></div>
+          <form className="av-inline-form" onSubmit={submit}>
+            <label>Date<input type="date" required value={date} onChange={(event) => setDate(event.target.value)} /></label>
+            <button className="av-secondary" disabled={busy}>{busy ? 'Loading...' : 'View reports'}</button>
+          </form>
+        </div>
+        {error && <p className="av-error">{error}</p>}
+        <div className="av-list">
+          {reports.map((report) => (
+            <div className="av-list-row" key={report.session_id}>
+              <div><strong>{report.title}</strong><small>{report.date} · {report.status} · {report.present}/{report.total} present · {report.absent} absent</small></div>
+              <button className="av-secondary" onClick={() => void download(report)}>Download PDF</button>
+            </div>
+          ))}
+          {!reports.length && !busy && <p className="av-empty">No attendance sessions for this date.</p>}
+        </div>
+      </section>
+    </>
+  );
+}
+
 function WardenAttendance({ apiUrl, modules }) {
   const [tab, setTab] = useState(modules?.hostel_attendance ? 'rollcall' : 'devices');
   const [beacons, setBeacons] = useState([]);
   const [sessions, setSessions] = useState([]);
+  const [students, setStudents] = useState([]);
   const [student, setStudent] = useState('');
   const [wing, setWing] = useState('');
   const [room, setRoom] = useState('');
@@ -579,9 +756,19 @@ function WardenAttendance({ apiUrl, modules }) {
     setBeacons(beaconList); setSessions(liveSessions);
   }, [apiUrl, modules?.hostel_attendance]);
   useEffect(() => { void reload().catch((loadError) => setError(extractErrorMessage(loadError))); }, [reload]);
+  useEffect(() => {
+    if (!modules?.hostel_attendance) return;
+    requestJson(apiUrl, '/directory/students?scope=HOSTEL')
+      .then(setStudents)
+      .catch((loadError) => setError(extractErrorMessage(loadError)));
+  }, [apiUrl, modules?.hostel_attendance]);
   const run = async (action, success) => {
     setError('');
-    try { await action(); setMessage(success); await reload(); }
+    try {
+      const result = await action();
+      setMessage(typeof success === 'function' ? success(result) : success);
+      await reload();
+    }
     catch (actionError) { setError(extractErrorMessage(actionError)); }
   };
   const start = (event) => {
@@ -597,7 +784,12 @@ function WardenAttendance({ apiUrl, modules }) {
     return run(() => requestJson(apiUrl, '/device/enrollment/open', { method: 'POST', body: JSON.stringify({ student_id: student, duration_seconds: 120 }) }), 'Two-minute enrollment window opened.');
   };
   const reset = () => run(() => requestJson(apiUrl, `/device/reset/${encodeURIComponent(student)}`, { method: 'POST' }), 'Device lock reset.');
-  const close = (session) => run(() => requestJson(apiUrl, `/sessions/${encodeURIComponent(session.id)}/close`, { method: 'POST' }), 'Roll call closed.');
+  const close = (session) => run(
+    () => requestJson(apiUrl, `/sessions/${encodeURIComponent(session.id)}/close`, { method: 'POST' }),
+    (result) => result.report_queued
+      ? 'Roll call closed; the PDF report was queued for email.'
+      : 'Roll call closed. Verify your report email to receive PDFs automatically.'
+  );
   const override = async (session, item) => {
     const reason = window.prompt(`Audit reason for ${item.roll_no}:`);
     if (!reason) return;
@@ -614,52 +806,20 @@ function WardenAttendance({ apiUrl, modules }) {
         <h2>Open wing roll call</h2>
         <form className="av-form-grid" onSubmit={start}><label>Wing name<input required value={wing} onChange={(event) => setWing(event.target.value)} /></label><label>Session duration<select value={duration} onChange={(event) => setDuration(event.target.value)}><option value="2">2 minutes</option><option value="3">3 minutes</option><option value="5">5 minutes</option><option value="manual">Manual stop</option></select></label><button className="av-primary" disabled={!beacons.length}>Start roll call</button></form>
         <h2>Add resident to roster</h2>
-        <form className="av-form-grid" onSubmit={addMember}><label>Room<input required value={room} onChange={(event) => setRoom(event.target.value)} /></label><label>Roll number<input required value={roll} onChange={(event) => setRoll(event.target.value)} /></label><label>Student name<input value={name} onChange={(event) => setName(event.target.value)} /></label><button className="av-secondary">Add resident</button></form>
+        <form className="av-form-grid" onSubmit={addMember}><label>Room<input required value={room} onChange={(event) => setRoom(event.target.value)} /></label><label>Existing student<select required value={roll} onChange={(event) => { const selected = students.find((item) => item.roll_no === event.target.value); setRoll(event.target.value); setName(selected?.student_name || ''); }}><option value="">Select roll number</option>{students.map((item) => <option key={item.user_id} value={item.roll_no}>{item.roll_no} · {item.student_name}</option>)}</select></label><button className="av-secondary" disabled={!students.length}>Add resident</button></form>
         <SessionCards sessions={sessions} onClose={close} onOverride={override} />
       </section>}
+      {tab === 'rollcall' && <DailyReportsPanel apiUrl={apiUrl} scope="HOSTEL" />}
       {tab === 'devices' && <section className="av-panel"><h2>Device approvals</h2><form className="av-form-grid" onSubmit={openWindow}><label>Student roll number<input required value={student} onChange={(event) => setStudent(event.target.value)} /></label><button className="av-primary">Open 120-second enrollment window</button></form><button className="av-secondary" disabled={!student} onClick={reset}>Reset device lock for phone change</button></section>}
       {tab === 'beacons' && <BeaconManager apiUrl={apiUrl} scope="HOSTEL" />}
     </AttendanceShell>
   );
 }
 
-function DeanAttendance({ apiUrl }) {
-  const [staff, setStaff] = useState([]);
-  const [form, setForm] = useState({ name: '', email: '', role: 'FACULTY', department_or_block: '' });
-  const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
-  const load = useCallback(async () => setStaff(await requestJson(apiUrl, '/admin/staff')), [apiUrl]);
-  useEffect(() => { void load().catch((loadError) => setError(extractErrorMessage(loadError))); }, [load]);
-  const create = async (event) => {
-    event.preventDefault();
-    try {
-      await requestJson(apiUrl, '/admin/staff', { method: 'POST', body: JSON.stringify(form) });
-      setForm({ name: '', email: '', role: 'FACULTY', department_or_block: '' });
-      setMessage('Staff account provisioned. Their institute email will claim this role on sign-in.');
-      await load();
-    } catch (createError) { setError(extractErrorMessage(createError)); }
-  };
-  const upload = async (event) => {
-    event.preventDefault();
-    const file = event.currentTarget.elements.staffCsv.files[0];
-    if (!file) return;
-    const body = new FormData(); body.append('file', file);
-    try { await requestJson(apiUrl, '/admin/staff/csv', { method: 'POST', body }); setMessage('Staff CSV imported.'); await load(); }
-    catch (uploadError) { setError(extractErrorMessage(uploadError)); }
-  };
-  return <AttendanceShell title="Institute staff" tabs={[{ id: 'staff', label: 'Staff & Faculty' }]} tab="staff" setTab={() => {}} error={error} message={message} setMessage={setMessage}>
-    <section className="av-panel">
-      <h2>Provision Faculty and Wardens</h2>
-      <form className="av-form-grid" onSubmit={create}>
-        <label>Full name<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
-        <label>Institute email<input type="email" required value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label>
-        <label>Role<select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}><option value="FACULTY">Faculty</option><option value="WARDEN">Warden</option></select></label>
-        <label>Department or hostel block<input required value={form.department_or_block} onChange={(event) => setForm({ ...form, department_or_block: event.target.value })} /></label>
-        <button className="av-primary">Provision staff</button>
-      </form>
-      <form className="av-inline-form" onSubmit={upload}><label>CSV: name,email,role,department_or_block<input type="file" name="staffCsv" accept=".csv,text/csv" required /></label><button className="av-secondary">Import CSV</button></form>
-      <div className="av-list">{staff.map((item) => <div className="av-list-row" key={item.id}><div><strong>{item.name}</strong><small>{item.email} · {item.department_or_block}</small></div><span className="av-status">{item.role}</span><small>{item.claimed_by_user_id ? 'Claimed' : 'Pending claim'}</small></div>)}</div>
-    </section>
+function DeanAttendance({ apiUrl, user }) {
+  return <AttendanceShell title="Institute staff" tabs={[{ id: 'staff', label: 'Staff & Faculty' }]} tab="staff" setTab={() => {}}>
+    <DeanStaffManager apiUrl={apiUrl} />
+    <StaffAccountAccess apiUrl={apiUrl} user={user} />
   </AttendanceShell>;
 }
 
@@ -672,6 +832,6 @@ export default function AttendanceOnlyPortals({ apiUrl, user, modules = {}, lega
   if (user?.role === 'Student') return <>{switchButton}<StudentAttendance apiUrl={apiUrl} modules={modules} /></>;
   if (user?.role === 'Faculty') return <FacultyAttendance apiUrl={apiUrl} />;
   if (user?.role === 'Warden') return <>{switchButton}<WardenAttendance apiUrl={apiUrl} modules={modules} /></>;
-  if (user?.role === 'Dean') return <>{switchButton}<DeanAttendance apiUrl={apiUrl} /></>;
+  if (user?.role === 'Dean') return <>{switchButton}<DeanAttendance apiUrl={apiUrl} user={user} /></>;
   return <div className="av-root"><p className="av-empty">Attendance tools are not available for this account.</p></div>;
 }

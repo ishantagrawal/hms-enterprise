@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../api';
 import { getCached, setCached } from '../cache';
 import StaffAccountAccess from './StaffAccountAccess';
+import DeanStaffManager from './DeanStaffManager';
 import { GridCardSkeleton } from './SkeletonLoader';
 import usePortalBackNavigation from '../hooks/usePortalBackNavigation';
 
@@ -1505,6 +1506,7 @@ export default function DeanPortal({ apiUrl, user }) {
                   <h1 className="ptm-page-title">Staff account passwords</h1>
                 </div>
                 <StaffAccountAccess apiUrl={apiUrl} user={user} />
+                <DeanStaffManager apiUrl={apiUrl} />
               </div>
             )}
 
