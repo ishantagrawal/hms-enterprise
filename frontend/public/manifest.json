@@ -1,7 +1,7 @@
 {
-  "name": "CampusVerify Infrastructure",
-  "short_name": "CampusVerify",
-  "description": "Privacy-first campus attendance infrastructure",
+  "name": "Campus OS",
+  "short_name": "Campus OS",
+  "description": "A connected platform for campus administration and daily operations",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -10,7 +10,7 @@
   "orientation": "portrait-primary",
   "icons": [
     {
-      "src": "/campusverify-mark.svg",
+      "src": "/campus-os-mark.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"

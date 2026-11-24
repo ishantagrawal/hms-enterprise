@@ -388,7 +388,7 @@ function AttendanceHistorySheet({ course, onClose }) {
 function AttendanceShell({ title, tabs, tab, setTab, children, error, message, setMessage, bottomTabs = false }) {
   return (
     <div className="av-root">
-      <header className="av-heading"><span className="av-brand-mark">CV</span><div><p className="av-kicker">CAMPUSVERIFY</p><h1>{title}</h1></div></header>
+      <header className="av-heading"><span className="av-brand-mark">OS</span><div><p className="av-kicker">CAMPUS OS</p><h1>{title}</h1></div></header>
       {tabs.length > 1 && <nav className={`av-tabs ${bottomTabs ? 'av-bottom-tabs' : ''}`} aria-label="Attendance sections">{tabs.map((item) => <button key={item.id} className={tab === item.id ? 'is-active' : ''} onClick={() => setTab(item.id)}>{item.label}</button>)}</nav>}
       {error && <p className="av-error">{error}</p>}
       {message && <button className="av-message" onClick={() => setMessage('')}>{message} ×</button>}

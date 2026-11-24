@@ -51,6 +51,8 @@
 .cv-step-rule { display: block; width: 24px; height: 1px; margin: 18px 0; background: var(--cv-line); }
 .cv-step h3,.cv-card h3,.cv-pillar h3 { margin: 0; font-size: 16px; line-height: 1.4; font-weight: 620; letter-spacing: -.025em; }
 .cv-card-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; }
+.cv-platform-intro { max-width: 720px; margin: 14px 0 0; color: #64748b; font-size: 14px; line-height: 1.7; }
+.cv-platform-grid { grid-template-columns: repeat(4,1fr); }
 .cv-card { min-height: 205px; padding: 22px; border: 1px solid var(--cv-line); border-radius: 11px; background: #fff; }
 .cv-card-kicker { display: block; margin-bottom: 30px; color: #94a3b8; font-size: 9px; letter-spacing: .12em; font-weight: 700; }
 .cv-card p,.cv-pillar p { margin: 10px 0 0; color: #64748b; font-size: 13px; line-height: 1.65; }
@@ -85,6 +87,7 @@
   .cv-metrics div:nth-child(-n+2) { border-bottom: 1px solid var(--cv-line); }
   .cv-section { padding: 60px 0; }
   .cv-steps,.cv-card-grid { grid-template-columns: repeat(2,1fr); }
+  .cv-platform-grid { grid-template-columns: repeat(2,1fr); }
   .cv-pillar-grid { grid-template-columns: repeat(2,1fr); }
   .cv-footer-inner { grid-template-columns: 1fr; }
   .cv-footer-links { justify-content: flex-start; }
@@ -95,6 +98,7 @@
   .cv-metrics div { min-height: 84px; padding: 14px; }
   .cv-metrics strong { font-size: 21px; }
   .cv-steps,.cv-card-grid { grid-template-columns: 1fr; }
+  .cv-platform-grid { grid-template-columns: 1fr; }
   .cv-step { min-height: 124px; }
   .cv-card { min-height: 160px; }
   .cv-card-kicker { margin-bottom: 18px; }

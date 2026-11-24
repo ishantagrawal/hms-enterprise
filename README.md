@@ -238,6 +238,15 @@ npm install --prefix frontend
 npm run dev
 ```
 
+## Deploy the Campus OS frontend to Vercel
+
+The root `vercel.json` builds `frontend/` when the Vercel project root is the
+repository. If the Vercel project root is set to `frontend`, its
+`frontend/vercel.json` supplies the SPA fallback. Both configurations serve
+the app entry point for client-side routes such as `/app` and
+`/privacy-and-data-deletion`; deploy the updated configuration for direct
+links and refreshes on those routes to work.
+
 ## Run the backend locally
 
 Python 3.11.9 is pinned in `.python-version` and `runtime.txt`. On Windows,

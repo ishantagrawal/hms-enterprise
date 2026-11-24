@@ -1,10 +1,10 @@
 import React from 'react';
 
-export default function BrandLoadingScreen({ label = 'Opening CampusVerify' }) {
+export default function BrandLoadingScreen({ label = 'Opening Campus OS' }) {
   return (
     <main className="cv-loader-screen" role="status" aria-label={label}>
-      <div className="cv-loader-mark">CV</div>
-      <strong>CampusVerify</strong>
+      <div className="cv-loader-mark">OS</div>
+      <strong>Campus OS</strong>
       <span>{label}</span>
       <i />
       <style>{`

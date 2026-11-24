@@ -16,6 +16,17 @@ const tracks = [
   }
 ];
 
+const platformModules = [
+  ['Institute administration', 'Founder-managed multi-institute setup, Dean administration, staff access, and tenant-specific feature controls.'],
+  ['Student services & grievances', 'Student support and maintenance requests routed to the right central or hostel team, with staff registers.'],
+  ['Events & clubs', 'Campus event workflows and club operations for student organizations.'],
+  ['Hostel operations', 'Resident and wing workflows, hostel roll calls, room-level rosters, and Warden tools.'],
+  ['Class attendance', 'Faculty course rosters, timed lecture sessions, live attendance, overrides, and PDF reports.'],
+  ['Leave passes & gate', 'Digital leave requests, Warden review, and signed QR-based gate out and return checks.'],
+  ['Mess Pulse & family alerts', 'Mess feedback and consent-based guardian alert workflows; delivery integrations require institute configuration.'],
+  ['Campus safety', 'Campus security tools for authorized staff, alongside the student, Warden, and Dean portals.']
+];
+
 const pillars = [
   ['01', 'Zero Raw Selfie Retention', 'RAM-only 1:1 comparison; live frames are discarded after verification.'],
   ['02', 'Hardware Secure Enclave Binding', 'A single approved device is bound with a W3C WebAuthn passkey.'],
@@ -42,11 +53,12 @@ export default function CompanyLandingPage() {
   return (
     <main className="cv-landing">
       <header className="cv-header">
-        <a className="cv-brand" href="/" aria-label="CampusVerify home">
-          <span className="cv-mark">CV</span>
-          <span>CampusVerify Infrastructure</span>
+        <a className="cv-brand" href="/" aria-label="Campus OS home">
+          <span className="cv-mark">OS</span>
+          <span>Campus OS</span>
         </a>
         <nav aria-label="Main navigation">
+          <a href="#platform">Platform</a>
           <a href="#how-it-works">How It Works</a>
           <a href="#current-stage">Current Stage</a>
           <a href="#security">Security</a>
@@ -57,20 +69,39 @@ export default function CompanyLandingPage() {
 
       <section className="cv-hero">
         <div className="cv-container">
-          <div className="cv-eyebrow"><span className="cv-live-dot" /> PHASE 1 CAMPUS PILOT</div>
-          <h1>Zero-Proxy Campus Attendance Infrastructure.</h1>
+          <div className="cv-eyebrow"><span className="cv-live-dot" /> ONE CONNECTED CAMPUS PLATFORM</div>
+          <h1>Campus operations, connected in one OS.</h1>
           <p className="cv-hero-copy">
-            Hardware-bound biometric and BLE proximity verification for lecture halls and residential hostels - built to verify 150 students in under 15 seconds.
+            Campus OS brings institute administration, student services, hostel operations, events, leave and gate workflows, campus safety, and attendance together in one tenant-aware platform. Attendance is one part of the system, not the whole product.
           </p>
           <div className="cv-actions">
             <a className="cv-button" href="/app">Open Live App <span aria-hidden="true">-&gt;</span></a>
             <a className="cv-button cv-button-secondary" href="#how-it-works">View How It Works</a>
           </div>
           <div className="cv-metrics" aria-label="Infrastructure metrics">
-            <div><strong>150 <span>/ 15s</span></strong><small>BURST CAPACITY</small></div>
+            <div><strong>150 <span>/ 15s</span></strong><small>ATTENDANCE BURST CAPACITY</small></div>
             <div><strong className="cv-tabular">-78 dBm</strong><small>BLE ROOM LOCK</small></div>
             <div><strong>0 Bytes</strong><small>RAM-ONLY FRAME RETENTION</small></div>
             <div><strong>1-Page</strong><small>A4 PDF AUTO-EMAIL</small></div>
+          </div>
+        </div>
+      </section>
+
+      <section className="cv-section cv-section-muted" id="platform">
+        <div className="cv-container">
+          <div className="cv-section-heading">
+            <span className="cv-eyebrow">THE CAMPUS OS PLATFORM</span>
+            <h2>One platform for the work happening across campus.</h2>
+            <p className="cv-platform-intro">Campus OS is the campus management platform. It connects the everyday tools used by institute leaders, students, faculty, Wardens, clubs, and campus staff.</p>
+          </div>
+          <div className="cv-card-grid cv-platform-grid">
+            {platformModules.map(([title, description], index) => (
+              <article className="cv-card" key={title}>
+                <span className="cv-card-kicker">{String(index + 1).padStart(2, '0')} / CAMPUS MODULE</span>
+                <h3>{title}</h3>
+                <p>{description}</p>
+              </article>
+            ))}
           </div>
         </div>
       </section>
@@ -144,7 +175,7 @@ export default function CompanyLandingPage() {
 
       <footer className="cv-footer" id="compliance">
         <div className="cv-container cv-footer-inner">
-          <div><strong>CampusVerify Infrastructure</strong><p>Privacy-first campus attendance operations.</p></div>
+          <div><strong>Campus OS</strong><p>One connected platform for campus administration and daily operations.</p></div>
           <div className="cv-footer-links">
             <button onClick={() => setModal('privacy')}>Privacy Policy</button>
             <button onClick={() => setModal('terms')}>Terms of Use</button>
@@ -176,12 +207,12 @@ export default function CompanyLandingPage() {
               </>
             ) : (
               <>
-                <span className="cv-eyebrow">CAMPUSVERIFY</span>
+                <span className="cv-eyebrow">CAMPUS OS</span>
                 <h2 id="cv-modal-title">{modal === 'privacy' ? 'Privacy Policy' : 'Terms of Use'}</h2>
                 <p>
                   {modal === 'privacy'
                     ? 'Attendance verification uses a device-bound passkey, room-level BLE proximity, and a 1:1 face comparison. Live camera frames are processed for verification and are not retained. Account and attendance records are handled under institute policy and applicable law.'
-                    : 'CampusVerify is provided for authorized institute attendance operations. Users must use assigned accounts and approved devices, and must not attempt to falsify proximity or attendance records.'}
+                    : 'Campus OS is provided for authorized institute operations. Users must use assigned accounts and approved devices, follow their institute policies, and must not attempt to falsify attendance or gate records.'}
                 </p>
                 <p>Data residency: AWS Mumbai (ap-south-1). Privacy requests: <a href="mailto:compliance@svnitcampus.in">compliance@svnitcampus.in</a>.</p>
               </>

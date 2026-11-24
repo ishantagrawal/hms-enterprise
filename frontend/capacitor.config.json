@@ -1,6 +1,6 @@
 {
   "appId": "com.hmsenterprise.portal",
-  "appName": "HMS Enterprise",
+  "appName": "Campus OS",
   "webDir": "dist",
   "plugins": {
     "CapacitorUpdater": {
