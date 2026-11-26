@@ -656,7 +656,7 @@ async def expire_sessions_worker(backend):
 
 @router.get("/beacons")
 def list_beacons(request: Request, scope: Optional[str] = None):
-    actor = _require_roles(request, "Dean", "Faculty", "Warden")
+    actor = _require_roles(request, "Dean", "Faculty", "Warden", "BeaconManager")
     db_exec = request.app.state.attendance_v2_backend["db_exec"]
     conn = request.app.state.attendance_v2_backend["get_conn"]()
     try:
@@ -677,7 +677,7 @@ def list_beacons(request: Request, scope: Optional[str] = None):
                 return []
             query += " AND scope IN (" + ", ".join("?" for _ in enabled_scopes) + ")"
             params.extend(enabled_scopes)
-        if str(actor["role"]).upper() not in {"DEAN", "FOUNDER"}:
+        if str(actor["role"]).upper() not in {"DEAN", "FOUNDER", "BEACONMANAGER"}:
             query += " AND (owner_id = ? OR scope = 'HOSTEL')"
             params.append(actor["user_id"])
         rows = db_exec(conn, query + " ORDER BY created_at DESC", tuple(params)).fetchall()
@@ -688,13 +688,13 @@ def list_beacons(request: Request, scope: Optional[str] = None):
 
 @router.post("/beacons")
 def create_beacon(body: BeaconInput, request: Request):
-    actor = _require_roles(request, "Dean", "Faculty", "Warden")
+    actor = _require_roles(request, "Dean", "Faculty", "Warden", "BeaconManager")
     backend = request.app.state.attendance_v2_backend
     scope = _validate_scope(body.scope)
     _require_feature(request, "class_attendance" if scope == "CLASS" else "hostel_attendance")
-    if scope == "CLASS" and str(actor["role"]).upper() not in {"DEAN", "FACULTY"}:
+    if scope == "CLASS" and str(actor["role"]).upper() not in {"DEAN", "FACULTY", "BEACONMANAGER"}:
         raise HTTPException(status_code=403, detail="Only Faculty or Dean can create classroom beacons.")
-    if scope == "HOSTEL" and str(actor["role"]).upper() not in {"DEAN", "WARDEN"}:
+    if scope == "HOSTEL" and str(actor["role"]).upper() not in {"DEAN", "WARDEN", "BEACONMANAGER"}:
         raise HTTPException(status_code=403, detail="Only Wardens or Dean can create hostel beacons.")
     conn = backend["get_conn"]()
     beacon_id = _new_id("BCN")
@@ -724,13 +724,13 @@ def create_beacon(body: BeaconInput, request: Request):
 
 @router.patch("/beacons/{beacon_id}")
 def update_beacon(beacon_id: str, body: BeaconInput, request: Request):
-    actor = _require_roles(request, "Dean", "Faculty", "Warden")
+    actor = _require_roles(request, "Dean", "Faculty", "Warden", "BeaconManager")
     backend = request.app.state.attendance_v2_backend
     conn = backend["get_conn"]()
     try:
         current = _beacon(conn, backend, beacon_id)
         _require_feature(request, "class_attendance" if current["scope"] == "CLASS" else "hostel_attendance")
-        if str(actor["role"]).upper() != "DEAN" and current["owner_id"] != actor["user_id"]:
+        if str(actor["role"]).upper() not in {"DEAN", "BEACONMANAGER"} and current["owner_id"] != actor["user_id"]:
             raise HTTPException(status_code=403, detail="Only the beacon owner or Dean can edit it.")
         scope = _validate_scope(body.scope)
         if scope != current["scope"]:
@@ -758,13 +758,13 @@ def update_beacon(beacon_id: str, body: BeaconInput, request: Request):
 
 @router.post("/beacons/{beacon_id}/toggle")
 def toggle_beacon(beacon_id: str, request: Request):
-    actor = _require_roles(request, "Dean", "Faculty", "Warden")
+    actor = _require_roles(request, "Dean", "Faculty", "Warden", "BeaconManager")
     backend = request.app.state.attendance_v2_backend
     conn = backend["get_conn"]()
     try:
         current = _beacon(conn, backend, beacon_id)
         _require_feature(request, "class_attendance" if current["scope"] == "CLASS" else "hostel_attendance")
-        if str(actor["role"]).upper() != "DEAN" and current["owner_id"] != actor["user_id"]:
+        if str(actor["role"]).upper() not in {"DEAN", "BEACONMANAGER"} and current["owner_id"] != actor["user_id"]:
             raise HTTPException(status_code=403, detail="Only the beacon owner or Dean can change its status.")
         active = 0 if current["is_active"] else 1
         backend["db_exec"](
@@ -2059,12 +2059,20 @@ def student_hostel_history(request: Request):
 @router.post("/device/enrollment/open")
 def open_device_enrollment(body: EnrollmentWindowInput, request: Request):
     _require_attendance_enabled(request)
-    actor = _require_roles(request, "Warden", "Dean")
+    actor = _require_roles(request, "Warden", "Dean", "StudentOnboarding")
     backend = request.app.state.attendance_v2_backend
     conn = backend["get_conn"]()
     try:
         until = int(_now().timestamp()) + body.duration_seconds
-        if request.state.tenant.get("modules", {}).get("hostel_attendance"):
+        if str(actor["role"]).upper() == "STUDENTONBOARDING":
+            student = backend["db_exec"](
+                conn,
+                "SELECT 1 FROM users WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'",
+                (backend["ACTIVE_COLLEGE_ID"].get(), body.student_id.upper()),
+            ).fetchone()
+            if not student:
+                raise HTTPException(status_code=404, detail="Student account not found.")
+        elif request.state.tenant.get("modules", {}).get("hostel_attendance"):
             member = backend["db_exec"](
                 conn,
                 """
@@ -2091,11 +2099,13 @@ def open_device_enrollment(body: EnrollmentWindowInput, request: Request):
             ).fetchone()
             if not enrolled:
                 raise HTTPException(status_code=404, detail="Student is not enrolled in an attendance course.")
-        backend["db_exec"](
+        updated = backend["db_exec"](
             conn,
             "UPDATE users SET enroll_window_until = ? WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'",
             (until, backend["ACTIVE_COLLEGE_ID"].get(), body.student_id.upper()),
         )
+        if updated.rowcount != 1:
+            raise HTTPException(status_code=404, detail="Student account not found.")
         backend["db_exec"](
             conn,
             """
@@ -2117,7 +2127,7 @@ def open_device_enrollment(body: EnrollmentWindowInput, request: Request):
 
 @router.post("/device/reset/{student_id}")
 def reset_device_lock(student_id: str, request: Request):
-    actor = _require_roles(request, "Warden", "Dean")
+    actor = _require_roles(request, "Warden", "Dean", "StudentOnboarding")
     _require_attendance_enabled(request)
     backend = request.app.state.attendance_v2_backend
     conn = backend["get_conn"]()

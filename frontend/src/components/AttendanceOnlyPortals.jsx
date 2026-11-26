@@ -495,6 +495,23 @@ function BeaconManager({ apiUrl, scope }) {
   );
 }
 
+function BeaconManagerPortal({ apiUrl, modules }) {
+  const scopes = [
+    ...(modules?.class_attendance ? ['CLASS'] : []),
+    ...(modules?.hostel_attendance ? ['HOSTEL'] : [])
+  ];
+  return (
+    <div className="av-root">
+      <header className="av-heading">
+        <span className="av-brand-mark">OS</span>
+        <div><p className="av-kicker">CAMPUS OS</p><h1>Beacon management</h1></div>
+      </header>
+      {!scopes.length && <p className="av-empty">Beacon attendance modules are not enabled for this college.</p>}
+      {scopes.map((scope) => <BeaconManager key={scope} apiUrl={apiUrl} scope={scope} />)}
+    </div>
+  );
+}
+
 function classGroupKey(group) {
   return JSON.stringify([group.department, group.year, group.division]);
 }
@@ -859,5 +876,6 @@ export default function AttendanceOnlyPortals({ apiUrl, user, modules = {} }) {
   if (user?.role === 'Faculty') return <FacultyAttendance apiUrl={apiUrl} />;
   if (user?.role === 'Warden') return <WardenAttendance apiUrl={apiUrl} modules={modules} />;
   if (user?.role === 'Dean') return <DeanAttendance apiUrl={apiUrl} user={user} />;
+  if (user?.role === 'BeaconManager') return <BeaconManagerPortal apiUrl={apiUrl} modules={modules} />;
   return <div className="av-root"><p className="av-empty">Attendance tools are not available for this account.</p></div>;
 }

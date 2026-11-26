@@ -2,17 +2,20 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '../api';
 import { ListRowSkeleton } from './SkeletonLoader';
 
-export default function StaffAccountAccess({ apiUrl, user }) {
+export default function StaffAccountAccess({ apiUrl, user, collegeId }) {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState('');
   const [credential, setCredential] = useState(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const accountUrl = collegeId
+    ? `${apiUrl}/api/founder/tenants/${encodeURIComponent(collegeId)}/accounts`
+    : `${apiUrl}/api/staff/accounts`;
 
   const loadAccounts = useCallback(async () => {
     try {
-      const response = await apiFetch(`${apiUrl}/api/staff/accounts`);
+      const response = await apiFetch(accountUrl);
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Could not load staff accounts.');
       setAccounts(data);
@@ -21,7 +24,7 @@ export default function StaffAccountAccess({ apiUrl, user }) {
     } finally {
       setLoading(false);
     }
-  }, [apiUrl]);
+  }, [accountUrl]);
 
   useEffect(() => {
     loadAccounts();
@@ -34,7 +37,10 @@ export default function StaffAccountAccess({ apiUrl, user }) {
     setError('');
     setCredential(null);
     try {
-      const response = await apiFetch(`${apiUrl}/api/staff/accounts/password`, {
+      const passwordUrl = collegeId
+        ? `${apiUrl}/api/founder/tenants/${encodeURIComponent(collegeId)}/accounts/password`
+        : `${apiUrl}/api/staff/accounts/password`;
+      const response = await apiFetch(passwordUrl, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_id: account.user_id })
@@ -55,15 +61,17 @@ export default function StaffAccountAccess({ apiUrl, user }) {
     <div className="ptm-card">
       <div className="ptm-section-title">Staff account access</div>
       <p className="ptm-list-sub">
-        {user?.role === 'Dean'
-          ? 'Reset staff accounts. Each reset creates a temporary password that must be changed at first sign-in. Student passwords are managed by Student Onboarding Staff.'
-          : 'Reset the Dean account password. Deans manage other staff accounts.'}
+        {collegeId
+          ? 'Manage the Dean, Student Onboarding Staff, and Beacon Manager accounts for this college. Each reset creates a one-time passphrase that must be changed at first sign-in.'
+          : user?.role === 'Dean'
+            ? 'Reset staff accounts. Each reset creates a temporary passphrase that must be changed at first sign-in. Student passwords are managed by Student Onboarding Staff.'
+            : 'Reset the Dean account password. Deans manage other staff accounts.'}
       </p>
       {message && <div className="ptm-alert-success" role="status">{message}</div>}
       {error && <div className="ptm-alert-error" role="alert">{error}</div>}
       {credential && (
         <div className="ptm-alert-success" role="status">
-          Temporary password for <strong>{credential.user_id}</strong>: <code>{credential.password}</code>. Share privately; it is shown only once.
+          Temporary passphrase for <strong>{credential.user_id}</strong>: <code>{credential.password}</code>. Share privately; it is shown only once.
         </div>
       )}
       {loading ? (
@@ -86,7 +94,7 @@ export default function StaffAccountAccess({ apiUrl, user }) {
                   {account.hostel_block && account.hostel_block !== 'All' ? ` · ${account.hostel_block}` : ''}
                 </div>
                 <div className="ptm-list-sub">
-                  {!account.has_password ? 'Password not set' : account.password_reset_required ? 'Must change temporary password' : 'Password is set'}
+                  {!account.has_password ? 'Password not set' : account.password_reset_required ? 'Must change temporary passphrase' : 'Password is set'}
                 </div>
                 {!account.can_manage && (
                   <div className="ptm-list-sub">Your role does not have permission to change this account's password.</div>
@@ -98,7 +106,7 @@ export default function StaffAccountAccess({ apiUrl, user }) {
                 disabled={!account.can_manage || savingId === account.user_id}
                 style={{ width: 'auto', alignSelf: 'flex-end' }}
               >
-                {savingId === account.user_id ? 'Generating…' : 'Issue temporary password'}
+                {savingId === account.user_id ? 'Generating…' : 'Issue temporary passphrase'}
               </button>
             </form>
           ))}

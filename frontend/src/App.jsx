@@ -75,6 +75,10 @@ function AuthenticatedApp() {
   const [staffUsername, setStaffUsername] = useState('');
   const [staffPassword, setStaffPassword] = useState('');
   const [staffLoginLoading, setStaffLoginLoading] = useState(false);
+  const [rememberMe, setRememberMe] = useState(() => localStorage.getItem('hms_remember_me') === 'true');
+  const [forgotPassword, setForgotPassword] = useState(false);
+  const [passwordRequestLoading, setPasswordRequestLoading] = useState(false);
+  const [loginNotice, setLoginNotice] = useState('');
   const [tenant, setTenant] = useState(null);
   const [tenantDomain, setTenantDomain] = useState(
     () => localStorage.getItem('hms_tenant_domain') || (isNativeApp ? 'svnitcampus.in' : '')
@@ -169,9 +173,14 @@ function AuthenticatedApp() {
       });
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(extractErrorMessage(data, 'Sign-in failed.'));
-      localStorage.setItem('hms_session_token', data.token);
+      localStorage.removeItem('hms_session_token');
+      localStorage.removeItem('hms_user');
+      sessionStorage.removeItem('hms_session_token');
+      sessionStorage.removeItem('hms_user');
+      const credentialStore = rememberMe ? localStorage : sessionStorage;
+      credentialStore.setItem('hms_session_token', data.token);
       localStorage.removeItem('hms_google_credential');
-      localStorage.setItem('hms_user', JSON.stringify(data.user));
+      credentialStore.setItem('hms_user', JSON.stringify(data.user));
       setStaffPassword('');
       setProfileDraft(profileDraftFromUser(data.user));
       setUser(data.user);
@@ -179,6 +188,35 @@ function AuthenticatedApp() {
       setLoginError(extractErrorMessage(error, 'Sign-in failed.'));
     } finally {
       setStaffLoginLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async (event) => {
+    event.preventDefault();
+    if (passwordRequestLoading) return;
+    setPasswordRequestLoading(true);
+    setLoginError(null);
+    setLoginNotice('');
+    try {
+      const response = await fetch(`${API_URL}/api/auth/password-reset-requests`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(localStorage.getItem('hms_tenant_domain')
+            ? { 'X-Campus-Domain': localStorage.getItem('hms_tenant_domain') }
+            : {})
+        },
+        body: JSON.stringify({ username: staffUsername })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(extractErrorMessage(data, 'Could not submit the password reset request.'));
+      }
+      setLoginNotice(data.message);
+    } catch (error) {
+      setLoginError(extractErrorMessage(error, 'Could not submit the password reset request.'));
+    } finally {
+      setPasswordRequestLoading(false);
     }
   };
 
@@ -197,6 +235,8 @@ function AuthenticatedApp() {
     if (previousDomain !== domain) {
       localStorage.removeItem('hms_session_token');
       localStorage.removeItem('hms_user');
+      sessionStorage.removeItem('hms_session_token');
+      sessionStorage.removeItem('hms_user');
       setUser(null);
     }
     localStorage.setItem('hms_tenant_domain', domain);
@@ -229,24 +269,25 @@ function AuthenticatedApp() {
   useEffect(() => {
     const restoreSession = async () => {
       localStorage.removeItem('hms_google_credential');
-      const credential = localStorage.getItem('hms_session_token');
-      const cachedUser = localStorage.getItem('hms_user');
+      const credentialStore = localStorage.getItem('hms_session_token') ? localStorage : sessionStorage;
+      const credential = credentialStore.getItem('hms_session_token');
+      const cachedUser = credentialStore.getItem('hms_user');
       if (credential && cachedUser) {
         try {
           const parsed = JSON.parse(cachedUser);
           setProfileDraft(profileDraftFromUser(parsed));
           setUser(parsed);
         } catch {
-          localStorage.removeItem('hms_user');
+          credentialStore.removeItem('hms_user');
         }
         // Render the cached portal immediately, then validate the session in the background.
         apiFetch(`${API_URL}/api/auth/me`)
           .then(async (res) => {
             if (!res.ok) throw new Error('Session expired');
             const data = await res.json();
-            localStorage.setItem('hms_session_token', credential);
+            credentialStore.setItem('hms_session_token', credential);
             localStorage.removeItem('hms_google_credential');
-            localStorage.setItem('hms_user', JSON.stringify(data.user));
+            credentialStore.setItem('hms_user', JSON.stringify(data.user));
             setProfileDraft(profileDraftFromUser(data.user));
             setUser(data.user);
           })
@@ -254,6 +295,8 @@ function AuthenticatedApp() {
             localStorage.removeItem('hms_session_token');
             localStorage.removeItem('hms_google_credential');
             localStorage.removeItem('hms_user');
+            sessionStorage.removeItem('hms_session_token');
+            sessionStorage.removeItem('hms_user');
             setUser(null);
           });
       }
@@ -268,6 +311,9 @@ function AuthenticatedApp() {
     const handleAuthExpired = () => {
       localStorage.removeItem('hms_session_token');
       localStorage.removeItem('hms_google_credential');
+      localStorage.removeItem('hms_user');
+      sessionStorage.removeItem('hms_session_token');
+      sessionStorage.removeItem('hms_user');
       setUser(null);
       setShowProfile(false);
       setLoginError('Your session expired. Please sign in again.');
@@ -330,7 +376,8 @@ function AuthenticatedApp() {
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(extractErrorMessage(data, 'Could not save your profile.'));
-      localStorage.setItem('hms_user', JSON.stringify(data.user));
+      const credentialStore = localStorage.getItem('hms_session_token') ? localStorage : sessionStorage;
+      credentialStore.setItem('hms_user', JSON.stringify(data.user));
       setProfileDraft(profileDraftFromUser(data.user));
       setUser(data.user);
     } catch (error) {
@@ -343,15 +390,22 @@ function AuthenticatedApp() {
   const handleStudentProfileRefresh = useCallback((updatedUser) => {
     setUser((currentUser) => {
       const mergedUser = { ...currentUser, ...updatedUser };
-      localStorage.setItem('hms_user', JSON.stringify(mergedUser));
+      const credentialStore = localStorage.getItem('hms_session_token') ? localStorage : sessionStorage;
+      credentialStore.setItem('hms_user', JSON.stringify(mergedUser));
       return mergedUser;
     });
   }, []);
 
   const handlePasswordChangeComplete = useCallback((data) => {
-    localStorage.setItem('hms_session_token', data.token);
+    localStorage.removeItem('hms_session_token');
     localStorage.removeItem('hms_user');
-    localStorage.setItem('hms_user', JSON.stringify(data.user));
+    sessionStorage.removeItem('hms_session_token');
+    sessionStorage.removeItem('hms_user');
+    const credentialStore = localStorage.getItem('hms_remember_me') === 'true'
+      ? localStorage
+      : sessionStorage;
+    credentialStore.setItem('hms_session_token', data.token);
+    credentialStore.setItem('hms_user', JSON.stringify(data.user));
     setUser(data.user);
     setShowPasswordChange(false);
   }, []);
@@ -360,6 +414,8 @@ function AuthenticatedApp() {
     localStorage.removeItem('hms_user');
     localStorage.removeItem('hms_session_token');
     localStorage.removeItem('hms_google_credential');
+    sessionStorage.removeItem('hms_user');
+    sessionStorage.removeItem('hms_session_token');
     setUser(null);
     setShowProfile(false);
   };
@@ -476,8 +532,10 @@ function AuthenticatedApp() {
 
             {loginError && <div className="ptm-alert-error">{loginError}</div>}
 
-            <form className="ptm-form-stack" onSubmit={handleStaffLogin}>
-              <div className="ptm-section-title" style={{ marginBottom: 0 }}>Username and password</div>
+            <form className="ptm-form-stack" onSubmit={forgotPassword ? handleForgotPassword : handleStaffLogin}>
+              <div className="ptm-section-title" style={{ marginBottom: 0 }}>
+                {forgotPassword ? 'Request a student password reset' : 'Username and password'}
+              </div>
               <label className="ptm-label">
                 Username or roll number
                 <input
@@ -488,20 +546,64 @@ function AuthenticatedApp() {
                   required
                 />
               </label>
-              <label className="ptm-label">
-                Password
-                <input
-                  className="ptm-input"
-                  type="password"
-                  autoComplete="current-password"
-                  value={staffPassword}
-                  onChange={(event) => setStaffPassword(event.target.value)}
-                  required
-                />
-              </label>
-              <button className="ptm-btn-primary" type="submit" disabled={staffLoginLoading || tenantDomainLoading || !canSignIn}>
-                {staffLoginLoading ? 'Signing in…' : 'Sign in'}
+              {!forgotPassword && (
+                <label className="ptm-label">
+                  Password
+                  <input
+                    className="ptm-input"
+                    type="password"
+                    autoComplete="current-password"
+                    value={staffPassword}
+                    onChange={(event) => setStaffPassword(event.target.value)}
+                    required
+                  />
+                </label>
+              )}
+              {loginNotice && <div className="ptm-alert-success" role="status">{loginNotice}</div>}
+              {!forgotPassword && (
+                <label className="ptm-list-sub" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(event) => {
+                      setRememberMe(event.target.checked);
+                      localStorage.setItem('hms_remember_me', String(event.target.checked));
+                    }}
+                  />
+                  Remember me on this device
+                </label>
+              )}
+              <button
+                className="ptm-btn-primary"
+                type="submit"
+                disabled={staffLoginLoading || passwordRequestLoading || tenantDomainLoading || !canSignIn}
+                aria-busy={staffLoginLoading || passwordRequestLoading}
+              >
+                {forgotPassword
+                  ? passwordRequestLoading ? 'Sending request…' : 'Send reset request'
+                  : staffLoginLoading ? 'Signing in…' : 'Sign in'}
               </button>
+              {staffLoginLoading && (
+                <div className="ptm-login-progress" role="status" aria-label="Signing in">
+                  <span />
+                </div>
+              )}
+              <button
+                className="ptm-btn-secondary"
+                type="button"
+                onClick={() => {
+                  setForgotPassword((current) => !current);
+                  setLoginError(null);
+                  setLoginNotice('');
+                }}
+              >
+                {forgotPassword ? 'Back to sign in' : 'Forgot password?'}
+              </button>
+              {forgotPassword && (
+                <p className="ptm-list-sub" style={{ textAlign: 'center', margin: 0 }}>
+                  Student Onboarding Staff will review the request and issue a one-time password if the account is found.
+                </p>
+              )}
               <p className="ptm-list-sub" style={{ textAlign: 'center', margin: 0 }}>
                 Students: ask Student Onboarding Staff for your login. Staff: contact your Dean for account access.
               </p>
@@ -554,13 +656,15 @@ function AuthenticatedApp() {
               {user.role === 'Warden' && <WardenPortal user={user} apiUrl={API_URL} modules={modules} />}
               {user.role === 'Faculty' && modules.class_attendance === true && <AttendanceOnlyPortals user={user} apiUrl={API_URL} modules={modules} />}
               {user.role === 'Faculty' && modules.class_attendance !== true && <ModuleUnavailableNotice />}
+              {user.role === 'BeaconManager' && (modules.class_attendance === true || modules.hostel_attendance === true) && <AttendanceOnlyPortals user={user} apiUrl={API_URL} modules={modules} />}
+              {user.role === 'BeaconManager' && modules.class_attendance !== true && modules.hostel_attendance !== true && <ModuleUnavailableNotice />}
               {(user.role === 'Gate Security' || user.role === 'GateSecurity') && tenant?.modules?.gate_outpass === true && <GateSecurityPortal user={user} apiUrl={API_URL} />}
               {(user.role === 'Gate Security' || user.role === 'GateSecurity') && tenant?.modules?.gate_outpass !== true && <ModuleUnavailableNotice />}
               {user.role === 'ClubOrganizer' && modules.event_radar === true && <ClubPortal user={user} apiUrl={API_URL} />}
               {user.role === 'ClubOrganizer' && modules.event_radar !== true && <ModuleUnavailableNotice />}
               {user.role === 'Staff' && modules.grievances === true && <StaffPortal user={user} apiUrl={API_URL} />}
               {user.role === 'Staff' && modules.grievances !== true && <ModuleUnavailableNotice />}
-              {user.role === 'StudentOnboarding' && <StudentOnboardingPortal user={user} apiUrl={API_URL} />}
+              {user.role === 'StudentOnboarding' && <StudentOnboardingPortal user={user} apiUrl={API_URL} modules={modules} />}
             </Suspense>
           </main>
 
@@ -816,6 +920,9 @@ const PAYTM_APPLE_CSS = `
   .ptm-brand-pill { background: #002970; color: #FFFFFF; padding: 5px 12px; border-radius: 999px; font-size: 11px; font-weight: 800; letter-spacing: 0.04em; }
   .ptm-login-heading { margin: 0 0 4px 0; font-size: 22px; font-weight: 800; color: #111827; }
   .ptm-login-sub { margin: 0 0 16px 0; font-size: 13px; color: #6B7280; }
+  .ptm-login-progress { height: 3px; overflow: hidden; border-radius: 999px; background: #E5E7EB; }
+  .ptm-login-progress span { display: block; width: 20%; height: 100%; background: #0F62FE; animation: ptm-login-progress 1.1s ease-in-out infinite; }
+  @keyframes ptm-login-progress { from { transform: translateX(-100%); } to { transform: translateX(500%); } }
   .ptm-alert-error { background: #FEF2F2; border: 1px solid #FECACA; color: #DC2626; padding: 12px; border-radius: 12px; font-size: 13px; font-weight: 600; margin-bottom: 16px; }
   .ptm-alert-success { background: #F0FDF4; border: 1px solid #BBF7D0; color: #166534; padding: 12px; border-radius: 12px; font-size: 13px; font-weight: 600; margin: 10px 0; }
   .ptm-main-container { flex: 1; width: 100%; min-width: 0; max-width: 1280px; margin: 0 auto; padding: 14px 12px calc(92px + env(safe-area-inset-bottom)); }

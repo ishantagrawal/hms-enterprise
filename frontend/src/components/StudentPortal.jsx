@@ -39,6 +39,7 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
   const eventVersionRef = useRef(0);
   const [clubs, setClubs] = useState(() => getCached('clubs') || []);
   const [notices, setNotices] = useState(() => getCached('notices') || []);
+  const [ads, setAds] = useState([]);
   const [leavePasses, setLeavePasses] = useState(() => getCached(leavePassKey) || []);
   const [attendanceLogs, setAttendanceLogs] = useState(() => getCached(attendanceLogKey) || []);
   const [msg, setMsg] = useState(null);
@@ -187,6 +188,7 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
         const fetchedNotices = d.notices || [];
         setNotices(fetchedNotices);
         setCached('notices', fetchedNotices);
+        setAds(d.ads || []);
 
         setHostelConfig(d.hostels || []);
         if (leavePassVersion === leavePassVersionRef.current) {
@@ -524,6 +526,48 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
         <>
             {page === 'home' && (
               <div>
+                {ads.map((ad) => (
+                  <a
+                    key={ad.ad_id}
+                    href={ad.target_url}
+                    target="_blank"
+                    rel="noopener noreferrer sponsored"
+                    aria-label={`${ad.sponsor_tag}: ${ad.title}. ${ad.cta_text || 'Learn more'}`}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '14px',
+                      minHeight: '116px',
+                      padding: '18px',
+                      marginBottom: '14px',
+                      borderRadius: '18px',
+                      color: '#FFFFFF',
+                      textDecoration: 'none',
+                      backgroundImage: ad.bg_gradient,
+                      overflow: 'hidden'
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: '10px', fontWeight: 700, opacity: 0.82, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                        Sponsored · {ad.sponsor_tag}
+                      </div>
+                      {ad.badge_text && <div style={{ marginTop: '5px', fontSize: '11px', fontWeight: 700 }}>{ad.badge_text}</div>}
+                      <div style={{ marginTop: '4px', fontSize: '18px', fontWeight: 800, lineHeight: 1.2 }}>{ad.title}</div>
+                      <div style={{ marginTop: '4px', fontSize: '12px', opacity: 0.9 }}>{ad.subtitle}</div>
+                      <div style={{ marginTop: '10px', fontSize: '12px', fontWeight: 700 }}>{ad.cta_text || 'Learn more'} →</div>
+                    </div>
+                    {ad.image_url && (
+                      <img
+                        src={ad.image_url}
+                        alt=""
+                        loading="lazy"
+                        referrerPolicy="no-referrer"
+                        style={{ width: '96px', height: '80px', flexShrink: 0, objectFit: 'cover', borderRadius: '12px' }}
+                      />
+                    )}
+                  </a>
+                ))}
                 <div className="ptm-mini-grid">
                   <div className="ptm-mini-card" onClick={openProfile}>
                     <div className="ptm-row-between">

@@ -5,11 +5,14 @@
 All users sign in with a college-issued username (account ID or student roll
 number) and password. Student Onboarding Staff creates student accounts and
 provides their initial credentials. Passwords are stored as PBKDF2-HMAC-SHA256
-hashes. Password access follows the college hierarchy: the Founder manages
-only the Dean; the Dean manages Wardens, clubs, gate security, and central
-staff; each Warden manages only staff accounts created for that Warden's
-hostel. Passwords must be at least 12 characters. Never share one password
-across accounts.
+hashes. Password access follows the college hierarchy: the Founder manages the
+Dean, Student Onboarding Staff, and Beacon Manager; the Dean manages Wardens,
+clubs, gate security, and central staff; each Warden manages only staff
+accounts created for that Warden's hostel. New accounts receive a unique
+nine-word temporary passphrase and must change it at first sign-in. Passphrases
+are shown only when generated or reset; the database never stores recoverable
+plaintext passwords. If a password is lost, issue a new temporary passphrase.
+Never share one password across accounts.
 
 The current SVNIT tenant is seeded for migration compatibility. Additional
 colleges can be configured by the Founder from the Founder portal when the
@@ -43,9 +46,16 @@ Configure these environment variables on the backend host:
   `CW_SARABHAI_EMAIL`, `CW_RAMAN_EMAIL`, and `CW_ABVB_EMAIL`.
 
 The Founder signs in with account ID `FOUNDER`; the seeded SVNIT Dean uses
-`DEAN`. The Founder sets a new college's initial Dean password while creating
-that college. Each college must have its DNS and TLS configured for its exact
+`DEAN`. Creating a college provisions its Dean, Student Onboarding Staff, and
+Beacon Manager accounts. The Founder can provision missing onboarding and
+beacon accounts for older colleges and reset all three main accounts. Share
+each generated passphrase privately; it is displayed only once. Each college
+must have its DNS and TLS configured for its exact
 approved portal domain; wildcard DNS/TLS is not used.
+The Founder can also publish and remove college-specific sponsored banners
+from each college's settings. Active banners appear on that college's student
+home page, require HTTPS destination and image URLs, and expire automatically
+after the configured duration (up to 365 days).
 Backend `CORS_ORIGINS` must include each deployed portal origin and native app
 origin. Web tenants are resolved from the approved portal hostname. The shared
 native app asks for the college portal hostname on its first sign-in and sends
@@ -58,6 +68,12 @@ shown in the portal as the username, then set its password under Staff account
 access. Wardens set passwords for their own hostel staff in the Warden portal.
 Email addresses on staff profiles are contact information; they are not used
 for staff sign-in. Legacy plaintext passwords are cleared at startup.
+
+Students can submit a password-reset request from the sign-in page. The request
+appears in Student Onboarding; staff can issue a new one-time passphrase, which
+the student must change at sign-in. Remember Me stores the signed-in session on
+the current device; without it, the session is limited to the browser tab
+session. Passwords are never retrievable after they are changed.
 
 Set these variables for the frontend deployment:
 
@@ -193,9 +209,10 @@ created by the Dean can scan the OUT and RETURN actions; each action is
 single-use, RETURN requires OUT first, and scans outside the approved window
 are rejected.
 
-The Warden opens a two-minute device-enrollment window for a resident. The
-student registers the app-stored device token during that window. Production
-attendance accepts only a signed `HMS-<WING_ID>-<8_CHAR_HMAC>` beacon within
+The Warden or Student Onboarding Staff opens a two-minute device-enrollment
+window for a resident. During that window, the student registers the app-stored
+device token. Production attendance accepts only a signed
+`HMS-<WING_ID>-<8_CHAR_HMAC>` beacon within
 the current rolling time window and stronger than -80 dBm. Student-controlled
 beacon simulation is not available; supervised test overrides must be
 explicitly scoped and time-limited by an authorized Warden.

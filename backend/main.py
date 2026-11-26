@@ -142,8 +142,14 @@ def normalize_tenant_modules(modules):
     }
 
 
-_TEMP_PASSWORD_CONSONANTS = "bcdfghjkmnpqrstvwxyz"
-_TEMP_PASSWORD_VOWELS = "aeiou"
+_TEMP_PASSWORD_ADJECTIVES = (
+    "amber", "brave", "calm", "clever", "cool", "eager", "gentle", "golden",
+    "happy", "jolly", "kind", "lucky", "merry", "polite", "quiet", "sunny",
+)
+_TEMP_PASSWORD_NOUNS = (
+    "apple", "bird", "breeze", "cloud", "comet", "daisy", "forest", "garden",
+    "harbor", "island", "meadow", "moon", "ocean", "river", "star", "turtle",
+)
 STAFF_LOGIN_ROLES = {
     "Dean",
     "Founder",
@@ -155,6 +161,7 @@ STAFF_LOGIN_ROLES = {
     "Gate Security",
     "Student",
     "StudentOnboarding",
+    "BeaconManager",
 }
 PASSWORD_LOGIN_FAILURES: Dict[str, tuple] = {}
 PASSWORD_LOGIN_FAILURES_LOCK = threading.Lock()
@@ -442,13 +449,10 @@ def hash_password(password: str) -> str:
 
 
 def generate_temporary_password() -> str:
-    def chunk():
-        return "".join(
-            secrets.choice(_TEMP_PASSWORD_CONSONANTS if index % 2 == 0 else _TEMP_PASSWORD_VOWELS)
-            for index in range(4)
-        )
-
-    return f"{chunk()}-{chunk()}-{chunk()}-{secrets.randbelow(10_000):04d}"
+    return "-".join(
+        f"{secrets.choice(_TEMP_PASSWORD_ADJECTIVES)}{secrets.choice(_TEMP_PASSWORD_NOUNS)}"
+        for _ in range(9)
+    )
 
 
 def verify_password(password: str, stored_hash: str) -> bool:
@@ -752,6 +756,17 @@ def init_db():
         )
     ''')
     db_exec(conn, '''
+        CREATE TABLE IF NOT EXISTS student_password_reset_requests (
+            request_id TEXT PRIMARY KEY,
+            college_id TEXT NOT NULL DEFAULT 'SVNIT',
+            student_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'Pending',
+            created_at TEXT NOT NULL,
+            handled_at TEXT NOT NULL DEFAULT '',
+            handled_by TEXT NOT NULL DEFAULT ''
+        )
+    ''')
+    db_exec(conn, '''
         CREATE TABLE IF NOT EXISTS tenants (
             college_id TEXT PRIMARY KEY,
             college_name TEXT NOT NULL,
@@ -955,6 +970,7 @@ def init_db():
         "ads": "ad_id",
         "event_photo_albums": "album_id",
         "student_profile_requests": "request_id",
+        "student_password_reset_requests": "request_id",
         "attendance_sessions": "session_id",
         "attendance_records": "record_id",
         "attendance_logs": "log_id",
@@ -1473,6 +1489,9 @@ class PasswordLoginReq(BaseModel):
     username: str
     password: str
 
+class PasswordResetRequestReq(BaseModel):
+    username: str
+
 class StaffPasswordSetReq(BaseModel):
     user_id: str
 
@@ -1658,15 +1677,18 @@ class NoticeCreateReq(BaseModel):
     custom_fields: Optional[List[Dict[str, str]]] = []
 
 class AdCreateReq(BaseModel):
-    sponsor_tag: str
-    title: str
-    subtitle: str
-    badge_text: Optional[str] = ""
-    cta_text: Optional[str] = "Apply Now →"
-    target_url: str
-    image_url: Optional[str] = ""
-    bg_gradient: Optional[str] = "linear-gradient(135deg, #002970 0%, #0284C7 100%)"
-    days_valid: int = 15
+    sponsor_tag: str = Field(min_length=1, max_length=80)
+    title: str = Field(min_length=1, max_length=160)
+    subtitle: str = Field(min_length=1, max_length=300)
+    badge_text: Optional[str] = Field(default="", max_length=40)
+    cta_text: Optional[str] = Field(default="Learn more", max_length=40)
+    target_url: str = Field(min_length=1, max_length=2048)
+    image_url: Optional[str] = Field(default="", max_length=2048)
+    bg_gradient: Optional[str] = Field(
+        default="linear-gradient(135deg, #002970 0%, #0284C7 100%)",
+        max_length=100,
+    )
+    days_valid: int = Field(default=15, ge=1, le=365)
 
 class TenantCreateReq(BaseModel):
     college_id: str
@@ -1963,6 +1985,7 @@ def require_tenant_module(path: str, tenant: dict) -> None:
 async def require_authentication(request: Request, call_next):
     open_paths = {
         "/api/auth/login",
+        "/api/auth/password-reset-requests",
         "/api/hostels",
         "/api/hostels/config",
         "/api/tenant",
@@ -2038,6 +2061,11 @@ def list_tenants(request: Request):
         conn.close()
 
 
+def _tenant_main_account_id(prefix: str, college_id: str) -> str:
+    digest = hashlib.sha256(college_id.encode("utf-8")).hexdigest()[:10].upper()
+    return f"{prefix}_{college_id[:25]}_{digest}"
+
+
 @app.post("/api/founder/tenants")
 def create_tenant(req: TenantCreateReq, request: Request):
     if request.state.user.get("role") != "Founder":
@@ -2088,7 +2116,6 @@ def create_tenant(req: TenantCreateReq, request: Request):
     dean_name = req.initial_dean_name.strip()
     dean_email = req.initial_dean_email.strip().lower()
     dean_temporary_password = generate_temporary_password()
-    dean_password_hash = hash_password(dean_temporary_password)
     dean_local_part, separator, dean_email_domain = dean_email.partition("@")
     if (
         not re.fullmatch(r"[A-Z0-9][A-Z0-9_-]{1,39}", dean_id)
@@ -2112,6 +2139,7 @@ def create_tenant(req: TenantCreateReq, request: Request):
         modules.update(req.modules)
 
     conn = get_conn()
+    initial_accounts = []
     try:
         db_exec(
             conn,
@@ -2135,30 +2163,60 @@ def create_tenant(req: TenantCreateReq, request: Request):
         db_exec(conn, "SELECT set_config('app.college_id', ?, true)", (college_id,))
         college_token = ACTIVE_COLLEGE_ID.set(college_id)
         try:
-            upsert_user(
-                conn,
+            account_specs = [
+                (dean_id, dean_name, "Dean", f"Dean Student Welfare ({college_name})", dean_email, "Student Welfare", dean_temporary_password),
                 (
-                    dean_id,
-                    dean_password_hash,
-                    dean_name,
-                    "Dean",
-                    f"Dean Student Welfare ({college_name})",
-                    college_id,
-                    "All",
-                    "-",
-                    "Administration",
+                    _tenant_main_account_id("ONB", college_id),
+                    f"Student Onboarding Staff ({college_name})",
+                    "StudentOnboarding",
+                    "Student Onboarding Staff",
                     "",
-                    dean_email,
-                    "Student Welfare",
-                    "",
-                    "",
+                    "Student Onboarding",
+                    generate_temporary_password(),
                 ),
-            )
-            db_exec(
-                conn,
-                "UPDATE users SET password_reset_required = 1 WHERE college_id = ? AND UPPER(user_id) = ?",
-                (college_id, dean_id),
-            )
+                (
+                    _tenant_main_account_id("BCN", college_id),
+                    f"Beacon Manager ({college_name})",
+                    "BeaconManager",
+                    "Beacon Manager",
+                    "",
+                    "Beacon Management",
+                    generate_temporary_password(),
+                ),
+            ]
+            for account_id, name, role, title, email, department, temporary_password in account_specs:
+                upsert_user(
+                    conn,
+                    (
+                        account_id,
+                        hash_password(temporary_password),
+                        name,
+                        role,
+                        title,
+                        college_id,
+                        "All",
+                        "-",
+                        "Administration",
+                        "",
+                        email,
+                        department,
+                        "",
+                        "",
+                    ),
+                )
+                db_exec(
+                    conn,
+                    "UPDATE users SET password_reset_required = 1 WHERE college_id = ? AND UPPER(user_id) = ?",
+                    (college_id, account_id),
+                )
+                initial_accounts.append(
+                    {
+                        "user_id": account_id,
+                        "full_name": name,
+                        "role": role,
+                        "temporary_password": temporary_password,
+                    }
+                )
         finally:
             ACTIVE_COLLEGE_ID.reset(college_token)
         conn.commit()
@@ -2184,8 +2242,157 @@ def create_tenant(req: TenantCreateReq, request: Request):
         "domain": domain,
         "initial_dean_id": dean_id,
         "temporary_password": dean_temporary_password,
+        "accounts": initial_accounts,
         "modules": modules,
     }
+
+
+@app.get("/api/founder/tenants/{college_id}/accounts")
+def list_founder_tenant_accounts(college_id: str, request: Request):
+    if request.state.user.get("role") != "Founder":
+        raise HTTPException(status_code=403, detail="Founder access is required.")
+    normalized_id = college_id.strip().upper()
+    if not get_tenant_by_id(normalized_id, fresh=True):
+        raise HTTPException(status_code=404, detail="College not found.")
+    conn = get_conn()
+    try:
+        rows = db_exec(
+            conn,
+            """
+            SELECT user_id, full_name, role, email, phone, hostel_block, department,
+                   password, password_reset_required
+            FROM users
+            WHERE college_id = ? AND role IN ('Dean', 'StudentOnboarding', 'BeaconManager')
+            ORDER BY role, full_name, user_id
+            """,
+            (normalized_id,),
+        ).fetchall()
+        return [
+            {
+                "user_id": row["user_id"],
+                "full_name": row["full_name"],
+                "role": row["role"],
+                "email": row["email"],
+                "phone": row["phone"],
+                "hostel_block": row["hostel_block"],
+                "department": row["department"],
+                "has_password": str(row["password"] or "").startswith(PASSWORD_HASH_PREFIX),
+                "password_reset_required": bool(row["password_reset_required"]),
+                "can_manage": True,
+            }
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
+@app.post("/api/founder/tenants/{college_id}/accounts/provision")
+def provision_founder_tenant_accounts(college_id: str, request: Request):
+    if request.state.user.get("role") != "Founder":
+        raise HTTPException(status_code=403, detail="Founder access is required.")
+    normalized_id = college_id.strip().upper()
+    tenant = get_tenant_by_id(normalized_id, fresh=True)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="College not found.")
+    account_specs = (
+        ("StudentOnboarding", "ONB", f"Student Onboarding Staff ({tenant['college_name']})", "Student Onboarding"),
+        ("BeaconManager", "BCN", f"Beacon Manager ({tenant['college_name']})", "Beacon Management"),
+    )
+    college_token = ACTIVE_COLLEGE_ID.set(normalized_id)
+    conn = get_conn()
+    created = []
+    try:
+        for role, prefix, full_name, department in account_specs:
+            user_id = _tenant_main_account_id(prefix, normalized_id)
+            existing = db_exec(
+                conn,
+                "SELECT role FROM users WHERE college_id = ? AND UPPER(user_id) = ?",
+                (normalized_id, user_id),
+            ).fetchone()
+            if existing:
+                if existing["role"] != role:
+                    raise HTTPException(status_code=409, detail=f"Generated account ID {user_id} is already in use.")
+                continue
+            temporary_password = generate_temporary_password()
+            upsert_user(
+                conn,
+                (
+                    user_id,
+                    hash_password(temporary_password),
+                    full_name,
+                    role,
+                    "Student Onboarding Staff" if role == "StudentOnboarding" else "Beacon Manager",
+                    normalized_id,
+                    "All",
+                    "-",
+                    "Administration",
+                    "",
+                    "",
+                    department,
+                    "",
+                    "",
+                ),
+            )
+            db_exec(
+                conn,
+                "UPDATE users SET password_reset_required = 1 WHERE college_id = ? AND UPPER(user_id) = ?",
+                (normalized_id, user_id),
+            )
+            created.append(
+                {
+                    "user_id": user_id,
+                    "full_name": full_name,
+                    "role": role,
+                    "temporary_password": temporary_password,
+                }
+            )
+        conn.commit()
+        return {"success": True, "accounts": created}
+    except HTTPException:
+        conn.rollback()
+        raise
+    except DB_INTEGRITY_ERRORS as error:
+        conn.rollback()
+        raise HTTPException(status_code=409, detail="Could not provision college administrator accounts.") from error
+    finally:
+        conn.close()
+        ACTIVE_COLLEGE_ID.reset(college_token)
+
+
+@app.put("/api/founder/tenants/{college_id}/accounts/password")
+def reset_founder_tenant_account_password(
+    college_id: str,
+    req: StaffPasswordSetReq,
+    request: Request,
+):
+    if request.state.user.get("role") != "Founder":
+        raise HTTPException(status_code=403, detail="Founder access is required.")
+    normalized_id = college_id.strip().upper()
+    if not get_tenant_by_id(normalized_id, fresh=True):
+        raise HTTPException(status_code=404, detail="College not found.")
+    user_id = _validate_account_id(req.user_id, "account ID")
+    temporary_password = generate_temporary_password()
+    conn = get_conn()
+    try:
+        result = db_exec(
+            conn,
+            """
+            UPDATE users SET password = ?, password_reset_required = 1
+            WHERE college_id = ? AND UPPER(user_id) = ?
+              AND role IN ('Dean', 'StudentOnboarding', 'BeaconManager')
+            """,
+            (hash_password(temporary_password), normalized_id, user_id),
+        )
+        if result.rowcount != 1:
+            raise HTTPException(status_code=404, detail="College administrator account not found.")
+        conn.commit()
+        invalidate_user_cache(user_id)
+        return {"success": True, "temporary_password": temporary_password}
+    except HTTPException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 @app.put("/api/founder/tenants/{college_id}/modules")
@@ -2564,6 +2771,25 @@ def portal_bootstrap(request: Request, hostel_block: str = "All"):
         else:
             attendance_rows = []
         attendance_logs = [dict(row) for row in attendance_rows]
+        ads = []
+        if role == "Student":
+            ads = [
+                dict(row)
+                for row in db_exec(
+                    conn,
+                    """
+                    SELECT college_id, ad_id, sponsor_tag, title, subtitle, badge_text, cta_text,
+                           target_url, image_url, bg_gradient, created_at, expires_at
+                    FROM ads
+                    WHERE college_id = ? AND expires_at > ?
+                    ORDER BY created_at DESC
+                    """,
+                    (
+                        ACTIVE_COLLEGE_ID.get(),
+                        datetime.now().isoformat(timespec="seconds"),
+                    ),
+                ).fetchall()
+            ]
         if not tenant["modules"].get("grievances", False):
             complaints = []
             departments = []
@@ -2581,7 +2807,7 @@ def portal_bootstrap(request: Request, hostel_block: str = "All"):
             "events": events,
             "clubs": clubs,
             "notices": notices,
-            "ads": [],
+            "ads": ads,
             "students": students,
             "user": portal_user,
             "profile_requests": profile_requests,
@@ -2638,6 +2864,55 @@ def password_login(req: PasswordLoginReq, request: Request):
         user["user_id"], user.get("college_id"), account.get("password") or ""
     )
     return {"success": True, "user": user, "token": token}
+
+
+@app.post("/api/auth/password-reset-requests")
+def create_password_reset_request(req: PasswordResetRequestReq, request: Request):
+    username = req.username.strip().upper()
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9_-]{1,39}", username):
+        return {
+            "success": True,
+            "message": "If the student account exists, Student Onboarding Staff will review the request.",
+        }
+    conn = get_conn()
+    try:
+        student = db_exec(
+            conn,
+            "SELECT user_id FROM users WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'",
+            (ACTIVE_COLLEGE_ID.get(), username),
+        ).fetchone()
+        if student:
+            pending = db_exec(
+                conn,
+                """
+                SELECT request_id FROM student_password_reset_requests
+                WHERE college_id = ? AND UPPER(student_id) = ? AND status = 'Pending'
+                LIMIT 1
+                """,
+                (ACTIVE_COLLEGE_ID.get(), username),
+            ).fetchone()
+            if not pending:
+                db_exec(
+                    conn,
+                    """
+                    INSERT INTO student_password_reset_requests
+                        (request_id, college_id, student_id, status, created_at)
+                    VALUES (?, ?, ?, 'Pending', ?)
+                    """,
+                    (
+                        secrets.token_urlsafe(18),
+                        ACTIVE_COLLEGE_ID.get(),
+                        student["user_id"],
+                        datetime.now().isoformat(timespec="seconds"),
+                    ),
+                )
+                conn.commit()
+        return {
+            "success": True,
+            "message": "If the student account exists, Student Onboarding Staff will review the request.",
+        }
+    finally:
+        conn.close()
 
 
 @app.put("/api/auth/password")
@@ -2757,7 +3032,7 @@ def can_manage_staff_account(caller, target) -> bool:
     caller_role = caller.get("role")
     target_role = target.get("role")
     if caller_role == "Founder":
-        return target_role == "Dean"
+        return target_role in {"Dean", "StudentOnboarding", "BeaconManager"}
     if caller_role == "Dean":
         if target_role in {
             "Faculty", "Warden", "StudentOnboarding", "ClubOrganizer",
@@ -3039,7 +3314,12 @@ def _create_or_update_student_account(conn, values: dict) -> dict:
 
 
 @app.get("/api/onboarding/students")
-def list_onboarding_students(request: Request, q: str = ""):
+def list_onboarding_students(
+    request: Request,
+    q: str = "",
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
     if request.state.user.get("role") != "StudentOnboarding":
         raise HTTPException(status_code=403, detail="Student Onboarding Staff access is required.")
     conn = get_conn()
@@ -3051,10 +3331,14 @@ def list_onboarding_students(request: Request, q: str = ""):
             SELECT user_id, full_name, department, year, division, hostel_block, wing, room, email,
                    password, password_reset_required
             FROM users WHERE college_id = ? AND role = 'Student'
-              AND (? = '%%' OR UPPER(user_id) LIKE ? OR UPPER(full_name) LIKE ? OR UPPER(department) LIKE ? OR UPPER(division) LIKE ?)
-            ORDER BY user_id LIMIT 500
+              AND (? = '%%' OR UPPER(user_id) LIKE ? OR UPPER(full_name) LIKE ? OR UPPER(department) LIKE ?
+                   OR UPPER(year) LIKE ? OR UPPER(division) LIKE ? OR UPPER(hostel_block) LIKE ? OR UPPER(wing) LIKE ?)
+            ORDER BY user_id LIMIT ? OFFSET ?
             """,
-            (ACTIVE_COLLEGE_ID.get(), search, search, search, search, search),
+            (
+                ACTIVE_COLLEGE_ID.get(), search, search, search, search, search,
+                search, search, search, limit, offset,
+            ),
         ).fetchall()
         return [
             {
@@ -3158,6 +3442,88 @@ def reset_onboarding_student_password(user_id: str, request: Request):
         conn.commit()
         invalidate_user_cache(student_id)
         return {"success": True, "user_id": student_id, "temporary_password": temporary_password}
+    except HTTPException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@app.get("/api/onboarding/password-reset-requests")
+def list_onboarding_password_reset_requests(request: Request):
+    if request.state.user.get("role") != "StudentOnboarding":
+        raise HTTPException(status_code=403, detail="Student Onboarding Staff access is required.")
+    conn = get_conn()
+    try:
+        rows = db_exec(
+            conn,
+            """
+            SELECT r.request_id, r.student_id, r.status, r.created_at, u.full_name,
+                   u.department, u.year, u.division
+            FROM student_password_reset_requests r
+            LEFT JOIN users u
+              ON u.college_id = r.college_id AND UPPER(u.user_id) = UPPER(r.student_id)
+            WHERE r.college_id = ? AND r.status = 'Pending'
+            ORDER BY r.created_at ASC
+            LIMIT 500
+            """,
+            (ACTIVE_COLLEGE_ID.get(),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+@app.post("/api/onboarding/password-reset-requests/{request_id}/issue")
+def issue_requested_student_password(request_id: str, request: Request):
+    if request.state.user.get("role") != "StudentOnboarding":
+        raise HTTPException(status_code=403, detail="Student Onboarding Staff access is required.")
+    conn = get_conn()
+    try:
+        select_query = """
+            SELECT student_id FROM student_password_reset_requests
+            WHERE college_id = ? AND request_id = ? AND status = 'Pending'
+        """
+        if USE_POSTGRES:
+            select_query += " FOR UPDATE"
+        reset_request = db_exec(
+            conn, select_query, (ACTIVE_COLLEGE_ID.get(), request_id)
+        ).fetchone()
+        if not reset_request:
+            raise HTTPException(status_code=404, detail="Pending password reset request not found.")
+        student_id = str(reset_request["student_id"]).upper()
+        temporary_password = generate_temporary_password()
+        updated = db_exec(
+            conn,
+            """
+            UPDATE users SET password = ?, password_reset_required = 1
+            WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'
+            """,
+            (hash_password(temporary_password), ACTIVE_COLLEGE_ID.get(), student_id),
+        )
+        if updated.rowcount != 1:
+            raise HTTPException(status_code=404, detail="Student account not found.")
+        db_exec(
+            conn,
+            """
+            UPDATE student_password_reset_requests
+            SET status = 'Issued', handled_at = ?, handled_by = ?
+            WHERE college_id = ? AND request_id = ? AND status = 'Pending'
+            """,
+            (
+                datetime.now().isoformat(timespec="seconds"),
+                request.state.user["user_id"],
+                ACTIVE_COLLEGE_ID.get(),
+                request_id,
+            ),
+        )
+        conn.commit()
+        invalidate_user_cache(student_id)
+        return {
+            "success": True,
+            "user_id": student_id,
+            "temporary_password": temporary_password,
+        }
     except HTTPException:
         conn.rollback()
         raise
@@ -6007,6 +6373,128 @@ def review_student_profile_request(req: ProfileRequestReviewReq, request: Reques
 @app.get("/api/ads")
 def get_ads():
     return []
+
+
+def _founder_tenant_ad_scope(college_id: str, request: Request) -> str:
+    if request.state.user.get("role") != "Founder":
+        raise HTTPException(status_code=403, detail="Founder access is required.")
+    normalized_id = college_id.strip().upper()
+    if not get_tenant_by_id(normalized_id, fresh=True):
+        raise HTTPException(status_code=404, detail="College not found.")
+    return normalized_id
+
+
+def _is_valid_ad_https_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+        return (
+            parsed.scheme == "https"
+            and bool(parsed.hostname)
+            and parsed.username is None
+            and parsed.password is None
+            and (parsed.port is None or 1 <= parsed.port <= 65535)
+        )
+    except ValueError:
+        return False
+
+
+@app.get("/api/founder/tenants/{college_id}/ads")
+def list_founder_tenant_ads(college_id: str, request: Request):
+    normalized_id = _founder_tenant_ad_scope(college_id, request)
+    conn = get_conn()
+    try:
+        rows = db_exec(
+            conn,
+            """
+            SELECT college_id, ad_id, sponsor_tag, title, subtitle, badge_text, cta_text,
+                   target_url, image_url, bg_gradient, created_at, expires_at
+            FROM ads WHERE college_id = ?
+            ORDER BY created_at DESC
+            """,
+            (normalized_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+@app.post("/api/founder/tenants/{college_id}/ads")
+def create_founder_tenant_ad(college_id: str, req: AdCreateReq, request: Request):
+    normalized_id = _founder_tenant_ad_scope(college_id, request)
+    sponsor_tag = req.sponsor_tag.strip()
+    title = req.title.strip()
+    subtitle = req.subtitle.strip()
+    cta_text = (req.cta_text or "Learn more").strip()
+    target_url = req.target_url.strip()
+    image_url = (req.image_url or "").strip()
+    if not sponsor_tag or not title or not subtitle or not cta_text:
+        raise HTTPException(status_code=400, detail="Sponsor, title, description, and button label are required.")
+    if not _is_valid_ad_https_url(target_url) or (image_url and not _is_valid_ad_https_url(image_url)):
+        raise HTTPException(status_code=400, detail="Ad links and images must use valid HTTPS URLs.")
+    gradient = (req.bg_gradient or "").strip()
+    if not re.fullmatch(
+        r"linear-gradient\(135deg,\s*#[0-9a-fA-F]{6}\s+0%,\s*#[0-9a-fA-F]{6}\s+100%\)",
+        gradient,
+    ):
+        raise HTTPException(status_code=400, detail="Choose a supported two-color banner gradient.")
+    now = datetime.now()
+    expires_at = now + timedelta(days=req.days_valid)
+    ad_id = f"AD-{secrets.token_urlsafe(12)}"
+    college_token = ACTIVE_COLLEGE_ID.set(normalized_id)
+    conn = get_conn()
+    try:
+        db_exec(
+            conn,
+            """
+            INSERT INTO ads
+                (college_id, ad_id, sponsor_tag, title, subtitle, badge_text, cta_text,
+                 target_url, image_url, bg_gradient, created_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalized_id,
+                ad_id,
+                sponsor_tag,
+                title,
+                subtitle,
+                (req.badge_text or "").strip(),
+                cta_text,
+                target_url,
+                image_url,
+                gradient,
+                now.isoformat(timespec="seconds"),
+                expires_at.isoformat(timespec="seconds"),
+            ),
+        )
+        conn.commit()
+        return {"success": True, "ad_id": ad_id}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+        ACTIVE_COLLEGE_ID.reset(college_token)
+
+
+@app.delete("/api/founder/tenants/{college_id}/ads/{ad_id}")
+def delete_founder_tenant_ad(college_id: str, ad_id: str, request: Request):
+    normalized_id = _founder_tenant_ad_scope(college_id, request)
+    conn = get_conn()
+    try:
+        result = db_exec(
+            conn,
+            "DELETE FROM ads WHERE college_id = ? AND ad_id = ?",
+            (normalized_id, ad_id),
+        )
+        if result.rowcount != 1:
+            raise HTTPException(status_code=404, detail="College ad not found.")
+        conn.commit()
+        return {"success": True}
+    except HTTPException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 @app.post("/api/ads/create")

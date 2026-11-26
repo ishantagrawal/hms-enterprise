@@ -870,7 +870,7 @@ class TenantSafetyTests(unittest.TestCase):
         try:
             passwords = main.db_exec(
                 conn,
-                "SELECT password FROM users WHERE password IS NOT NULL AND password != ''",
+                "SELECT password FROM users WHERE college_id = 'SVNIT' AND password IS NOT NULL AND password != ''",
             ).fetchall()
             self.assertEqual(passwords, [])
         finally:
@@ -1410,6 +1410,14 @@ class TenantSafetyTests(unittest.TestCase):
             {"role": "Founder", "user_id": "FOUNDER"},
             {"role": "Dean"},
         ))
+        self.assertTrue(main.can_manage_staff_account(
+            {"role": "Founder", "user_id": "FOUNDER"},
+            {"role": "StudentOnboarding"},
+        ))
+        self.assertTrue(main.can_manage_staff_account(
+            {"role": "Founder", "user_id": "FOUNDER"},
+            {"role": "BeaconManager"},
+        ))
         self.assertFalse(main.can_manage_staff_account(
             {"role": "Founder", "user_id": "FOUNDER"},
             {"role": "Warden"},
@@ -1423,9 +1431,141 @@ class TenantSafetyTests(unittest.TestCase):
         self.assertFalse(main.can_manage_staff_account(warden, {"role": "Staff", "managed_by": "CW_GAJJAR"}))
         self.assertFalse(main.can_manage_staff_account(warden, {"role": "Staff", "managed_by": "CW_BHABHA"}))
 
+    def test_founder_can_provision_missing_college_main_accounts_once(self):
+        context_token = main.ACTIVE_COLLEGE_ID.set("*")
+        try:
+            request = build_request([(b"host", b"api.svnitcampus.in")])
+            request.state.user = {"role": "Founder", "user_id": "FOUNDER"}
+
+            result = main.provision_founder_tenant_accounts("TESTCOLLEGE", request)
+            self.assertEqual(
+                {account["role"] for account in result["accounts"]},
+                {"StudentOnboarding", "BeaconManager"},
+            )
+            for account in result["accounts"]:
+                self.assertEqual(len(account["temporary_password"].split("-")), 9)
+
+            listed = main.list_founder_tenant_accounts("TESTCOLLEGE", request)
+            self.assertEqual(
+                {account["role"] for account in listed},
+                {"StudentOnboarding", "BeaconManager"},
+            )
+            self.assertTrue(all(account["can_manage"] for account in listed))
+            reset = main.reset_founder_tenant_account_password(
+                "TESTCOLLEGE",
+                main.StaffPasswordSetReq(user_id=listed[0]["user_id"]),
+                request,
+            )
+            self.assertEqual(len(reset["temporary_password"].split("-")), 9)
+            self.assertEqual(
+                main.provision_founder_tenant_accounts("TESTCOLLEGE", request)["accounts"],
+                [],
+            )
+        finally:
+            main.ACTIVE_COLLEGE_ID.reset(context_token)
+
+    def test_founder_ad_banners_are_tenant_scoped_and_deletable(self):
+        context_token = main.ACTIVE_COLLEGE_ID.set("*")
+        try:
+            request = build_request([(b"host", b"api.example.edu")])
+            request.state.user = {"role": "Founder", "user_id": "FOUNDER"}
+            result = main.create_founder_tenant_ad(
+                "TESTCOLLEGE",
+                main.AdCreateReq(
+                    sponsor_tag="Campus Partner",
+                    title="Student offer",
+                    subtitle="An offer for students",
+                    target_url="https://offers.example.com/student",
+                ),
+                request,
+            )
+            listed = main.list_founder_tenant_ads("TESTCOLLEGE", request)
+            ad = next(item for item in listed if item["ad_id"] == result["ad_id"])
+            self.assertEqual(ad["title"], "Student offer")
+            self.assertEqual(ad["college_id"], "TESTCOLLEGE")
+            self.assertTrue(main.delete_founder_tenant_ad("TESTCOLLEGE", result["ad_id"], request)["success"])
+            self.assertFalse(any(item["ad_id"] == result["ad_id"] for item in main.list_founder_tenant_ads("TESTCOLLEGE", request)))
+        finally:
+            main.ACTIVE_COLLEGE_ID.reset(context_token)
+
+    def test_founder_ad_banners_require_founder_and_https_urls(self):
+        context_token = main.ACTIVE_COLLEGE_ID.set("*")
+        try:
+            request = build_request([(b"host", b"api.example.edu")])
+            request.state.user = {"role": "Dean", "user_id": "DEAN"}
+            req = main.AdCreateReq(
+                sponsor_tag="Campus Partner",
+                title="Student offer",
+                subtitle="An offer for students",
+                target_url="https://offers.example.com/student",
+            )
+            with self.assertRaises(HTTPException) as role_error:
+                main.create_founder_tenant_ad("TESTCOLLEGE", req, request)
+            self.assertEqual(role_error.exception.status_code, 403)
+
+            request.state.user = {"role": "Founder", "user_id": "FOUNDER"}
+            for url in ("http://offers.example.com", "https://offers.example.com:invalid"):
+                with self.subTest(url=url), self.assertRaises(HTTPException) as url_error:
+                    main.create_founder_tenant_ad(
+                        "TESTCOLLEGE",
+                        req.model_copy(update={"target_url": url}),
+                        request,
+                    )
+                self.assertEqual(url_error.exception.status_code, 400)
+        finally:
+            main.ACTIVE_COLLEGE_ID.reset(context_token)
+
+    def test_student_password_reset_request_issues_one_time_passphrase(self):
+        context_token = main.ACTIVE_COLLEGE_ID.set("TESTCOLLEGE")
+        try:
+            conn = main.get_conn()
+            main._create_or_update_student_account(
+                conn,
+                {
+                    "roll_no": "RESET-STUDENT-001",
+                    "full_name": "Reset Request Student",
+                    "department": "Civil",
+                    "year": "2",
+                    "division": "A",
+                },
+            )
+            conn.commit()
+            conn.close()
+
+            request = build_request([(b"host", b"api.svnitcampus.in")])
+            request.state.user = {
+                "role": "StudentOnboarding",
+                "user_id": "TEST-ONBOARDING",
+            }
+            submitted = main.create_password_reset_request(
+                main.PasswordResetRequestReq(username="RESET-STUDENT-001"),
+                request,
+            )
+            self.assertTrue(submitted["success"])
+
+            pending = main.list_onboarding_password_reset_requests(request)
+            self.assertEqual(len(pending), 1)
+            issued = main.issue_requested_student_password(pending[0]["request_id"], request)
+            self.assertEqual(issued["user_id"], "RESET-STUDENT-001")
+            self.assertEqual(len(issued["temporary_password"].split("-")), 9)
+
+            conn = main.get_conn()
+            student = main.db_exec(
+                conn,
+                "SELECT password, password_reset_required FROM users WHERE college_id = ? AND UPPER(user_id) = ?",
+                ("TESTCOLLEGE", "RESET-STUDENT-001"),
+            ).fetchone()
+            conn.close()
+            self.assertTrue(student["password_reset_required"])
+            self.assertTrue(main.verify_password(issued["temporary_password"], student["password"]))
+            self.assertEqual(main.list_onboarding_password_reset_requests(request), [])
+        finally:
+            main.ACTIVE_COLLEGE_ID.reset(context_token)
+
     def test_temporary_passphrase_is_readable_and_dean_can_edit_staff_details(self):
         password = main.generate_temporary_password()
-        self.assertRegex(password, r"^[a-z]{4}-[a-z]{4}-[a-z]{4}-\d{4}$")
+        self.assertRegex(password, r"^[a-z]{8,12}(?:-[a-z]{8,12}){8}$")
+        self.assertEqual(len(password.split("-")), 9)
         self.assertGreaterEqual(len(password), main.PASSWORD_MIN_LENGTH)
 
         context_token = main.ACTIVE_COLLEGE_ID.set("SVNIT")

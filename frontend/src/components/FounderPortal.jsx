@@ -16,6 +16,109 @@ const TENANT_MODULES = [
   ['parent_alerts', 'Parent alerts']
 ];
 
+function CollegeAdManager({ apiUrl, collegeId }) {
+  const [ads, setAds] = useState([]);
+  const [form, setForm] = useState({
+    sponsor_tag: '',
+    title: '',
+    subtitle: '',
+    badge_text: '',
+    cta_text: 'Learn more',
+    target_url: '',
+    image_url: '',
+    bg_gradient: 'linear-gradient(135deg, #002970 0%, #0284C7 100%)',
+    days_valid: 15
+  });
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [saving, setSaving] = useState(false);
+  const endpoint = `${apiUrl}/api/founder/tenants/${encodeURIComponent(collegeId)}/ads`;
+
+  const loadAds = useCallback(async () => {
+    const response = await apiFetch(endpoint);
+    const data = await response.json().catch(() => []);
+    if (!response.ok) throw new Error(extractErrorMessage(data, 'Could not load college ad banners.'));
+    setAds(data);
+  }, [endpoint]);
+
+  useEffect(() => {
+    loadAds().catch((loadError) => setError(extractErrorMessage(loadError)));
+  }, [loadAds]);
+
+  const createAd = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    setMessage('');
+    try {
+      const response = await apiFetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...form, days_valid: Number(form.days_valid) })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(extractErrorMessage(data, 'Could not create ad banner.'));
+      setMessage('College-wide banner published.');
+      setForm((current) => ({ ...current, sponsor_tag: '', title: '', subtitle: '', badge_text: '', target_url: '', image_url: '' }));
+      await loadAds();
+    } catch (createError) {
+      setError(extractErrorMessage(createError));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteAd = async (adId) => {
+    setError('');
+    setMessage('');
+    try {
+      const response = await apiFetch(`${endpoint}/${encodeURIComponent(adId)}`, { method: 'DELETE' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(extractErrorMessage(data, 'Could not remove ad banner.'));
+      setMessage('Banner removed.');
+      await loadAds();
+    } catch (deleteError) {
+      setError(extractErrorMessage(deleteError));
+    }
+  };
+
+  return (
+    <div className="ptm-card">
+      <div className="ptm-section-title">College-wide ad banner</div>
+      <p className="ptm-list-sub">Publish a sponsored banner to this college's student home page. Destination and image links must use HTTPS.</p>
+      {message && <div className="ptm-alert-success" role="status">{message}</div>}
+      {error && <div className="ptm-alert-error" role="alert">{error}</div>}
+      <form className="ptm-form-stack" onSubmit={createAd}>
+        <div className="ptm-grid-2">
+          <label className="ptm-label">Sponsor label<input className="ptm-input" required maxLength={80} value={form.sponsor_tag} onChange={(event) => setForm({ ...form, sponsor_tag: event.target.value })} /></label>
+          <label className="ptm-label">Banner title<input className="ptm-input" required maxLength={160} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
+        </div>
+        <label className="ptm-label">Short description<input className="ptm-input" required maxLength={300} value={form.subtitle} onChange={(event) => setForm({ ...form, subtitle: event.target.value })} /></label>
+        <div className="ptm-grid-2">
+          <label className="ptm-label">Badge (optional)<input className="ptm-input" maxLength={40} value={form.badge_text} onChange={(event) => setForm({ ...form, badge_text: event.target.value })} /></label>
+          <label className="ptm-label">Button label<input className="ptm-input" maxLength={40} value={form.cta_text} onChange={(event) => setForm({ ...form, cta_text: event.target.value })} /></label>
+        </div>
+        <label className="ptm-label">HTTPS destination URL<input className="ptm-input" type="url" required value={form.target_url} onChange={(event) => setForm({ ...form, target_url: event.target.value })} /></label>
+        <label className="ptm-label">HTTPS image URL (optional)<input className="ptm-input" type="url" value={form.image_url} onChange={(event) => setForm({ ...form, image_url: event.target.value })} /></label>
+        <label className="ptm-label">Banner duration (days)<input className="ptm-input" type="number" min="1" max="365" required value={form.days_valid} onChange={(event) => setForm({ ...form, days_valid: event.target.value })} /></label>
+        <button className="ptm-btn-primary" type="submit" disabled={saving}>{saving ? 'Publishing…' : 'Publish college banner'}</button>
+      </form>
+      <div className="ptm-list" style={{ marginTop: '12px' }}>
+        {ads.map((ad) => (
+          <div className="ptm-list-row" key={ad.ad_id}>
+            <div className="ptm-list-main">
+              <div className="ptm-list-title">{ad.title}</div>
+              <div className="ptm-list-sub">{ad.sponsor_tag} · Expires {new Date(ad.expires_at).toLocaleDateString()}</div>
+            </div>
+            <button type="button" className="ptm-btn-danger" style={{ width: 'auto' }} onClick={() => deleteAd(ad.ad_id)}>Remove</button>
+          </div>
+        ))}
+        {!ads.length && <p className="ptm-list-sub">No sponsored banners configured for this college.</p>}
+      </div>
+    </div>
+  );
+}
+
 export default function FounderPortal({ apiUrl, onLogout, user }) {
   const [page, setPage] = useState('home');
   usePortalBackNavigation(page, setPage);
@@ -23,6 +126,8 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
   const [tenantLoading, setTenantLoading] = useState(true);
   const [tenantSaving, setTenantSaving] = useState(false);
   const [moduleSaving, setModuleSaving] = useState({});
+  const [credentials, setCredentials] = useState([]);
+  const [provisioningCollege, setProvisioningCollege] = useState('');
   const [tenantForm, setTenantForm] = useState({
     college_id: '',
     college_name: '',
@@ -67,7 +172,8 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.success) throw new Error(extractErrorMessage(data, 'Could not create college.'));
-      setMsg(`College ${data.college_id} configured. Initial Dean ${data.initial_dean_id} temporary password: ${data.temporary_password}. Share privately; it must be changed at first sign-in.`);
+      setCredentials(data.accounts || []);
+      setMsg(`College ${data.college_id} configured. Share each temporary passphrase privately; it must be changed at first sign-in.`);
       setTenantForm({
         college_id: '',
         college_name: '',
@@ -84,6 +190,29 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
       setMsg(extractErrorMessage(error, 'Could not create college.'));
     } finally {
       setTenantSaving(false);
+    }
+  };
+
+  const provisionMissingAccounts = async (tenant) => {
+    setProvisioningCollege(tenant.college_id);
+    setMsg(null);
+    setCredentials([]);
+    try {
+      const res = await apiFetch(
+        `${apiUrl}/api/founder/tenants/${encodeURIComponent(tenant.college_id)}/accounts/provision`,
+        { method: 'POST' }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(extractErrorMessage(data, 'Could not provision college accounts.'));
+      setCredentials(data.accounts || []);
+      setMsg(data.accounts?.length
+        ? `Created ${data.accounts.length} missing main account${data.accounts.length === 1 ? '' : 's'}. Share each passphrase privately.`
+        : 'The Student Onboarding Staff and Beacon Manager accounts are already provisioned.');
+      await loadTenants();
+    } catch (error) {
+      setMsg(extractErrorMessage(error, 'Could not provision college accounts.'));
+    } finally {
+      setProvisioningCollege('');
     }
   };
 
@@ -125,6 +254,23 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
     >
       <div className="ptm-page-wrap">
         {msg && <div className="ptm-toast" onClick={() => setMsg(null)}>{msg}</div>}
+        {credentials.length > 0 && (
+          <section className="ptm-card" aria-live="polite">
+            <div className="ptm-section-title">One-time initial credentials</div>
+            <p className="ptm-list-sub">These passphrases are shown only now. Share them privately; each account must change its password at first sign-in.</p>
+            <div className="ptm-list">
+              {credentials.map((account) => (
+                <div className="ptm-list-row" key={account.user_id}>
+                  <div className="ptm-list-main">
+                    <div className="ptm-list-title">{account.role} · {account.full_name}</div>
+                    <div className="ptm-list-sub">Username: <strong>{account.user_id}</strong></div>
+                  </div>
+                  <code>{account.temporary_password}</code>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         <div className="ptm-drill-header">
           <div className="ptm-row-between">
@@ -134,13 +280,13 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
             </button>
           </div>
           <h1 className="ptm-page-title">Campus OS Founder Console</h1>
-          <p className="ptm-page-sub">Provision colleges and Deans, manage tenant features, and reset Dean passwords.</p>
+          <p className="ptm-page-sub">Provision colleges and their three main accounts, manage tenant features, and reset main-account passwords.</p>
         </div>
 
         <div className="ptm-card">
           <div className="ptm-section-title">College platform settings</div>
           <p className="ptm-list-sub">
-            Add the college portal domain and institution email domain, then configure DNS and TLS before launch.
+            Add the college portal domain and institution email domain, then configure DNS and TLS before launch. The college receives a Dean, Student Onboarding Staff, and Beacon Manager account.
           </p>
           <form onSubmit={handleCreateTenant} className="ptm-form-stack">
             <div className="ptm-grid-2">
@@ -210,6 +356,24 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
                         </label>
                       ))}
                     </div>
+                    <div className="ptm-row-between" style={{ marginTop: '14px', justifyContent: 'flex-start', gap: '10px' }}>
+                      <button
+                        type="button"
+                        className="ptm-btn-secondary"
+                        disabled={Boolean(provisioningCollege)}
+                        onClick={() => provisionMissingAccounts(tenant)}
+                      >
+                        {provisioningCollege === tenant.college_id ? 'Provisioning…' : 'Provision missing main accounts'}
+                      </button>
+                    </div>
+                    <details style={{ marginTop: '12px' }}>
+                      <summary className="ptm-list-sub" style={{ cursor: 'pointer' }}>Main accounts and password resets</summary>
+                      <StaffAccountAccess apiUrl={apiUrl} user={user} collegeId={tenant.college_id} />
+                    </details>
+                    <details style={{ marginTop: '12px' }}>
+                      <summary className="ptm-list-sub" style={{ cursor: 'pointer' }}>Sponsored student banner</summary>
+                      <CollegeAdManager apiUrl={apiUrl} collegeId={tenant.college_id} />
+                    </details>
                   </div>
                 </div>
               ))}
@@ -217,7 +381,6 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
           )}
         </div>
 
-        <StaffAccountAccess apiUrl={apiUrl} user={user} />
       </div>
     </div>
   );
