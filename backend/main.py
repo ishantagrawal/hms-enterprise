@@ -449,9 +449,13 @@ def hash_password(password: str) -> str:
 
 
 def generate_temporary_password() -> str:
-    return "-".join(
-        f"{secrets.choice(_TEMP_PASSWORD_ADJECTIVES)}{secrets.choice(_TEMP_PASSWORD_NOUNS)}"
-        for _ in range(9)
+    return " ".join(
+        word
+        for _ in range(5)
+        for word in (
+            secrets.choice(_TEMP_PASSWORD_ADJECTIVES),
+            secrets.choice(_TEMP_PASSWORD_NOUNS),
+        )
     )
 
 

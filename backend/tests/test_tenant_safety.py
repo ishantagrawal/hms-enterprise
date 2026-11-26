@@ -1443,7 +1443,7 @@ class TenantSafetyTests(unittest.TestCase):
                 {"StudentOnboarding", "BeaconManager"},
             )
             for account in result["accounts"]:
-                self.assertEqual(len(account["temporary_password"].split("-")), 9)
+                self.assertEqual(len(account["temporary_password"].split()), 10)
 
             listed = main.list_founder_tenant_accounts("TESTCOLLEGE", request)
             self.assertEqual(
@@ -1456,7 +1456,7 @@ class TenantSafetyTests(unittest.TestCase):
                 main.StaffPasswordSetReq(user_id=listed[0]["user_id"]),
                 request,
             )
-            self.assertEqual(len(reset["temporary_password"].split("-")), 9)
+            self.assertEqual(len(reset["temporary_password"].split()), 10)
             self.assertEqual(
                 main.provision_founder_tenant_accounts("TESTCOLLEGE", request)["accounts"],
                 [],
@@ -1547,7 +1547,7 @@ class TenantSafetyTests(unittest.TestCase):
             self.assertEqual(len(pending), 1)
             issued = main.issue_requested_student_password(pending[0]["request_id"], request)
             self.assertEqual(issued["user_id"], "RESET-STUDENT-001")
-            self.assertEqual(len(issued["temporary_password"].split("-")), 9)
+            self.assertEqual(len(issued["temporary_password"].split()), 10)
 
             conn = main.get_conn()
             student = main.db_exec(
@@ -1564,8 +1564,9 @@ class TenantSafetyTests(unittest.TestCase):
 
     def test_temporary_passphrase_is_readable_and_dean_can_edit_staff_details(self):
         password = main.generate_temporary_password()
-        self.assertRegex(password, r"^[a-z]{8,12}(?:-[a-z]{8,12}){8}$")
-        self.assertEqual(len(password.split("-")), 9)
+        self.assertRegex(password, r"^[a-z]+(?: [a-z]+){9}$")
+        self.assertEqual(len(password.split()), 10)
+        self.assertNotIn("-", password)
         self.assertGreaterEqual(len(password), main.PASSWORD_MIN_LENGTH)
 
         context_token = main.ACTIVE_COLLEGE_ID.set("SVNIT")
