@@ -4,6 +4,7 @@ import StaffAccountAccess from './StaffAccountAccess';
 import { ListRowSkeleton } from './SkeletonLoader';
 import usePortalBackNavigation from '../hooks/usePortalBackNavigation';
 import { extractErrorMessage } from '../utils/errorParser.ts';
+import { Button, Icon, Sidebar, StatTile, StatusPill, TabBar, Toggle } from './ui/DesignSystem';
 
 const TENANT_MODULES = [
   ['grievances', 'Grievances'],
@@ -119,7 +120,7 @@ function CollegeAdManager({ apiUrl, collegeId }) {
   );
 }
 
-export default function FounderPortal({ apiUrl, onLogout, user }) {
+export default function FounderPortal({ apiUrl, onLogout, user, tenantName = 'Vidyut OS' }) {
   const [page, setPage] = useState('home');
   usePortalBackNavigation(page, setPage);
   const [tenants, setTenants] = useState([]);
@@ -241,21 +242,92 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
     }
   };
 
+  const enabledFeatures = tenants.reduce(
+    (total, tenant) => total + Object.values(tenant.modules || {}).filter(Boolean).length,
+    0
+  );
+  const founderNavItems = [
+    { id: 'home', label: 'Overview', icon: 'home' },
+    { id: 'colleges', label: 'Colleges', icon: 'building', count: tenants.length },
+    { id: 'features', label: 'Feature access', icon: 'shield' },
+    { id: 'accounts', label: 'Main accounts', icon: 'users' },
+    { id: 'banners', label: 'Sponsored banners', icon: 'file' }
+  ];
+  const founderMobileItems = founderNavItems.map((item) => ({
+    ...item,
+    label: item.id === 'features' ? 'Features' : item.id === 'accounts' ? 'Accounts' : item.id === 'banners' ? 'Banners' : item.id === 'colleges' ? 'Colleges' : 'Home'
+  }));
+  const pageTitles = {
+    home: 'Platform overview',
+    colleges: 'College onboarding',
+    features: 'Feature access',
+    accounts: 'Main account access',
+    banners: 'College-wide banners'
+  };
+  const renderTenantSection = (section) => (
+    tenantLoading ? <ListRowSkeleton count={3} /> : tenants.length === 0 ? (
+      <div className="ptm-empty-state">No colleges are configured yet. Add a college to get started.</div>
+    ) : (
+      <div className="ptm-tenant-list">
+        {tenants.map((tenant) => (
+          <article className="ptm-card ptm-tenant-card" key={tenant.college_id}>
+            <header className="ptm-tenant-heading">
+              <span className="ptm-tenant-mark">{tenant.college_name?.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'CL'}</span>
+              <div>
+                <h3>{tenant.college_name} <small>{tenant.college_id}</small></h3>
+                <p>{tenant.primary_domain} · @{tenant.allowed_email_domain}</p>
+              </div>
+            </header>
+            {section === 'colleges' && (
+              <div className="ptm-tenant-actions">
+                <StatusPill tone="neutral">3 main account roles</StatusPill>
+                <Button
+                  variant="outline"
+                  type="button"
+                  disabled={Boolean(provisioningCollege)}
+                  onClick={() => provisionMissingAccounts(tenant)}
+                >
+                  {provisioningCollege === tenant.college_id ? 'Provisioning…' : 'Provision missing accounts'}
+                </Button>
+              </div>
+            )}
+            {section === 'features' && (
+              <div className="ptm-feature-list">
+                {TENANT_MODULES.map(([moduleName, label, available = true]) => (
+                  <div className="ptm-feature-row" key={moduleName}>
+                    <span><strong>{label}</strong>{!available && <small>Coming soon</small>}</span>
+                    <Toggle
+                      label={`${label} for ${tenant.college_name}`}
+                      checked={available && Boolean(tenant.modules?.[moduleName])}
+                      disabled={!available || Boolean(moduleSaving[tenant.college_id])}
+                      onChange={(enabled) => handleModuleChange(tenant, moduleName, enabled)}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+            {section === 'accounts' && <StaffAccountAccess apiUrl={apiUrl} user={user} collegeId={tenant.college_id} />}
+            {section === 'banners' && <CollegeAdManager apiUrl={apiUrl} collegeId={tenant.college_id} />}
+          </article>
+        ))}
+      </div>
+    )
+  );
+
   return (
-    <div
-      className="ptm-founder-screen"
-      style={{
-        width: '100%',
-        minHeight: 'calc(100vh - 60px)',
-        padding: '16px 0',
-        color: '#111827',
-        backgroundColor: '#F5F7FA'
-      }}
-    >
-      <div className="ptm-page-wrap">
+    <div className="ptm-founder-layout">
+      <Sidebar
+        title="Platform admin"
+        brand={{ name: tenantName, initials: 'VO' }}
+        items={founderNavItems}
+        active={page}
+        onChange={setPage}
+        className="ptm-founder-sidebar"
+      />
+      <main className="ptm-founder-content">
         {msg && <div className="ptm-toast" onClick={() => setMsg(null)}>{msg}</div>}
         {credentials.length > 0 && (
-          <section className="ptm-card" aria-live="polite">
+          <section className="ptm-card ptm-credentials-card" aria-live="polite">
             <div className="ptm-section-title">One-time initial credentials</div>
             <p className="ptm-list-sub">These temporary passwords are shown only now. Share them privately; each account must change its password at first sign-in.</p>
             <div className="ptm-list">
@@ -272,116 +344,82 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
           </section>
         )}
 
-        <div className="ptm-drill-header">
-          <div className="ptm-row-between">
-            <span className="ptm-tag-pill">FOUNDER & MASTER ADMIN PORTAL</span>
-            <button type="button" className="ptm-btn-danger" style={{ width: 'auto', padding: '8px 14px' }} onClick={onLogout}>
-              Sign Out
-            </button>
+        <header className="ptm-founder-page-header">
+          <div>
+            <span className="ptm-dashboard-kicker">FOUNDER CONSOLE</span>
+            <h1>{pageTitles[page]}</h1>
+            <p>Provision colleges, control services, and manage primary accounts.</p>
           </div>
-          <h1 className="ptm-page-title">Vidyut OS Founder Console</h1>
-          <p className="ptm-page-sub">Provision colleges and their three main accounts, manage tenant features, and reset main-account passwords.</p>
-        </div>
+          <Button variant="outline" type="button" onClick={onLogout}><Icon name="user" /> Sign out</Button>
+        </header>
 
-        <div className="ptm-card">
-          <div className="ptm-section-title">College platform settings</div>
-          <p className="ptm-list-sub">
-            Add the college portal domain and institution email domain, then configure DNS and TLS before launch. The college receives a Dean, Student Onboarding Staff, and Beacon Manager account.
-          </p>
-          <form onSubmit={handleCreateTenant} className="ptm-form-stack">
-            <div className="ptm-grid-2">
-              <label className="ptm-label">College ID
-                <input className="ptm-input" value={tenantForm.college_id} onChange={(e) => setTenantForm((current) => ({ ...current, college_id: e.target.value.toUpperCase() }))} required maxLength={40} placeholder="e.g. IITB" />
-              </label>
-              <label className="ptm-label">College name
-                <input className="ptm-input" value={tenantForm.college_name} onChange={(e) => setTenantForm((current) => ({ ...current, college_name: e.target.value }))} required maxLength={160} />
-              </label>
+        {page === 'home' && (
+          <div className="ptm-founder-dashboard">
+            <div className="ptm-founder-stats">
+              <StatTile label="Configured colleges" value={tenants.length} detail="College portals" />
+              <StatTile label="Enabled services" value={enabledFeatures} detail="Across all colleges" />
+              <StatTile label="Main account roles" value="3" detail="Dean · Onboarding · Beacon manager" />
             </div>
-            <div className="ptm-grid-2">
-              <label className="ptm-label">Approved custom portal domain
-                <input className="ptm-input" value={tenantForm.primary_domain} onChange={(e) => setTenantForm((current) => ({ ...current, primary_domain: e.target.value.trim().toLowerCase() }))} required placeholder="portal.example.edu" />
-              </label>
-              <label className="ptm-label">Institution email domain
-                <input className="ptm-input" value={tenantForm.allowed_email_domain} onChange={(e) => setTenantForm((current) => ({ ...current, allowed_email_domain: e.target.value.trim().toLowerCase().replace(/^@/, '') }))} required placeholder="example.edu" />
-              </label>
-            </div>
-            <label className="ptm-label">College time zone (IANA)
-              <input className="ptm-input" value={tenantForm.timezone} onChange={(e) => setTenantForm((current) => ({ ...current, timezone: e.target.value.trim() }))} required placeholder="Asia/Kolkata" />
-            </label>
-            <div className="ptm-grid-2">
-              <label className="ptm-label">Initial Dean account ID
-                <input className="ptm-input" value={tenantForm.initial_dean_id} onChange={(e) => setTenantForm((current) => ({ ...current, initial_dean_id: e.target.value.toUpperCase() }))} required maxLength={40} />
-              </label>
-              <label className="ptm-label">Initial Dean name
-                <input className="ptm-input" value={tenantForm.initial_dean_name} onChange={(e) => setTenantForm((current) => ({ ...current, initial_dean_name: e.target.value }))} required maxLength={160} />
-              </label>
-            </div>
-            <div className="ptm-grid-2">
-              <label className="ptm-label">Initial Dean contact email
-                <input type="email" className="ptm-input" value={tenantForm.initial_dean_email} onChange={(e) => setTenantForm((current) => ({ ...current, initial_dean_email: e.target.value.trim().toLowerCase() }))} required />
-              </label>
-            </div>
-            <label className="ptm-label">College logo URL (optional)
-                <input type="url" className="ptm-input" value={tenantForm.logo_url} onChange={(e) => setTenantForm((current) => ({ ...current, logo_url: e.target.value }))} placeholder="https://..." />
-            </label>
-            <button type="submit" className="ptm-btn-primary" disabled={tenantSaving}>
-              {tenantSaving ? 'Creating college…' : 'Add college'}
-            </button>
-          </form>
-
-          <div className="ptm-section-title" style={{ marginTop: '24px' }}>Configured colleges</div>
-          {tenantLoading ? (
-            <ListRowSkeleton count={3} />
-          ) : tenants.length === 0 ? (
-            <div className="ptm-list-sub">No colleges are configured yet.</div>
-          ) : (
-            <div className="ptm-list">
-              {tenants.map((tenant) => (
-                <div key={tenant.college_id} className="ptm-list-row" style={{ alignItems: 'flex-start' }}>
-                  <div className="ptm-list-main">
-                    <div className="ptm-list-title">{tenant.college_name} ({tenant.college_id})</div>
-                    <div className="ptm-list-sub">
-                      Portal: {tenant.primary_domain} • Email domain: @{tenant.allowed_email_domain}
-                    </div>
-                    <div className="ptm-grid-2" style={{ marginTop: '10px' }}>
-                      {TENANT_MODULES.map(([moduleName, label, available = true]) => (
-                        <label key={moduleName} className="ptm-list-sub" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <input
-                            type="checkbox"
-                            checked={available && Boolean(tenant.modules?.[moduleName])}
-                            disabled={!available || Boolean(moduleSaving[tenant.college_id])}
-                            onChange={(e) => handleModuleChange(tenant, moduleName, e.target.checked)}
-                          />
-                          {label}
-                        </label>
-                      ))}
-                    </div>
-                    <div className="ptm-row-between" style={{ marginTop: '14px', justifyContent: 'flex-start', gap: '10px' }}>
-                      <button
-                        type="button"
-                        className="ptm-btn-secondary"
-                        disabled={Boolean(provisioningCollege)}
-                        onClick={() => provisionMissingAccounts(tenant)}
-                      >
-                        {provisioningCollege === tenant.college_id ? 'Provisioning…' : 'Provision missing main accounts'}
-                      </button>
-                    </div>
-                    <details style={{ marginTop: '12px' }}>
-                      <summary className="ptm-list-sub" style={{ cursor: 'pointer' }}>Main accounts and password resets</summary>
-                      <StaffAccountAccess apiUrl={apiUrl} user={user} collegeId={tenant.college_id} />
-                    </details>
-                    <details style={{ marginTop: '12px' }}>
-                      <summary className="ptm-list-sub" style={{ cursor: 'pointer' }}>Sponsored student banner</summary>
-                      <CollegeAdManager apiUrl={apiUrl} collegeId={tenant.college_id} />
-                    </details>
-                  </div>
+            <section className="ptm-founder-hero">
+              <span className="ptm-dashboard-kicker">VIDYUT OS PLATFORM</span>
+              <h2>Manage every college from one console.</h2>
+              <p>Set up college portals, choose enabled services, and manage college-level access from a single place.</p>
+              <Button type="button" onClick={() => setPage('colleges')}><Icon name="building" /> Add or manage colleges</Button>
+            </section>
+            <section className="ptm-card">
+              <div className="ptm-row-between">
+                <div><div className="ptm-section-title">Configured colleges</div><p className="ptm-list-sub">Recent colleges on the platform.</p></div>
+                <button className="ptm-text-action" onClick={() => setPage('colleges')}>View all <Icon name="arrow" size={16} /></button>
+              </div>
+              {tenantLoading ? <ListRowSkeleton count={3} /> : tenants.slice(0, 4).map((tenant) => (
+                <div className="ptm-tenant-summary-row" key={tenant.college_id}>
+                  <span className="ptm-tenant-mark">{tenant.college_name?.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'CL'}</span>
+                  <span><strong>{tenant.college_name}</strong><small>{tenant.primary_domain}</small></span>
+                  <StatusPill tone="success">{Object.values(tenant.modules || {}).filter(Boolean).length} services</StatusPill>
                 </div>
               ))}
-            </div>
-          )}
-        </div>
+              {!tenantLoading && !tenants.length && <p className="ptm-empty-state">No colleges are configured yet.</p>}
+            </section>
+          </div>
+        )}
 
-      </div>
+        {page === 'colleges' && (
+          <div className="ptm-founder-sections">
+            <section className="ptm-card">
+              <div className="ptm-section-title">Create a college portal</div>
+              <p className="ptm-list-sub">A new college is provisioned with one Dean, Student Onboarding Staff, and Beacon Manager account.</p>
+              <form onSubmit={handleCreateTenant} className="ptm-form-stack">
+                <div className="ptm-grid-2">
+                  <label className="ptm-label">College ID<input className="ptm-input" value={tenantForm.college_id} onChange={(event) => setTenantForm((current) => ({ ...current, college_id: event.target.value.toUpperCase() }))} required maxLength={40} placeholder="e.g. IITB" /></label>
+                  <label className="ptm-label">College name<input className="ptm-input" value={tenantForm.college_name} onChange={(event) => setTenantForm((current) => ({ ...current, college_name: event.target.value }))} required maxLength={160} /></label>
+                </div>
+                <div className="ptm-grid-2">
+                  <label className="ptm-label">Approved portal domain<input className="ptm-input" value={tenantForm.primary_domain} onChange={(event) => setTenantForm((current) => ({ ...current, primary_domain: event.target.value.trim().toLowerCase() }))} required placeholder="portal.example.edu" /></label>
+                  <label className="ptm-label">Institution email domain<input className="ptm-input" value={tenantForm.allowed_email_domain} onChange={(event) => setTenantForm((current) => ({ ...current, allowed_email_domain: event.target.value.trim().toLowerCase().replace(/^@/, '') }))} required placeholder="example.edu" /></label>
+                </div>
+                <label className="ptm-label">College time zone<input className="ptm-input" value={tenantForm.timezone} onChange={(event) => setTenantForm((current) => ({ ...current, timezone: event.target.value.trim() }))} required placeholder="Asia/Kolkata" /></label>
+                <div className="ptm-grid-2">
+                  <label className="ptm-label">Initial Dean account ID<input className="ptm-input" value={tenantForm.initial_dean_id} onChange={(event) => setTenantForm((current) => ({ ...current, initial_dean_id: event.target.value.toUpperCase() }))} required maxLength={40} /></label>
+                  <label className="ptm-label">Initial Dean name<input className="ptm-input" value={tenantForm.initial_dean_name} onChange={(event) => setTenantForm((current) => ({ ...current, initial_dean_name: event.target.value }))} required maxLength={160} /></label>
+                </div>
+                <label className="ptm-label">Initial Dean contact email<input type="email" className="ptm-input" value={tenantForm.initial_dean_email} onChange={(event) => setTenantForm((current) => ({ ...current, initial_dean_email: event.target.value.trim().toLowerCase() }))} required /></label>
+                <label className="ptm-label">College logo URL (optional)<input type="url" className="ptm-input" value={tenantForm.logo_url} onChange={(event) => setTenantForm((current) => ({ ...current, logo_url: event.target.value }))} placeholder="https://..." /></label>
+                <Button type="submit" disabled={tenantSaving}>{tenantSaving ? 'Creating college…' : 'Create college'} <Icon name="arrow" /></Button>
+              </form>
+            </section>
+            <section className="ptm-founder-sections__list">
+              <div className="ptm-section-title">College accounts</div>
+              <p className="ptm-list-sub">Provision any missing main accounts for existing colleges.</p>
+              {renderTenantSection('colleges')}
+            </section>
+          </div>
+        )}
+
+        {page === 'features' && <section className="ptm-founder-sections"><div><div className="ptm-section-title">College feature access</div><p className="ptm-list-sub">Each college can use only the modules enabled here.</p></div>{renderTenantSection('features')}</section>}
+        {page === 'accounts' && <section className="ptm-founder-sections"><div><div className="ptm-section-title">Main account access</div><p className="ptm-list-sub">Manage or reset a college’s Dean, Student Onboarding Staff, and Beacon Manager accounts.</p></div>{renderTenantSection('accounts')}</section>}
+        {page === 'banners' && <section className="ptm-founder-sections"><div><div className="ptm-section-title">College-wide student banners</div><p className="ptm-list-sub">Create or update sponsored banners for a selected college.</p></div>{renderTenantSection('banners')}</section>}
+      </main>
+      <TabBar items={founderMobileItems} active={page} onChange={setPage} className="ptm-founder-tabbar" />
     </div>
   );
 }

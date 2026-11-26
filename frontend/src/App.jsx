@@ -11,6 +11,8 @@ import PasswordChangeForm from './components/PasswordChangeForm.jsx';
 import StudentOnboardingPortal from './components/StudentOnboardingPortal.jsx';
 import CompanyLandingPage from './pages/CompanyLandingPage.tsx';
 import { extractErrorMessage } from './utils/errorParser.ts';
+import { Button, Icon, ProgressBar, TextField } from './components/ui/DesignSystem';
+import uiSpecCss from './ui-spec.css?inline';
 
 window.GLOBAL_SILICON_VALLEY_CSS = '';
 
@@ -75,6 +77,9 @@ function AuthenticatedApp() {
   const [staffUsername, setStaffUsername] = useState('');
   const [staffPassword, setStaffPassword] = useState('');
   const [staffLoginLoading, setStaffLoginLoading] = useState(false);
+  const [loginProgress, setLoginProgress] = useState(0);
+  const [loginStage, setLoginStage] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(() => localStorage.getItem('vidyut_remember_me') === 'true');
   const [forgotPassword, setForgotPassword] = useState(false);
   const [passwordRequestLoading, setPasswordRequestLoading] = useState(false);
@@ -159,6 +164,8 @@ function AuthenticatedApp() {
     event.preventDefault();
     if (staffLoginLoading) return;
     setStaffLoginLoading(true);
+    setLoginProgress(10);
+    setLoginStage('Connecting to your college');
     setLoginError(null);
     try {
       const response = await fetch(`${API_URL}/api/auth/login`, {
@@ -173,6 +180,42 @@ function AuthenticatedApp() {
       });
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(extractErrorMessage(data, 'Sign-in failed.'));
+
+      setLoginProgress(48);
+      setLoginStage('Verifying your account');
+      const selectedDomain = localStorage.getItem('vidyut_tenant_domain');
+      const sessionHeaders = new Headers({ Authorization: `Bearer ${data.token}` });
+      if (selectedDomain) sessionHeaders.set('X-Campus-Domain', selectedDomain);
+      const accountResponse = await fetch(`${API_URL}/api/auth/me`, { headers: sessionHeaders });
+      const accountData = await accountResponse.json().catch(() => ({}));
+      if (!accountResponse.ok || !accountData.user) {
+        throw new Error(extractErrorMessage(accountData, 'Your account could not be loaded.'));
+      }
+      const signedInUser = accountData.user;
+
+      const needsDeviceCheck = (
+        signedInUser.role === 'Student' &&
+        (tenant?.modules?.class_attendance || tenant?.modules?.hostel_attendance)
+      );
+      if (needsDeviceCheck) {
+        setLoginProgress(72);
+        setLoginStage('Checking your secure device');
+        try {
+          const deviceResponse = await fetch(`${API_URL}/api/attendance-v2/device/status`, { headers: sessionHeaders });
+          if (!deviceResponse.ok) {
+            const deviceData = await deviceResponse.json().catch(() => ({}));
+            console.warn('Student device status will be checked again in the attendance portal:', extractErrorMessage(deviceData));
+          }
+        } catch (deviceError) {
+          console.warn('Student device status will be checked again in the attendance portal:', deviceError);
+        }
+      } else {
+        setLoginProgress(80);
+        setLoginStage('Preparing your workspace');
+      }
+
+      setLoginProgress(92);
+      setLoginStage('Opening your campus workspace');
       localStorage.removeItem('vidyut_session_token');
       localStorage.removeItem('vidyut_user');
       sessionStorage.removeItem('vidyut_session_token');
@@ -180,11 +223,14 @@ function AuthenticatedApp() {
       const credentialStore = rememberMe ? localStorage : sessionStorage;
       credentialStore.setItem('vidyut_session_token', data.token);
       localStorage.removeItem('vidyut_google_credential');
-      credentialStore.setItem('vidyut_user', JSON.stringify(data.user));
+      credentialStore.setItem('vidyut_user', JSON.stringify(signedInUser));
       setStaffPassword('');
-      setProfileDraft(profileDraftFromUser(data.user));
-      setUser(data.user);
+      setProfileDraft(profileDraftFromUser(signedInUser));
+      setLoginProgress(100);
+      setUser(signedInUser);
     } catch (error) {
+      setLoginProgress(0);
+      setLoginStage('');
       setLoginError(extractErrorMessage(error, 'Sign-in failed.'));
     } finally {
       setStaffLoginLoading(false);
@@ -451,7 +497,7 @@ function AuthenticatedApp() {
 
   return (
     <div className="ptm-root">
-      <style>{PAYTM_APPLE_CSS}</style>
+      <style>{PAYTM_APPLE_CSS}{uiSpecCss}</style>
 
       {showInstallHelp ? (
         <div className="ptm-main-container">
@@ -486,129 +532,187 @@ function AuthenticatedApp() {
         </div>
       ) : !user ? (
         <div className="ptm-login-screen">
-          <div className="ptm-login-box">
-            <div className="ptm-login-top-row">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <section className="ptm-login-hero">
+            <div className="ptm-login-brand">
+              <span className="ptm-login-logo">
                 <img
                   src={tenant?.logo_url || '/vidyut-os-mark.svg'}
-                  alt={tenant?.college_name || 'College'}
-                  style={{ width: '32px', height: '32px', objectFit: 'contain' }}
-                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                  alt=""
+                  onError={(event) => { event.currentTarget.style.display = 'none'; }}
                 />
-                <span className="ptm-brand-pill">{tenant?.college_name || 'Campus Portal'}</span>
-              </div>
-              <button type="button" className="ptm-install-chip" onClick={handleInstallClick}>
-                📲 Install App
-              </button>
+              </span>
+              <span className="ptm-login-college">
+                <strong>{tenant?.college_name || 'College Portal'}</strong>
+                <small>Powered by Vidyut OS</small>
+              </span>
+            </div>
+            <div className="ptm-login-hero-copy">
+              <span className="ptm-login-kicker">VIDYUT OS · CAMPUS PORTAL</span>
+              <h1>Welcome to your campus.</h1>
+              <p>One secure place for attendance, campus life, and student services.</p>
+            </div>
+            <button type="button" className="ptm-install-chip" onClick={handleInstallClick}>
+              <Icon name="arrow" size={17} /> Install Vidyut OS
+            </button>
+          </section>
+
+          <main className="ptm-login-box" aria-labelledby="ptm-login-title">
+            <div className="ptm-login-panel-head">
+              <span className="ptm-login-kicker">SECURE CAMPUS ACCESS</span>
+              <h2 id="ptm-login-title">{forgotPassword ? 'Reset your password' : 'Sign in'}</h2>
+              <p>
+                {forgotPassword
+                  ? 'Enter your username or roll number. Student Onboarding Staff will review your request.'
+                  : 'Use the credentials provided by your college.'}
+              </p>
             </div>
 
-            <h1 className="ptm-login-heading">{tenant?.college_name || 'Campus'} Portal</h1>
-            <p className="ptm-login-sub">Sign in with the username and password provided by your college.</p>
-
             {isNativeApp && (
-              <form className="ptm-form-stack" onSubmit={handleTenantDomainConnect}>
-                <label className="ptm-label">
-                  College portal domain
-                  <input
-                    className="ptm-input"
-                    autoCapitalize="none"
-                    autoComplete="url"
-                    placeholder="portal.example.edu"
-                    value={tenantDomain}
-                    onChange={(event) => {
-                      setTenantDomain(event.target.value);
-                      setTenantDomainConnected(false);
-                      setTenantDomainError('');
-                    }}
-                    required
-                  />
-                </label>
-                <button className="ptm-btn-secondary" type="submit" disabled={tenantDomainLoading}>
+              <form className="ptm-domain-form" onSubmit={handleTenantDomainConnect}>
+                <TextField
+                  label="College portal domain"
+                  id="tenant-domain"
+                  autoCapitalize="none"
+                  autoComplete="url"
+                  placeholder="portal.example.edu"
+                  value={tenantDomain}
+                  onChange={(event) => {
+                    setTenantDomain(event.target.value);
+                    setTenantDomainConnected(false);
+                    setTenantDomainError('');
+                  }}
+                  required
+                />
+                <Button variant="outline" type="submit" disabled={tenantDomainLoading}>
                   {tenantDomainLoading ? 'Connecting…' : 'Connect college'}
-                </button>
+                </Button>
                 {tenantDomainError && <div className="ptm-alert-error" role="alert">{tenantDomainError}</div>}
               </form>
             )}
 
-            {loginError && <div className="ptm-alert-error">{loginError}</div>}
+            {loginError && <div className="ptm-alert-error" role="alert">{loginError}</div>}
+            {loginNotice && <div className="ptm-alert-success" role="status">{loginNotice}</div>}
 
-            <form className="ptm-form-stack" onSubmit={forgotPassword ? handleForgotPassword : handleStaffLogin}>
-              <div className="ptm-section-title" style={{ marginBottom: 0 }}>
-                {forgotPassword ? 'Request a student password reset' : 'Username and password'}
-              </div>
-              <label className="ptm-label">
-                Username or roll number
-                <input
-                  className="ptm-input"
+            {forgotPassword ? (
+              <form className="ptm-login-form" onSubmit={handleForgotPassword}>
+                <TextField
+                  label="Username or roll number"
+                  id="forgot-username"
+                  icon="user"
                   autoComplete="username"
                   value={staffUsername}
                   onChange={(event) => setStaffUsername(event.target.value)}
                   required
                 />
-              </label>
-              {!forgotPassword && (
-                <label className="ptm-label">
-                  Password
-                  <input
-                    className="ptm-input"
-                    type="password"
-                    autoComplete="current-password"
-                    value={staffPassword}
-                    onChange={(event) => setStaffPassword(event.target.value)}
-                    required
-                  />
-                </label>
-              )}
-              {loginNotice && <div className="ptm-alert-success" role="status">{loginNotice}</div>}
-              {!forgotPassword && (
-                <label className="ptm-list-sub" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <input
-                    type="checkbox"
-                    checked={rememberMe}
-                    onChange={(event) => {
-                      setRememberMe(event.target.checked);
-                      localStorage.setItem('vidyut_remember_me', String(event.target.checked));
-                    }}
-                  />
-                  Remember me on this device
-                </label>
-              )}
-              <button
-                className="ptm-btn-primary"
-                type="submit"
-                disabled={staffLoginLoading || passwordRequestLoading || tenantDomainLoading || !canSignIn}
-                aria-busy={staffLoginLoading || passwordRequestLoading}
-              >
-                {forgotPassword
-                  ? passwordRequestLoading ? 'Sending request…' : 'Send reset request'
-                  : staffLoginLoading ? 'Signing in…' : 'Sign in'}
-              </button>
-              {staffLoginLoading && (
-                <div className="ptm-login-progress" role="status" aria-label="Signing in">
-                  <span />
-                </div>
-              )}
-              <button
-                className="ptm-btn-secondary"
-                type="button"
-                onClick={() => {
-                  setForgotPassword((current) => !current);
-                  setLoginError(null);
-                  setLoginNotice('');
-                }}
-              >
-                {forgotPassword ? 'Back to sign in' : 'Forgot password?'}
-              </button>
-              {forgotPassword && (
-                <p className="ptm-list-sub" style={{ textAlign: 'center', margin: 0 }}>
-                  Student Onboarding Staff will review the request and issue a one-time password if the account is found.
+                <Button
+                  className="ptm-login-submit"
+                  type="submit"
+                  disabled={passwordRequestLoading || tenantDomainLoading || !canSignIn}
+                  aria-busy={passwordRequestLoading}
+                >
+                  {passwordRequestLoading ? 'Sending request…' : 'Send reset request'}
+                  {!passwordRequestLoading && <Icon name="arrow" />}
+                </Button>
+                <button
+                  className="ptm-login-link"
+                  type="button"
+                  onClick={() => {
+                    setForgotPassword(false);
+                    setLoginError(null);
+                    setLoginNotice('');
+                  }}
+                >
+                  Back to sign in
+                </button>
+                <p className="ptm-login-note">
+                  If the account is found, the Student Onboarding Staff will provide a one-time password.
                 </p>
-              )}
-              <p className="ptm-list-sub" style={{ textAlign: 'center', margin: 0 }}>
-                Students: ask Student Onboarding Staff for your login. Staff: contact your Dean for account access.
-              </p>
-            </form>
-          </div>
+              </form>
+            ) : (
+              <form className="ptm-login-form" onSubmit={handleStaffLogin}>
+                <TextField
+                  label="Username or roll number"
+                  id="login-username"
+                  icon="user"
+                  autoComplete="username"
+                  value={staffUsername}
+                  onChange={(event) => setStaffUsername(event.target.value)}
+                  required
+                />
+                <label className="v-field" htmlFor="login-password">
+                  <span className="v-field__label">Password</span>
+                  <span className="v-field__control">
+                    <Icon name="lock" className="v-field__icon" />
+                    <input
+                      id="login-password"
+                      className="v-input"
+                      type={showPassword ? 'text' : 'password'}
+                      autoComplete="current-password"
+                      value={staffPassword}
+                      onChange={(event) => setStaffPassword(event.target.value)}
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="ptm-password-toggle"
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      onClick={() => setShowPassword((current) => !current)}
+                    >
+                      <Icon name={showPassword ? 'eyeOff' : 'eye'} size={18} />
+                    </button>
+                  </span>
+                </label>
+                <div className="ptm-login-options">
+                  <label className="ptm-remember">
+                    <input
+                      type="checkbox"
+                      checked={rememberMe}
+                      onChange={(event) => {
+                        setRememberMe(event.target.checked);
+                        localStorage.setItem('vidyut_remember_me', String(event.target.checked));
+                      }}
+                    />
+                    <span>Remember me</span>
+                  </label>
+                  <button
+                    className="ptm-login-link"
+                    type="button"
+                    onClick={() => {
+                      setForgotPassword(true);
+                      setLoginError(null);
+                      setLoginNotice('');
+                    }}
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+                <Button
+                  className="ptm-login-submit"
+                  type="submit"
+                  disabled={staffLoginLoading || tenantDomainLoading || !canSignIn}
+                  aria-busy={staffLoginLoading}
+                >
+                  {staffLoginLoading ? 'Signing in…' : 'Sign in securely'}
+                  {!staffLoginLoading && <Icon name="arrow" />}
+                </Button>
+                {staffLoginLoading && (
+                  <div className="ptm-login-progress-wrap" role="status">
+                    <div className="ptm-login-progress-label">
+                      <span>{loginStage}</span><strong>{loginProgress}%</strong>
+                    </div>
+                    <ProgressBar value={loginProgress} label="Sign-in progress" />
+                  </div>
+                )}
+                <p className="ptm-login-note">
+                  Students: contact Student Onboarding Staff for account access. Staff: contact your Dean.
+                </p>
+              </form>
+            )}
+
+            <footer className="ptm-login-footer">
+              <span>Vidyut OS</span><span>Secure campus platform</span>
+            </footer>
+          </main>
         </div>
       ) : (
         <>
@@ -627,7 +731,7 @@ function AuthenticatedApp() {
               </button>
               <div className="ptm-header-actions">
                 <button className="ptm-install-chip" onClick={handleInstallClick}>
-                  📲 <span className="ptm-hide-xs">Install</span>
+                  <Icon name="arrow" size={16} /><span className="ptm-hide-xs">Install Vidyut OS</span>
                 </button>
                 {!isFounder && (
                   <button className="ptm-logout-btn" onClick={handleLogout}>
@@ -642,7 +746,7 @@ function AuthenticatedApp() {
             <Suspense fallback={
               <BrandLoadingScreen />
             }>
-              {isFounder && <FounderPortal user={user} apiUrl={API_URL} onLogout={handleLogout} />}
+              {isFounder && <FounderPortal user={user} apiUrl={API_URL} onLogout={handleLogout} tenantName={tenant?.college_name} />}
               {user.role === 'Dean' && (
                 <DeanPortal
                   user={user}
@@ -652,7 +756,7 @@ function AuthenticatedApp() {
                   institutionEmailDomain={tenant?.allowed_email_domain}
                 />
               )}
-              {user.role === 'Student' && <StudentPortal user={user} apiUrl={API_URL} modules={modules} onUserUpdate={handleStudentProfileRefresh} />}
+              {user.role === 'Student' && <StudentPortal user={user} apiUrl={API_URL} modules={modules} collegeName={tenant?.college_name} collegeLogo={tenant?.logo_url} onUserUpdate={handleStudentProfileRefresh} />}
               {user.role === 'Warden' && <WardenPortal user={user} apiUrl={API_URL} modules={modules} />}
               {user.role === 'Faculty' && modules.class_attendance === true && <AttendanceOnlyPortals user={user} apiUrl={API_URL} modules={modules} />}
               {user.role === 'Faculty' && modules.class_attendance !== true && <ModuleUnavailableNotice />}
@@ -664,7 +768,7 @@ function AuthenticatedApp() {
               {user.role === 'ClubOrganizer' && modules.event_radar !== true && <ModuleUnavailableNotice />}
               {user.role === 'Staff' && modules.grievances === true && <StaffPortal user={user} apiUrl={API_URL} />}
               {user.role === 'Staff' && modules.grievances !== true && <ModuleUnavailableNotice />}
-              {user.role === 'StudentOnboarding' && <StudentOnboardingPortal user={user} apiUrl={API_URL} modules={modules} />}
+              {user.role === 'StudentOnboarding' && <StudentOnboardingPortal user={user} apiUrl={API_URL} modules={modules} collegeName={tenant?.college_name} />}
             </Suspense>
           </main>
 

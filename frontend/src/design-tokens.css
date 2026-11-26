@@ -1,0 +1,40 @@
+:root {
+  --vidyut-ink: #0e1726;
+  --vidyut-ink-2: #4b5565;
+  --vidyut-muted: #5f6b7a;
+  --vidyut-on-dark-muted: #a9b4c7;
+  --vidyut-surface: #ffffff;
+  --vidyut-canvas: #f5f6f8;
+  --vidyut-subtle: #f0f2f5;
+  --vidyut-border: #e4e7ec;
+  --vidyut-border-input: #d5dae1;
+  --vidyut-primary: #1f4fe0;
+  --vidyut-primary-hover: #1740b8;
+  --vidyut-primary-tint: #eaf0ff;
+  --vidyut-success: #0b7a55;
+  --vidyut-success-bg: #e6f6ef;
+  --vidyut-success-on-dark: #4ade9b;
+  --vidyut-warning: #b4430c;
+  --vidyut-warning-bg: #fdeee4;
+  --vidyut-alert-dot: #e5560a;
+  --vidyut-radius-input: 12px;
+  --vidyut-radius-button: 14px;
+  --vidyut-radius-card: 16px;
+  --vidyut-radius-hero: 24px;
+  --vidyut-radius-sheet: 28px;
+  --vidyut-space-1: 4px;
+  --vidyut-space-2: 8px;
+  --vidyut-space-3: 12px;
+  --vidyut-space-4: 16px;
+  --vidyut-space-5: 20px;
+  --vidyut-space-6: 24px;
+  --vidyut-space-8: 32px;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--vidyut-ink);
+  background: var(--vidyut-canvas);
+}
+
+body {
+  color: var(--vidyut-ink);
+  background: var(--vidyut-canvas);
+}

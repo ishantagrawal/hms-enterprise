@@ -6,6 +6,7 @@ import { isEventCompleted } from '../eventUtils';
 import { ListRowSkeleton, Skeleton } from './SkeletonLoader';
 import { StudentAttendance as StudentAttendanceV2 } from './AttendanceOnlyPortals';
 import usePortalBackNavigation from '../hooks/usePortalBackNavigation';
+import { Button, Icon, Sidebar, StatTile, TabBar } from './ui/DesignSystem';
 
 const StudentBiometricAttendancePanel = lazy(() =>
   import('./StudentSecurityServices').then((module) => ({ default: module.StudentBiometricAttendancePanel }))
@@ -14,7 +15,7 @@ const StudentLeavePassPanel = lazy(() =>
   import('./StudentSecurityServices').then((module) => ({ default: module.StudentLeavePassPanel }))
 );
 
-export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
+export default function StudentPortal({ user, apiUrl, onUserUpdate, modules, collegeName, collegeLogo }) {
   const safeUser = user || {};
   const cKey = `complaints_${safeUser.user_id}`;
   const dKey = `departments_${safeUser.hostel_block}`;
@@ -472,6 +473,11 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
     return grouped;
   }, [visibleEvents]);
   const selectedDateEvents = eventsByDate.get(selectedDateStr) || [];
+  const todayDate = new Date();
+  const todayKey = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
+  const upcomingEvents = visibleEvents
+    .filter((event) => event.date >= todayKey && !isEventCompleted(event))
+    .slice(0, 3);
   const actionNeeded = useMemo(
     () => complaints.filter((complaint) => complaint.status === 'Awaiting Confirmation').length,
     [complaints]
@@ -480,6 +486,61 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
   const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   const firstDay = new Date(calYear, calMonth, 1).getDay();
   const daysNum = new Date(calYear, calMonth + 1, 0).getDate();
+  const studentNavItems = [
+    { id: 'home', label: 'Home', icon: 'home' },
+    ...(showAttendanceV2 ? [{ id: 'attendance_v2', label: 'Class & hostel attendance', icon: 'attendance' }] : []),
+    ...(showAttendance ? [{ id: 'attendance', label: 'Night attendance', icon: 'clock' }] : []),
+    ...(showEvents ? [
+      { id: 'events_list', label: 'Upcoming events', icon: 'calendar' },
+      { id: 'clubs_list', label: 'Clubs & chapters', icon: 'users', count: clubs.length },
+      { id: 'notices', label: 'Notices', icon: 'file', count: notices.length },
+      { id: 'calendar', label: 'Event calendar', icon: 'calendar' }
+    ] : []),
+    ...(showGrievances && !isDayScholar ? [
+      { id: 'my_complaints', label: 'My requests', icon: 'file', count: complaints.length },
+      { id: 'new_complaint', label: 'New maintenance request', icon: 'arrow' }
+    ] : []),
+    ...(showOutpass && !isDayScholar ? [{ id: 'leave_pass', label: 'Leave pass', icon: 'shield' }] : []),
+    { id: 'profile', label: 'My profile', icon: 'user' }
+  ];
+  const sidebarPage = (
+    page === 'ticket_detail' ? 'my_complaints'
+      : page === 'event_detail' ? 'events_list'
+        : page === 'notice_detail' ? 'notices'
+          : page === 'club_detail' ? 'clubs_list'
+            : page
+  );
+  const mobileNavItems = [
+    { id: 'home', label: 'Home', icon: 'home' },
+    ...((showAttendanceV2 || showAttendance) ? [{ id: 'attendance-shortcut', label: 'Attendance', icon: 'attendance' }] : []),
+    ...(showEvents ? [{ id: 'campus-shortcut', label: 'Campus', icon: 'calendar' }] : []),
+    ...(showGrievances && !isDayScholar ? [{ id: 'requests-shortcut', label: 'Requests', icon: 'file' }] : []),
+    { id: 'profile', label: 'Profile', icon: 'user' }
+  ];
+  const mobileActive = (
+    page === 'home' ? 'home'
+      : page === 'profile' ? 'profile'
+        : ['attendance', 'attendance_v2'].includes(page) ? 'attendance-shortcut'
+          : ['events_list', 'event_detail', 'clubs_list', 'club_detail', 'calendar', 'notices', 'notice_detail'].includes(page) ? 'campus-shortcut'
+            : ['new_complaint', 'my_complaints', 'ticket_detail'].includes(page) ? 'requests-shortcut'
+              : 'home'
+  );
+  const handleMobileNav = (tab) => {
+    if (tab === 'attendance-shortcut') setPage(showAttendanceV2 ? 'attendance_v2' : 'attendance');
+    else if (tab === 'campus-shortcut') setPage('events_list');
+    else if (tab === 'requests-shortcut') setPage('my_complaints');
+    else if (tab === 'profile') openProfile();
+    else setPage(tab);
+  };
+  const greeting = todayDate.getHours() < 12 ? 'Good morning' : todayDate.getHours() < 17 ? 'Good afternoon' : 'Good evening';
+  const studentName = safeUser.full_name?.split(' ')[0] || 'there';
+  const collegeInitials = (collegeName || 'Vidyut OS')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((word) => word[0])
+    .join('')
+    .toUpperCase();
   const changeMonth = (offset) => {
     const nextMonth = new Date(calYear, calMonth + offset, 1);
     setCalYear(nextMonth.getFullYear());
@@ -488,27 +549,14 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
 
   return (
     <div className="ptm-shell-layout">
-      <aside className="ptm-sidebar-desktop">
-        <button className={`ptm-side-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}>🏠 Student Home</button>
-        {showGrievances && !isDayScholar && (
-          <>
-            <button className={`ptm-side-btn ${page === 'new_complaint' ? 'active' : ''}`} onClick={() => setPage('new_complaint')}>➕ Lodge Grievance</button>
-            <button className={`ptm-side-btn ${page === 'my_complaints' ? 'active' : ''}`} onClick={() => setPage('my_complaints')}>💬 My Grievances ({complaints.length})</button>
-          </>
-        )}
-        {showEvents && (
-          <>
-            <button className={`ptm-side-btn ${page === 'clubs_list' ? 'active' : ''}`} onClick={() => setPage('clubs_list')}>🎭 Campus Clubs ({clubs.length})</button>
-            <button className={`ptm-side-btn ${page === 'events_list' ? 'active' : ''}`} onClick={() => setPage('events_list')}>🎪 EventRadar ({visibleEvents.length})</button>
-            <button className={`ptm-side-btn ${page === 'calendar' ? 'active' : ''}`} onClick={() => setPage('calendar')}>🗓️ Event Calendar</button>
-            <button className={`ptm-side-btn ${page === 'notices' ? 'active' : ''}`} onClick={() => setPage('notices')}>📢 Notice Board ({notices.length})</button>
-          </>
-        )}
-        {showAttendance && <button className={`ptm-side-btn ${page === 'attendance' ? 'active' : ''}`} onClick={() => setPage('attendance')}>📅 Night Attendance</button>}
-        {showAttendanceV2 && <button className={`ptm-side-btn ${page === 'attendance_v2' ? 'active' : ''}`} onClick={() => setPage('attendance_v2')}>📚 Class & Hostel Attendance</button>}
-        {showOutpass && !isDayScholar && <button className={`ptm-side-btn ${page === 'leave_pass' ? 'active' : ''}`} onClick={() => setPage('leave_pass')}>🪪 Digital Leave Pass</button>}
-        <button className={`ptm-side-btn ${page === 'profile' ? 'active' : ''}`} onClick={openProfile}>👤 My Profile</button>
-      </aside>
+      <Sidebar
+        title="Student workspace"
+        brand={{ name: collegeName || 'Vidyut OS', initials: collegeInitials, logo: collegeLogo }}
+        items={studentNavItems}
+        active={sidebarPage}
+        onChange={(nextPage) => nextPage === 'profile' ? openProfile() : setPage(nextPage)}
+        className="ptm-student-sidebar"
+      />
 
       <div className="ptm-page-wrap">
         {msg && <div className="ptm-toast" onClick={() => setMsg(null)}>{msg}</div>}
@@ -525,37 +573,54 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
         )}
         <>
             {page === 'home' && (
-              <div>
+              <div className="ptm-student-home">
+                <section className="ptm-student-welcome">
+                  <div>
+                    <span className="ptm-dashboard-kicker">STUDENT PORTAL</span>
+                    <h1>{greeting}, {studentName}</h1>
+                    <p>{collegeName || 'Your college'}{safeUser.department ? ` · ${safeUser.department}` : ''}{safeUser.year ? ` · Year ${safeUser.year}` : ''}{safeUser.division ? ` · Division ${safeUser.division}` : ''}</p>
+                  </div>
+                  <div className="ptm-student-avatar" aria-hidden="true">
+                    {(safeUser.full_name || 'ST').split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}
+                  </div>
+                </section>
+
+                {showAttendanceV2 && (
+                  <section className="ptm-attendance-hero">
+                    <div className="ptm-attendance-hero-copy">
+                      <span className="ptm-dashboard-kicker">ATTENDANCE</span>
+                      <h2>Check in to class</h2>
+                      <p>View your attendance history and join an active class or hostel check-in.</p>
+                    </div>
+                    <Button type="button" onClick={() => setPage('attendance_v2')}>
+                      <Icon name="attendance" /> Open attendance
+                    </Button>
+                  </section>
+                )}
+
+                <div className="ptm-student-stats">
+                  <StatTile label="Attendance records" value={attendanceLogs.length} detail="Your recent activity" />
+                  <StatTile label="Open requests" value={complaints.filter((item) => item.status !== 'Completed').length} detail={actionNeeded ? `${actionNeeded} need your confirmation` : 'Maintenance and support'} tone={actionNeeded ? 'warning' : 'default'} />
+                  <StatTile label="Upcoming events" value={upcomingEvents.length} detail={showEvents ? 'On your campus' : 'Campus events are not enabled'} />
+                </div>
+
                 {ads.map((ad) => (
                   <a
                     key={ad.ad_id}
+                    className="ptm-sponsored-banner"
                     href={ad.target_url}
                     target="_blank"
                     rel="noopener noreferrer sponsored"
                     aria-label={`${ad.sponsor_tag}: ${ad.title}. ${ad.cta_text || 'Learn more'}`}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '14px',
-                      minHeight: '116px',
-                      padding: '18px',
-                      marginBottom: '14px',
-                      borderRadius: '18px',
-                      color: '#FFFFFF',
-                      textDecoration: 'none',
-                      backgroundImage: ad.bg_gradient,
-                      overflow: 'hidden'
-                    }}
                   >
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: '10px', fontWeight: 700, opacity: 0.82, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                    <div className="ptm-sponsored-copy">
+                      <div className="ptm-sponsored-tag">
                         Sponsored · {ad.sponsor_tag}
                       </div>
-                      {ad.badge_text && <div style={{ marginTop: '5px', fontSize: '11px', fontWeight: 700 }}>{ad.badge_text}</div>}
-                      <div style={{ marginTop: '4px', fontSize: '18px', fontWeight: 800, lineHeight: 1.2 }}>{ad.title}</div>
-                      <div style={{ marginTop: '4px', fontSize: '12px', opacity: 0.9 }}>{ad.subtitle}</div>
-                      <div style={{ marginTop: '10px', fontSize: '12px', fontWeight: 700 }}>{ad.cta_text || 'Learn more'} →</div>
+                      {ad.badge_text && <div className="ptm-sponsored-badge">{ad.badge_text}</div>}
+                      <div className="ptm-sponsored-title">{ad.title}</div>
+                      <div className="ptm-sponsored-subtitle">{ad.subtitle}</div>
+                      <div className="ptm-sponsored-action">{ad.cta_text || 'Learn more'} <Icon name="arrow" size={16} /></div>
                     </div>
                     {ad.image_url && (
                       <img
@@ -563,68 +628,49 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
                         alt=""
                         loading="lazy"
                         referrerPolicy="no-referrer"
-                        style={{ width: '96px', height: '80px', flexShrink: 0, objectFit: 'cover', borderRadius: '12px' }}
+                        className="ptm-sponsored-image"
                       />
                     )}
                   </a>
                 ))}
-                <div className="ptm-mini-grid">
-                  <div className="ptm-mini-card" onClick={openProfile}>
-                    <div className="ptm-row-between">
-                      <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>
-                        {isDayScholar ? 'Day Scholar' : safeUser.hostel_block}
-                      </span>
-                      <span>{isDayScholar ? '🎒' : '🏠'}</span>
-                    </div>
-                    <div style={{ fontSize: '19px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>
-                      {isDayScholar ? 'Non-Hosteller' : `Room ${safeUser.room}`}
-                    </div>
-                    <button className="ptm-mini-btn">{safeUser.year || 'Resident'} • {safeUser.user_id}</button>
+                <section className="ptm-card ptm-student-residence">
+                  <div>
+                    <span className="ptm-dashboard-kicker">YOUR PROFILE</span>
+                    <h2>{isDayScholar ? 'Day scholar' : safeUser.hostel_block || 'Residence not set'}</h2>
+                    <p>{isDayScholar ? 'Campus student' : `Wing ${safeUser.wing || '—'} · Room ${safeUser.room || '—'}`}</p>
                   </div>
-
-                  {showGrievances && !isDayScholar && (
-                    <div className="ptm-mini-card" onClick={() => setPage('my_complaints')}>
-                      <div className="ptm-row-between">
-                        <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6B7280' }}>My Grievances</span>
-                        <span>🛠️</span>
-                      </div>
-                      <div style={{ fontSize: '19px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>{complaints.length} Tickets</div>
-                      <button className="ptm-mini-btn">
-                        {actionNeeded > 0 ? `⚡ ${actionNeeded} Verify Now` : 'Check Status →'}
-                      </button>
-                    </div>
-                  )}
-                </div>
+                  <button className="ptm-text-action" onClick={openProfile}>View profile <Icon name="arrow" size={16} /></button>
+                </section>
 
                 {!isDayScholar && (showGrievances || showAttendance || showOutpass) && (
-                  <div className="ptm-card">
-                    <div className="ptm-section-title">Hostel & Maintenance Services</div>
-                    <div className="ptm-icon-grid">
+                  <section className="ptm-card">
+                    <div className="ptm-section-title">Hostel services</div>
+                    <div className="ptm-icon-grid ptm-student-action-grid">
                       {showGrievances && (
                         <>
                           <button className="ptm-icon-tile" onClick={() => setPage('new_complaint')}>
-                            <div className="ptm-icon-circle">➕</div>
-                            <span className="ptm-icon-label">Lodge Grievance</span>
+                            <span className="ptm-icon-circle"><Icon name="file" /></span>
+                            <span className="ptm-icon-label">New maintenance request</span>
                           </button>
                           <button className="ptm-icon-tile" onClick={() => setPage('my_complaints')}>
-                            <div className="ptm-icon-circle">
-                              💬
+                            <span className="ptm-icon-circle">
+                              <Icon name="users" />
                               {actionNeeded > 0 && <span className="ptm-tile-badge">{actionNeeded}</span>}
-                            </div>
-                            <span className="ptm-icon-label">Track Status</span>
+                            </span>
+                            <span className="ptm-icon-label">My requests</span>
                           </button>
                         </>
                       )}
                       {showAttendance && <button className="ptm-icon-tile" onClick={() => setPage('attendance')}>
-                        <div className="ptm-icon-circle light">📅</div>
-                        <span className="ptm-icon-label">Night Attendance</span>
+                        <span className="ptm-icon-circle light"><Icon name="clock" /></span>
+                        <span className="ptm-icon-label">Night attendance</span>
                       </button>}
                       {showOutpass && <button className="ptm-icon-tile" onClick={() => setPage('leave_pass')}>
-                        <div className="ptm-icon-circle light">🪪</div>
-                        <span className="ptm-icon-label">Digital Leave Pass</span>
+                        <span className="ptm-icon-circle light"><Icon name="shield" /></span>
+                        <span className="ptm-icon-label">Leave pass</span>
                       </button>}
                     </div>
-                  </div>
+                  </section>
                 )}
 
                 {modules && unavailableHostelServices.length > 0 && (
@@ -633,30 +679,34 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
                   </div>
                 )}
 
-                {showEvents && <div className="ptm-card">
-                  <div className="ptm-section-title">Campus Life, Clubs & Notice Board</div>
-                  <div className="ptm-icon-grid">
-                    <button className="ptm-icon-tile" onClick={() => setPage('events_list')}>
-                      <div className="ptm-icon-circle">🎪</div>
-                      <span className="ptm-icon-label">Upcoming Events</span>
-                    </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('clubs_list')}>
-                      <div className="ptm-icon-circle">🎭</div>
-                      <span className="ptm-icon-label">Student Clubs ({clubs.length})</span>
-                    </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('notices')}>
-                      <div className="ptm-icon-circle">
-                        📢
-                        {notices.length > 0 && <span className="ptm-tile-badge">{notices.length}</span>}
-                      </div>
-                      <span className="ptm-icon-label">Notice Board</span>
-                    </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('calendar')}>
-                      <div className="ptm-icon-circle">🗓️</div>
-                      <span className="ptm-icon-label">Event Calendar</span>
-                    </button>
+                {showEvents && <section className="ptm-card ptm-upcoming-events">
+                  <div className="ptm-row-between">
+                    <div>
+                      <div className="ptm-section-title">Upcoming on campus</div>
+                      <p className="ptm-list-sub">Events and announcements approved by your college.</p>
+                    </div>
+                    <button className="ptm-text-action" onClick={() => setPage('events_list')}>View all <Icon name="arrow" size={16} /></button>
                   </div>
-                </div>}
+                  {upcomingEvents.length ? (
+                    <div className="ptm-list">
+                      {upcomingEvents.map((event) => (
+                        <button className="ptm-list-row ptm-event-preview" key={event.event_id} onClick={() => { setSelectedEvent(event); setPage('event_detail'); }}>
+                          <span className="ptm-event-date"><Icon name="calendar" size={18} /><span>{event.date}</span></span>
+                          <span className="ptm-list-main">
+                            <strong className="ptm-list-title">{event.title}</strong>
+                            <span className="ptm-list-sub">{event.club_id} · {event.venue}</span>
+                          </span>
+                          <Icon name="arrow" size={17} />
+                        </button>
+                      ))}
+                    </div>
+                  ) : <p className="ptm-empty-state">No upcoming events are published yet.</p>}
+                  <div className="ptm-campus-links">
+                    <button onClick={() => setPage('clubs_list')}><Icon name="users" /> Clubs & chapters ({clubs.length})</button>
+                    <button onClick={() => setPage('notices')}><Icon name="file" /> Notice board ({notices.length})</button>
+                    <button onClick={() => setPage('calendar')}><Icon name="calendar" /> Event calendar</button>
+                  </div>
+                </section>}
               </div>
             )}
 
@@ -1192,16 +1242,12 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules }) {
         </>
       </div>
 
-      <nav className="ptm-bottom-nav">
-        <button className={`ptm-bnav-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}><span>🏠</span><span>Home</span></button>
-        {showGrievances && !isDayScholar && <button className={`ptm-bnav-btn ${page === 'my_complaints' ? 'active' : ''}`} onClick={() => setPage('my_complaints')}><span>💬</span><span>Grievances</span></button>}
-        {showEvents && <button className={`ptm-bnav-btn ${page === 'events_list' ? 'active' : ''}`} onClick={() => setPage('events_list')}><span>🎪</span><span>Events</span></button>}
-        {showAttendance && <button className={`ptm-bnav-btn ${page === 'attendance' ? 'active' : ''}`} onClick={() => setPage('attendance')}><span>📅</span><span>Night Attendance</span></button>}
-        {showAttendanceV2 && <button className={`ptm-bnav-btn ${page === 'attendance_v2' ? 'active' : ''}`} onClick={() => setPage('attendance_v2')}><span>📚</span><span>Class/Hostel</span></button>}
-        {showOutpass && !isDayScholar && <button className={`ptm-bnav-btn ${page === 'leave_pass' ? 'active' : ''}`} onClick={() => setPage('leave_pass')}><span>🪪</span><span>Leave Pass</span></button>}
-        {showEvents && <button className={`ptm-bnav-btn ${page === 'notices' ? 'active' : ''}`} onClick={() => setPage('notices')}><span>📢</span><span>Notices</span></button>}
-        <button className={`ptm-bnav-btn ${page === 'profile' ? 'active' : ''}`} onClick={openProfile}><span>👤</span><span>Profile</span></button>
-      </nav>
+      <TabBar
+        items={mobileNavItems}
+        active={mobileActive}
+        onChange={handleMobileNav}
+        className="ptm-student-tabbar"
+      />
     </div>
   );
 }

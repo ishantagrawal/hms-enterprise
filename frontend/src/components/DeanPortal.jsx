@@ -6,6 +6,7 @@ import { DeanAttendanceOverview } from './AttendanceOnlyPortals';
 import { GridCardSkeleton } from './SkeletonLoader';
 import usePortalBackNavigation from '../hooks/usePortalBackNavigation';
 import { escapeHtml } from '../utils/html';
+import { Button, Icon, Sidebar, StatTile, StatusPill, TabBar } from './ui/DesignSystem';
 
 export default function DeanPortal({ apiUrl, user, modules = {}, tenantName = 'Vidyut OS', institutionEmailDomain = '' }) {
   const [page, setPage] = useState('home');
@@ -77,12 +78,16 @@ export default function DeanPortal({ apiUrl, user, modules = {}, tenantName = 'V
   const [selectedDateStr, setSelectedDateStr] = useState('2026-10-28');
 
   // Reports & Print PDF Generator states
-  const [reportYear, setReportYear] = useState('2026');
+  const [reportYear, setReportYear] = useState(() => String(new Date().getFullYear()));
   const [reportClub, setReportClub] = useState('All');
   const [pdfScope, setPdfScope] = useState('All');
   const selectedReportScope = reportScopes.some((scope) => scope.id === pdfScope)
     ? pdfScope
     : reportScopes[0]?.id || 'All';
+  const reportYears = [...new Set([
+    reportYear,
+    ...events.map((event) => (event.date || '').slice(0, 4))
+  ])].filter((year) => /^\d{4}$/.test(year)).sort((left, right) => right.localeCompare(left));
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
 
@@ -535,6 +540,44 @@ export default function DeanPortal({ apiUrl, user, modules = {}, tenantName = 'V
   const pendingEvents = events.filter((e) => e.status === 'Pending Dean Approval');
   const pendingNotices = notices.filter((n) => n.status === 'Pending Dean Approval');
   const centralDepts = departments.filter((d) => d.type === 'Central');
+  const deanInitials = tenantName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
+  const deanNavItems = [
+    { id: 'home', label: 'Dashboard', icon: 'home' },
+    ...(showCampusLife ? [
+      { id: 'clubs_list', label: 'Clubs & chapters', icon: 'users', count: clubs.length },
+      { id: 'event_approvals', label: 'Event approvals', icon: 'calendar', count: pendingEvents.length },
+      { id: 'notice_approvals', label: 'Notice approvals', icon: 'file', count: pendingNotices.length },
+      { id: 'calendar', label: 'Event calendar', icon: 'calendar' },
+      { id: 'create_club', label: 'Create a club', icon: 'arrow' },
+      { id: 'central_depts', label: 'Central departments', icon: 'building' }
+    ] : []),
+    { id: 'wardens', label: 'Hostel wardens', icon: 'users' },
+    { id: 'staff_accounts', label: 'Staff accounts', icon: 'lock' },
+    ...(showGateSecurity ? [{ id: 'gate_security', label: 'Gate security', icon: 'shield' }] : []),
+    ...(showAttendance ? [{ id: 'attendance_reports', label: 'Attendance reports', icon: 'attendance' }] : []),
+    ...((showGrievances || showCampusLife) ? [{ id: 'reports', label: 'Audit reports', icon: 'file' }] : [])
+  ];
+  const deanSidebarPage = (
+    page === 'event_detail' ? 'event_approvals'
+      : page === 'notice_detail' ? 'notice_approvals'
+        : page === 'club_detail' ? 'clubs_list'
+          : page
+  );
+  const deanMobileItems = [
+    { id: 'home', label: 'Home', icon: 'home' },
+    ...(showCampusLife ? [{ id: 'event_approvals', label: 'Events', icon: 'calendar' }] : []),
+    ...(showCampusLife ? [{ id: 'notice_approvals', label: 'Notices', icon: 'file' }] : []),
+    { id: 'staff_accounts', label: 'Staff', icon: 'lock' },
+    ...((showGrievances || showCampusLife) ? [{ id: 'reports', label: 'Reports', icon: 'file' }] : [])
+  ];
+  const deanMobileActive = (
+    ['notice_approvals', 'notice_detail'].includes(page) ? 'notice_approvals'
+      : ['event_approvals', 'event_detail'].includes(page) ? 'event_approvals'
+      : page === 'clubs_list' || page === 'club_detail' ? 'clubs_list'
+        : ['reports', 'attendance_reports'].includes(page) ? 'reports'
+          : ['staff_accounts', 'wardens'].includes(page) ? 'staff_accounts'
+            : 'home'
+  );
 
   const filteredClubs = clubs.filter((c) => {
     const q = clubSearch.toLowerCase();
@@ -554,40 +597,14 @@ export default function DeanPortal({ apiUrl, user, modules = {}, tenantName = 'V
 
   return (
     <div className="ptm-shell-layout">
-      {/* Desktop Left Sidebar */}
-      <aside className="ptm-sidebar-desktop">
-        <div className="ptm-nav-group-title">Overview</div>
-        <button className={`ptm-side-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}>
-          <span>🏠 Dashboard Home</span>
-        </button>
-        {showCampusLife && <>
-          <div className="ptm-nav-group-title">Clubs & campus life</div>
-          <button className={`ptm-side-btn ${page === 'clubs_list' || page === 'club_detail' ? 'active' : ''}`} onClick={() => setPage('clubs_list')}>
-            <span>🎭 Clubs Directory</span><span>{clubs.length}</span>
-          </button>
-          <button className={`ptm-side-btn ${page === 'event_approvals' || page === 'event_detail' ? 'active' : ''}`} onClick={() => setPage('event_approvals')}>
-            <span>⚡ Approve Events</span>
-            {pendingEvents.length > 0 && <span className="ptm-status-badge" style={{ background: '#FEF3C7', color: '#B45309' }}>{pendingEvents.length}</span>}
-          </button>
-          <button className={`ptm-side-btn ${page === 'notice_approvals' || page === 'notice_detail' ? 'active' : ''}`} onClick={() => setPage('notice_approvals')}>
-            <span>📢 Approve Notices</span>
-            {pendingNotices.length > 0 && <span className="ptm-status-badge" style={{ background: '#FEF3C7', color: '#B45309' }}>{pendingNotices.length}</span>}
-          </button>
-          <button className={`ptm-side-btn ${page === 'calendar' ? 'active' : ''}`} onClick={() => setPage('calendar')}><span>🗓️ Event Calendar</span></button>
-          <button className={`ptm-side-btn ${page === 'create_club' ? 'active' : ''}`} onClick={() => setPage('create_club')}><span>➕ Create New Club</span></button>
-          <button className={`ptm-side-btn ${page === 'central_depts' ? 'active' : ''}`} onClick={() => setPage('central_depts')}><span>🌐 Central Departments</span></button>
-        </>}
-        <div className="ptm-nav-group-title">People & administration</div>
-        <button className={`ptm-side-btn ${page === 'wardens' ? 'active' : ''}`} onClick={() => setPage('wardens')}>
-          <span>🏢 Hostel Wardens</span>
-        </button>
-        <button className={`ptm-side-btn ${page === 'staff_accounts' ? 'active' : ''}`} onClick={() => setPage('staff_accounts')}>
-          <span>👥 Staff & accounts</span>
-        </button>
-        {showGateSecurity && <button className={`ptm-side-btn ${page === 'gate_security' ? 'active' : ''}`} onClick={() => setPage('gate_security')}><span>🛂 Gate Security</span></button>}
-        {showAttendance && <button className={`ptm-side-btn ${page === 'attendance_reports' ? 'active' : ''}`} onClick={() => setPage('attendance_reports')}><span>📅 Attendance</span></button>}
-        {(showGrievances || showCampusLife) && <button className={`ptm-side-btn ${page === 'reports' ? 'active' : ''}`} onClick={() => setPage('reports')}><span>{showGrievances ? '🧾 Grievances & reports' : '🖨️ Reports & print PDF'}</span></button>}
-      </aside>
+      <Sidebar
+        title="Dean workspace"
+        brand={{ name: tenantName, initials: deanInitials }}
+        items={deanNavItems}
+        active={deanSidebarPage}
+        onChange={setPage}
+        className="ptm-dean-sidebar"
+      />
 
       {/* Main Content Area */}
       <div className="ptm-page-wrap">
@@ -605,74 +622,77 @@ export default function DeanPortal({ apiUrl, user, modules = {}, tenantName = 'V
                 1. DEAN DASHBOARD HOME
                 ========================================== */}
             {page === 'home' && (
-              <div>
-                <div className="ptm-mini-grid">
-                  {showCampusLife && <div className="ptm-mini-card" onClick={() => setPage('clubs_list')}>
-                    <div className="ptm-row-between">
-                      <span style={{ fontWeight: 700, color: '#6B7280', fontSize: '12px' }}>Official College Clubs</span>
-                      <span>🎭</span>
-                    </div>
-                    <div style={{ fontSize: '26px', fontWeight: 800, color: '#002970', marginTop: '4px' }}>{clubs.length}</div>
-                    <button className="ptm-mini-btn">Explore Clubs →</button>
-                  </div>}
+                  <div className="ptm-dean-dashboard">
+                    <header className="ptm-dashboard-heading">
+                      <div>
+                        <span className="ptm-dashboard-kicker">DEAN DASHBOARD</span>
+                        <h1>{tenantName}</h1>
+                        <p>College operations, approvals, and attendance oversight.</p>
+                      </div>
+                      <StatusPill tone={pendingEvents.length + pendingNotices.length ? 'warning' : 'success'}>
+                        {pendingEvents.length + pendingNotices.length} pending approvals
+                      </StatusPill>
+                    </header>
 
-                  {showCampusLife && <div className="ptm-mini-card" onClick={() => setPage('event_approvals')}>
-                    <div className="ptm-row-between">
-                      <span style={{ fontWeight: 700, color: '#6B7280', fontSize: '12px' }}>Pending Approvals</span>
-                      <span>⚡</span>
+                    <div className="ptm-dean-stats">
+                      {showCampusLife && <StatTile label="Clubs & chapters" value={clubs.length} detail="Registered groups" />}
+                      {(showCampusLife || showGrievances) && <StatTile label="Students" value={studentsCount} detail="Active college accounts" />}
+                      {showCampusLife && <StatTile label="Pending approvals" value={pendingEvents.length + pendingNotices.length} detail="Events and notices" tone={pendingEvents.length + pendingNotices.length ? 'warning' : 'success'} />}
+                      {showGrievances && <StatTile label="Open maintenance tickets" value={complaints.filter((ticket) => !['Completed', 'Closed'].includes(ticket.status)).length} detail="Needs staff follow-up" />}
                     </div>
-                    <div style={{ fontSize: '26px', fontWeight: 800, color: '#D97706', marginTop: '4px' }}>
-                      {pendingEvents.length + pendingNotices.length}
-                    </div>
-                    <button className="ptm-mini-btn">Review Requests →</button>
-                  </div>}
 
-                  {(showGrievances || showCampusLife) && <div className="ptm-mini-card" onClick={() => setPage('reports')}>
-                    <div className="ptm-row-between">
-                      <span style={{ fontWeight: 700, color: '#6B7280', fontSize: '12px' }}>Hostel Residents</span>
-                      <span>🎓</span>
-                    </div>
-                    <div style={{ fontSize: '26px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>{studentsCount}</div>
-                    <button className="ptm-mini-btn">Audit Reports →</button>
-                  </div>}
-                  {showAttendance && <div className="ptm-mini-card" onClick={() => setPage('attendance_reports')}>
-                    <div className="ptm-row-between">
-                      <span style={{ fontWeight: 700, color: '#6B7280', fontSize: '12px' }}>Attendance</span>
-                      <span>📅</span>
-                    </div>
-                    <div style={{ fontSize: '16px', fontWeight: 800, color: '#111827', marginTop: '4px' }}>Class & hostel reports</div>
-                    <button className="ptm-mini-btn">Open reports →</button>
-                  </div>}
-                </div>
+                    {showCampusLife && (
+                      <section className="ptm-card ptm-dean-approval-panel">
+                        <div className="ptm-row-between">
+                          <div>
+                            <div className="ptm-section-title">Needs your approval</div>
+                            <p className="ptm-list-sub">Review event and notice requests from campus groups.</p>
+                          </div>
+                          <button className="ptm-text-action" onClick={() => setPage('event_approvals')}>Open approvals <Icon name="arrow" size={16} /></button>
+                        </div>
+                        {pendingEvents.slice(0, 3).map((event) => (
+                          <div className="ptm-approval-row" key={`event-${event.event_id}`}>
+                            <span className="ptm-approval-icon"><Icon name="calendar" /></span>
+                            <div className="ptm-approval-copy">
+                              <StatusPill tone="neutral">EVENT · {event.club_id}</StatusPill>
+                              <strong>{event.title}</strong>
+                              <small>{event.date || 'Date not set'} · {event.venue || 'Venue not set'} · Budget {event.budget || 'Not specified'}</small>
+                            </div>
+                            <div className="ptm-approval-actions">
+                              <Button variant="outline" type="button" onClick={() => handleApproveEvent(event.event_id, 'Disapproved')}>Decline</Button>
+                              <Button type="button" onClick={() => handleApproveEvent(event.event_id, 'Approved')}>Approve</Button>
+                            </div>
+                          </div>
+                        ))}
+                        {pendingNotices.slice(0, 3).map((notice) => (
+                          <div className="ptm-approval-row" key={`notice-${notice.notice_id}`}>
+                            <span className="ptm-approval-icon"><Icon name="file" /></span>
+                            <div className="ptm-approval-copy">
+                              <StatusPill tone="neutral">NOTICE · {notice.club_id}</StatusPill>
+                              <strong>{notice.title}</strong>
+                              <small>Target: {notice.target_year || 'All years'} · {notice.target_branch || 'All departments'}</small>
+                            </div>
+                            <div className="ptm-approval-actions">
+                              <Button variant="outline" type="button" onClick={() => handleApproveNotice(notice.notice_id, 'Disapproved')}>Decline</Button>
+                              <Button type="button" onClick={() => handleApproveNotice(notice.notice_id, 'Approved')}>Approve</Button>
+                            </div>
+                          </div>
+                        ))}
+                        {!pendingEvents.length && !pendingNotices.length && <p className="ptm-empty-state">All caught up. There are no pending approvals.</p>}
+                      </section>
+                    )}
 
-                {showCampusLife && <div className="ptm-card">
-                  <div className="ptm-section-title">Clubs & Campus Events</div>
-                  <div className="ptm-icon-grid">
-                    <button className="ptm-icon-tile" onClick={() => setPage('clubs_list')}><div className="ptm-icon-circle">🎭</div><span className="ptm-icon-label">All Clubs Directory</span></button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('event_approvals')}><div className="ptm-icon-circle">⚡{pendingEvents.length > 0 && <span className="ptm-tile-badge">{pendingEvents.length}</span>}</div><span className="ptm-icon-label">Approve Events</span></button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('notice_approvals')}><div className="ptm-icon-circle">📢{pendingNotices.length > 0 && <span className="ptm-tile-badge">{pendingNotices.length}</span>}</div><span className="ptm-icon-label">Approve Notices</span></button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('calendar')}><div className="ptm-icon-circle">🗓️</div><span className="ptm-icon-label">Event Calendar</span></button>
-                  </div>
-                </div>}
-
-                <div className="ptm-card">
-                  <div className="ptm-section-title">Administration & Hostels</div>
-                  <div className="ptm-icon-grid">
-                    {showCampusLife && <button className="ptm-icon-tile" onClick={() => setPage('create_club')}><div className="ptm-icon-circle">➕</div><span className="ptm-icon-label">Create New Club</span></button>}
-                    {showCampusLife && <button className="ptm-icon-tile" onClick={() => setPage('central_depts')}><div className="ptm-icon-circle">🌐</div><span className="ptm-icon-label">Central Departments</span></button>}
-                    <button className="ptm-icon-tile" onClick={() => setPage('wardens')}>
-                      <div className="ptm-icon-circle">🏢</div>
-                      <span className="ptm-icon-label">Hostel Wardens</span>
-                    </button>
-                    <button className="ptm-icon-tile" onClick={() => setPage('staff_accounts')}>
-                      <div className="ptm-icon-circle">🔐</div>
-                      <span className="ptm-icon-label">Staff & accounts</span>
-                    </button>
-                    {showGateSecurity && <button className="ptm-icon-tile" onClick={() => setPage('gate_security')}><div className="ptm-icon-circle">🛂</div><span className="ptm-icon-label">Gate Security</span></button>}
-                    {showAttendance && <button className="ptm-icon-tile" onClick={() => setPage('attendance_reports')}><div className="ptm-icon-circle">📅</div><span className="ptm-icon-label">Attendance reports</span></button>}
-                    {(showGrievances || showCampusLife) && <button className="ptm-icon-tile" onClick={() => setPage('reports')}><div className="ptm-icon-circle">🖨️</div><span className="ptm-icon-label">Reports & Print PDF</span></button>}
-                  </div>
-                </div>
+                    <section className="ptm-card">
+                      <div className="ptm-section-title">College administration</div>
+                      <div className="ptm-icon-grid ptm-student-action-grid">
+                        {showCampusLife && <button className="ptm-icon-tile" onClick={() => setPage('clubs_list')}><span className="ptm-icon-circle"><Icon name="users" /></span><span className="ptm-icon-label">Clubs & chapters</span></button>}
+                        {showCampusLife && <button className="ptm-icon-tile" onClick={() => setPage('calendar')}><span className="ptm-icon-circle"><Icon name="calendar" /></span><span className="ptm-icon-label">Event calendar</span></button>}
+                        <button className="ptm-icon-tile" onClick={() => setPage('wardens')}><span className="ptm-icon-circle"><Icon name="users" /></span><span className="ptm-icon-label">Hostel wardens</span></button>
+                        <button className="ptm-icon-tile" onClick={() => setPage('staff_accounts')}><span className="ptm-icon-circle"><Icon name="lock" /></span><span className="ptm-icon-label">Staff accounts</span></button>
+                        {showAttendance && <button className="ptm-icon-tile" onClick={() => setPage('attendance_reports')}><span className="ptm-icon-circle"><Icon name="attendance" /></span><span className="ptm-icon-label">Attendance reports</span></button>}
+                        {(showGrievances || showCampusLife) && <button className="ptm-icon-tile" onClick={() => setPage('reports')}><span className="ptm-icon-circle"><Icon name="file" /></span><span className="ptm-icon-label">Audit reports</span></button>}
+                      </div>
+                    </section>
               </div>
             )}
 
@@ -1624,7 +1644,7 @@ export default function DeanPortal({ apiUrl, user, modules = {}, tenantName = 'V
                 </div>
 
                 <div className="ptm-card">
-                  <div className="ptm-grid-2" style={{ marginBottom: '12px' }}>
+                  <div className="ptm-grid-2 ptm-report-filters" style={{ marginBottom: '12px' }}>
                     <div>
                       <label className="ptm-label">Report Scope</label>
                       <select className="ptm-input" value={selectedReportScope} onChange={(e) => setPdfScope(e.target.value)}>
@@ -1640,6 +1660,13 @@ export default function DeanPortal({ apiUrl, user, modules = {}, tenantName = 'V
                             {c.name} ({c.club_id})
                           </option>
                         ))}
+                      </select>
+                    </div>}
+                    {showCampusLife && <div>
+                      <label className="ptm-label">Filter by Year</label>
+                      <select className="ptm-input" value={reportYear} onChange={(e) => setReportYear(e.target.value)}>
+                        <option value="All">All years</option>
+                        {reportYears.map((year) => <option key={year} value={year}>{year}</option>)}
                       </select>
                     </div>}
                   </div>
@@ -1689,24 +1716,12 @@ export default function DeanPortal({ apiUrl, user, modules = {}, tenantName = 'V
         )}
       </div>
 
-      {/* Mobile Bottom Navigation */}
-      <nav className="ptm-bottom-nav">
-        <button className={`ptm-bnav-btn ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}>
-          <span>🏠</span>
-          <span>Home</span>
-        </button>
-        {showCampusLife && <>
-          <button className={`ptm-bnav-btn ${page === 'clubs_list' || page === 'club_detail' ? 'active' : ''}`} onClick={() => setPage('clubs_list')}><span>🎭</span><span>Clubs</span></button>
-          <button className={`ptm-bnav-btn ${page === 'event_approvals' || page === 'notice_approvals' ? 'active' : ''}`} onClick={() => setPage('event_approvals')}><span>⚡</span><span>Approvals</span></button>
-          <button className={`ptm-bnav-btn ${page === 'calendar' ? 'active' : ''}`} onClick={() => setPage('calendar')}><span>🗓️</span><span>Calendar</span></button>
-        </>}
-        {showAttendance && <button className={`ptm-bnav-btn ${page === 'attendance_reports' ? 'active' : ''}`} onClick={() => setPage('attendance_reports')}><span>📅</span><span>Attendance</span></button>}
-        {(showGrievances || showCampusLife) && <button className={`ptm-bnav-btn ${page === 'reports' ? 'active' : ''}`} onClick={() => setPage('reports')}><span>🧾</span><span>Reports</span></button>}
-        <button className={`ptm-bnav-btn ${page === 'staff_accounts' ? 'active' : ''}`} onClick={() => setPage('staff_accounts')}>
-          <span>👥</span>
-          <span>Staff</span>
-        </button>
-      </nav>
+      <TabBar
+        items={deanMobileItems}
+        active={deanMobileActive}
+        onChange={setPage}
+        className="ptm-dean-tabbar"
+      />
     </div>
   );
 }

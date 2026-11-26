@@ -6,6 +6,7 @@ import { extractErrorMessage } from '../utils/errorParser.ts';
 import DeanStaffManager from './DeanStaffManager';
 import StaffAccountAccess from './StaffAccountAccess';
 import { impactSuccess } from '../utils/nativeFeedback';
+import { Button, Chip, Icon, ProgressBar, StatusPill } from './ui/DesignSystem';
 import './AttendanceOnlyPortals.css';
 
 const ROOT = '/api/attendance-v2';
@@ -582,12 +583,27 @@ function FacultyAttendance({ apiUrl }) {
       })
     }), 'Class session started for the selected division.');
   };
-  const close = (session) => run(
-    () => requestJson(apiUrl, `/sessions/${encodeURIComponent(session.id)}/close`, { method: 'POST' }),
-    (result) => result.report_queued
-      ? 'Session closed; the PDF report was queued for email.'
-      : 'Session closed. Verify your report email to receive PDFs automatically.'
-  );
+  const close = async (session) => {
+    setError('');
+    try {
+      const result = await requestJson(apiUrl, `/sessions/${encodeURIComponent(session.id)}/close`, { method: 'POST' });
+      setMessage(result.report_queued
+        ? 'Session closed. Downloading the attendance report; an email copy is also queued.'
+        : 'Session closed. Downloading the attendance report.');
+      try {
+        await downloadPdf(
+          apiUrl,
+          `/reports/session/${encodeURIComponent(session.id)}.pdf`,
+          `${localDateString()}-${(session.class_group || session.course_code || 'class').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-attendance.pdf`
+        );
+      } catch (downloadError) {
+        setError(`Session closed, but its PDF could not be downloaded: ${extractErrorMessage(downloadError)}`);
+      }
+      await reload().catch((loadError) => setError(`Session closed, but the live roster could not refresh: ${extractErrorMessage(loadError)}`));
+    } catch (closeError) {
+      setError(extractErrorMessage(closeError));
+    }
+  };
   const override = async (session, item) => {
     const reason = window.prompt(`Audit reason for ${item.roll_no}:`);
     if (!reason) return;
@@ -613,18 +629,83 @@ function FacultyAttendance({ apiUrl }) {
         </form>
         <div className="av-list">{courses.map((course) => <div className="av-list-row" key={course.id}><strong>{course.code}</strong><span>{course.title}</span></div>)}</div>
       </section>}
-      {tab === 'session' && <section className="av-panel">
+      {tab === 'session' && <section className={`av-panel${sessions.length ? ' av-live-container' : ''}`}>
+        {sessions.length ? (
+          <div className="av-live-session-stage">
+            <div className="av-row-between">
+              <div><h2>Attendance is live</h2><p className="av-subtitle">Monitor check-ins and record attendance manually when needed.</p></div>
+              <StatusPill tone="live"><span className="av-live-dot" /> LIVE</StatusPill>
+            </div>
+            <SessionCards sessions={sessions} onClose={close} onOverride={override} />
+          </div>
+        ) : (
+          <>
         <h2>Start classroom attendance</h2>
         <form className="av-form-grid" onSubmit={start}>
-          <label>Department / year / division<select required value={activeGroup} onChange={(event) => setActiveGroup(event.target.value)}><option value="">Select class division</option>{classGroups.map((group) => <option key={classGroupKey(group)} value={classGroupKey(group)}>{group.department} · Year {group.year} · Division {group.division} · {group.student_count} students</option>)}</select></label>
-          <label>Subject label (optional)<select value={activeCourse} onChange={(event) => setActiveCourse(event.target.value)}><option value="">No subject label</option>{courses.map((course) => <option key={course.id} value={course.id}>{course.code} · {course.title}</option>)}</select></label>
-          <label>Classroom beacon<select required value={activeBeacon} onChange={(event) => setActiveBeacon(event.target.value)}><option value="">Select registered room beacon</option>{activeBeacons.map((beacon) => <option key={beacon.id} value={beacon.id}>{beacon.name}</option>)}</select></label>
-          <label>Duration<select value={duration} onChange={(event) => setDuration(event.target.value)}><option value="2">2 minutes</option><option value="3">3 minutes</option><option value="5">5 minutes</option><option value="manual">Manual stop</option></select></label>
-          <button className="av-primary" disabled={!activeGroup || !activeBeacon}>Start session</button>
+          <fieldset className="av-choice-field av-class-choice">
+            <legend>Choose a class or division</legend>
+            <div className="av-chip-list">
+              {classGroups.map((group) => {
+                const key = classGroupKey(group);
+                return (
+                  <Chip
+                    key={key}
+                    type="button"
+                    active={activeGroup === key}
+                    aria-pressed={activeGroup === key}
+                    onClick={() => setActiveGroup(key)}
+                  >
+                    {group.department} · {group.division}
+                  </Chip>
+                );
+              })}
+            </div>
+            {classGroups.find((group) => classGroupKey(group) === activeGroup) && (
+              <p className="av-selection-detail">
+                Year {classGroups.find((group) => classGroupKey(group) === activeGroup).year}
+                {' · '}{classGroups.find((group) => classGroupKey(group) === activeGroup).student_count} students
+              </p>
+            )}
+          </fieldset>
+          <label>Subject label (optional)
+            <select value={activeCourse} onChange={(event) => setActiveCourse(event.target.value)}>
+              <option value="">No subject label</option>
+              {courses.map((course) => <option key={course.id} value={course.id}>{course.code} · {course.title}</option>)}
+            </select>
+          </label>
+          <fieldset className="av-choice-field av-beacon-choice">
+            <legend>Choose the classroom beacon</legend>
+            <div className="av-beacon-grid">
+              {activeBeacons.map((beacon) => (
+                <button
+                  type="button"
+                  key={beacon.id}
+                  className={`av-beacon-option${activeBeacon === beacon.id ? ' is-selected' : ''}`}
+                  aria-pressed={activeBeacon === beacon.id}
+                  onClick={() => setActiveBeacon(beacon.id)}
+                >
+                  <span className="av-beacon-icon"><Icon name="map" /></span>
+                  <span className="av-beacon-copy"><strong>{beacon.name}</strong><small>Classroom beacon</small></span>
+                  <StatusPill tone={activeBeacon === beacon.id ? 'success' : 'neutral'}>
+                    {activeBeacon === beacon.id ? 'Selected' : 'Available'}
+                  </StatusPill>
+                </button>
+              ))}
+            </div>
+          </fieldset>
+          <label>Attendance window
+            <select value={duration} onChange={(event) => setDuration(event.target.value)}>
+              <option value="2">2 minutes</option><option value="3">3 minutes</option><option value="5">5 minutes</option><option value="manual">Stop manually</option>
+            </select>
+          </label>
+          <Button className="av-start-button" type="submit" disabled={!activeGroup || !activeBeacon}>
+            <Icon name="attendance" /> Start attendance
+          </Button>
         </form>
         {!classGroups.length && <p className="av-empty">Assign department, academic year, and division to student profiles in Student Onboarding before starting attendance.</p>}
         {!activeBeacons.length && <p className="av-empty">Register and activate a classroom beacon before starting attendance.</p>}
-        <SessionCards sessions={sessions} onClose={close} onOverride={override} />
+          </>
+        )}
       </section>}
       {tab === 'reports' && <DailyReportsPanel apiUrl={apiUrl} scope="CLASS" />}
       {tab === 'beacons' && <BeaconManager apiUrl={apiUrl} scope="CLASS" />}
@@ -633,12 +714,48 @@ function FacultyAttendance({ apiUrl }) {
 }
 
 function SessionCards({ sessions, onClose, onOverride }) {
-  return <div className="av-list">{sessions.map((session) => (
-    <article className="av-panel av-session-card" key={session.id}>
-      <div className="av-row-between"><div><p className="av-kicker">{session.scope} · {session.course_code || session.wing_name}{session.class_group ? ` · ${session.class_group}` : ''}{session.faculty_name ? ` · ${session.faculty_name}` : ''}</p><h3>Session live <span className="av-tabular">{session.present_count}/{session.students?.length || 0}</span></h3></div><button className="av-secondary" onClick={() => onClose(session)}>Close session</button></div>
-      <div className="av-roster">{(session.students || []).map((item) => <div className="av-roster-row" key={`${session.id}-${item.roll_no}`}><span className="av-tabular">{item.roll_no}</span><span>{item.student_name || item.student_id || 'Not linked'}</span><span className={`av-status ${item.status === 'PRESENT' ? 'is-good' : 'is-absent'}`}>{item.status}</span>{item.student_id && <button className="av-text-button" onClick={() => onOverride(session, item)}>Override</button>}</div>)}</div>
-    </article>
-  ))}{!sessions.length && <p className="av-empty">No active session.</p>}</div>;
+  return <div className="av-list">{sessions.map((session) => {
+    const students = session.students || [];
+    const presentCount = session.present_count ?? students.filter((student) => student.status === 'PRESENT').length;
+    const absentStudents = students.filter((student) => student.status !== 'PRESENT');
+    const progress = students.length ? Math.round((presentCount / students.length) * 100) : 0;
+    return (
+      <article className="av-panel av-session-card av-live-session" key={session.id}>
+        <div className="av-live-session-head">
+          <div>
+            <StatusPill tone="live"><span className="av-live-dot" /> LIVE NOW</StatusPill>
+            <p className="av-kicker">{session.scope} · {session.course_code || session.wing_name}{session.class_group ? ` · ${session.class_group}` : ''}{session.faculty_name ? ` · ${session.faculty_name}` : ''}</p>
+            <h3>{session.course_title || session.course_code || 'Class attendance'}</h3>
+          </div>
+          <div className="av-live-count"><strong>{presentCount}</strong><span> / {students.length} present</span></div>
+        </div>
+        <ProgressBar value={progress} label={`Attendance ${progress}%`} className="av-live-progress" />
+        <div className="av-live-session-meta">
+          <span><Icon name="users" size={16} /> {session.class_group || 'Selected class'}</span>
+          <span><Icon name="clock" size={16} /> Live attendance session</span>
+        </div>
+        <div className="av-roster-section">
+          <div className="av-row-between"><div><h4>Manual attendance</h4><p className="av-subtitle">Use only when a student cannot check in from their device.</p></div><StatusPill tone="warning">{absentStudents.length} absent</StatusPill></div>
+          <div className="av-roster">
+            {absentStudents.map((item) => (
+              <div className="av-roster-row" key={`${session.id}-${item.roll_no}`}>
+                <span className="av-tabular">{item.roll_no}</span>
+                <span>{item.student_name || item.student_id || 'Not linked'}</span>
+                <StatusPill tone="warning">Absent</StatusPill>
+                {item.student_id && <button className="av-text-button" onClick={() => onOverride(session, item)}>Mark present</button>}
+              </div>
+            ))}
+            {!absentStudents.length && <p className="av-empty">All students are marked present.</p>}
+          </div>
+        </div>
+        <div className="av-live-session-actions">
+          <Button variant="outline" type="button" onClick={() => onClose(session)}>
+            <Icon name="file" /> End session & download PDF
+          </Button>
+        </div>
+      </article>
+    );
+  })}{!sessions.length && <p className="av-empty">No active session.</p>}</div>;
 }
 
 function ReportEmailSettings({ apiUrl }) {
@@ -832,12 +949,27 @@ export function WardenAttendance({ apiUrl, modules }) {
     return run(() => requestJson(apiUrl, '/device/enrollment/open', { method: 'POST', body: JSON.stringify({ student_id: student, duration_seconds: 120 }) }), 'Two-minute enrollment window opened.');
   };
   const reset = () => run(() => requestJson(apiUrl, `/device/reset/${encodeURIComponent(student)}`, { method: 'POST' }), 'Device lock reset.');
-  const close = (session) => run(
-    () => requestJson(apiUrl, `/sessions/${encodeURIComponent(session.id)}/close`, { method: 'POST' }),
-    (result) => result.report_queued
-      ? 'Roll call closed; the PDF report was queued for email.'
-      : 'Roll call closed. Verify your report email to receive PDFs automatically.'
-  );
+  const close = async (session) => {
+    setError('');
+    try {
+      const result = await requestJson(apiUrl, `/sessions/${encodeURIComponent(session.id)}/close`, { method: 'POST' });
+      setMessage(result.report_queued
+        ? 'Roll call closed. Downloading the attendance report; an email copy is also queued.'
+        : 'Roll call closed. Downloading the attendance report.');
+      try {
+        await downloadPdf(
+          apiUrl,
+          `/reports/session/${encodeURIComponent(session.id)}.pdf`,
+          `${localDateString()}-${(session.wing_name || 'hostel-roll-call').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-attendance.pdf`
+        );
+      } catch (downloadError) {
+        setError(`Roll call closed, but its PDF could not be downloaded: ${extractErrorMessage(downloadError)}`);
+      }
+      await reload().catch((loadError) => setError(extractErrorMessage(loadError)));
+    } catch (closeError) {
+      setError(extractErrorMessage(closeError));
+    }
+  };
   const override = async (session, item) => {
     const reason = window.prompt(`Audit reason for ${item.roll_no}:`);
     if (!reason) return;
@@ -846,18 +978,30 @@ export function WardenAttendance({ apiUrl, modules }) {
   const tabs = [
     ...(modules?.hostel_attendance ? [{ id: 'rollcall', label: 'Wing Roll Call' }] : []),
     ...(modules?.class_attendance || modules?.hostel_attendance ? [{ id: 'devices', label: 'Device Approvals' }] : []),
+    ...(modules?.hostel_attendance ? [{ id: 'reports', label: 'Reports' }] : []),
     ...(modules?.hostel_attendance ? [{ id: 'beacons', label: 'Hostel Beacons' }] : [])
   ];
   return (
     <AttendanceShell title="Warden attendance" tabs={tabs} tab={tab} setTab={setTab} error={error} message={message} setMessage={setMessage}>
-      {tab === 'rollcall' && <section className="av-panel">
+      {tab === 'rollcall' && <section className={`av-panel${sessions.length ? ' av-live-container' : ''}`}>
+        {sessions.length ? (
+          <div className="av-live-session-stage">
+            <div className="av-row-between">
+              <div><h2>Wing roll call is live</h2><p className="av-subtitle">Record a manual check-in only if a resident cannot use their phone.</p></div>
+              <StatusPill tone="live"><span className="av-live-dot" /> LIVE</StatusPill>
+            </div>
+            <SessionCards sessions={sessions} onClose={close} onOverride={override} />
+          </div>
+        ) : (
+          <>
         <h2>Open wing roll call</h2>
         <form className="av-form-grid" onSubmit={start}><label>Wing name<input required value={wing} onChange={(event) => setWing(event.target.value)} /></label><label>Session duration<select value={duration} onChange={(event) => setDuration(event.target.value)}><option value="2">2 minutes</option><option value="3">3 minutes</option><option value="5">5 minutes</option><option value="manual">Manual stop</option></select></label><button className="av-primary" disabled={!beacons.length}>Start roll call</button></form>
         <h2>Add resident to roster</h2>
         <form className="av-form-grid" onSubmit={addMember}><label>Room<input required value={room} onChange={(event) => setRoom(event.target.value)} /></label><label>Existing student<select required value={roll} onChange={(event) => { const selected = students.find((item) => item.roll_no === event.target.value); setRoll(event.target.value); setName(selected?.student_name || ''); }}><option value="">Select roll number</option>{students.map((item) => <option key={item.user_id} value={item.roll_no}>{item.roll_no} · {item.student_name}</option>)}</select></label><button className="av-secondary" disabled={!students.length}>Add resident</button></form>
-        <SessionCards sessions={sessions} onClose={close} onOverride={override} />
+          </>
+        )}
       </section>}
-      {tab === 'rollcall' && <DailyReportsPanel apiUrl={apiUrl} scope="HOSTEL" />}
+      {tab === 'reports' && <DailyReportsPanel apiUrl={apiUrl} scope="HOSTEL" />}
       {tab === 'devices' && <section className="av-panel"><h2>Device approvals</h2><form className="av-form-grid" onSubmit={openWindow}><label>Student roll number<input required value={student} onChange={(event) => setStudent(event.target.value)} /></label><button className="av-primary">Open 120-second enrollment window</button></form><button className="av-secondary" disabled={!student} onClick={reset}>Reset device lock for phone change</button></section>}
       {tab === 'beacons' && <BeaconManager apiUrl={apiUrl} scope="HOSTEL" />}
     </AttendanceShell>
