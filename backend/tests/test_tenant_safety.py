@@ -1,3 +1,4 @@
+import io
 import os
 import re
 import sys
@@ -195,6 +196,73 @@ class TenantSafetyTests(unittest.TestCase):
                 self.assertEqual(stored["division"], "B")
             finally:
                 conn.close()
+        finally:
+            main.ACTIVE_COLLEGE_ID.reset(context_token)
+
+    def test_onboarding_year_rollover_advances_numeric_years_once_per_academic_year(self):
+        context_token = main.ACTIVE_COLLEGE_ID.set("TESTCOLLEGE")
+        student_ids = [
+            ("ROLLOVER-Y1", "1", "TESTCOLLEGE"),
+            ("ROLLOVER-Y2", "2", "TESTCOLLEGE"),
+            ("ROLLOVER-Y3", "3", "TESTCOLLEGE"),
+            ("ROLLOVER-Y4", "4", "TESTCOLLEGE"),
+            ("ROLLOVER-OTHER", "Graduate", "TESTCOLLEGE"),
+            ("ROLLOVER-OTHER-TENANT", "1", "OTHER-COLLEGE"),
+        ]
+        try:
+            conn = main.get_conn()
+            try:
+                for user_id, year, college_id in student_ids:
+                    main.db_exec(
+                        conn,
+                        """
+                        INSERT INTO users
+                            (user_id, full_name, role, department, year, division, college_id)
+                        VALUES (?, ?, 'Student', 'Civil', ?, 'A', ?)
+                        """,
+                        (user_id, user_id, year, college_id),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+
+            request = build_request([(b"host", b"api.example.edu")])
+            request.state.user = {"role": "StudentOnboarding", "user_id": "ONB-1"}
+            preview = main.preview_onboarding_year_rollover(request)
+            self.assertGreaterEqual(preview["counts"]["year_1"], 1)
+            self.assertGreaterEqual(preview["counts"]["year_2"], 1)
+            self.assertGreaterEqual(preview["counts"]["year_3"], 1)
+
+            result = main.apply_onboarding_year_rollover(
+                main.AcademicYearRolloverReq(academic_year="2026-27"),
+                request,
+            )
+            self.assertTrue(result["success"])
+            conn = main.get_conn()
+            try:
+                actual_years = {
+                    row["user_id"]: row["year"]
+                    for row in main.db_exec(
+                        conn,
+                        "SELECT user_id, year FROM users WHERE user_id LIKE 'ROLLOVER-%'",
+                    ).fetchall()
+                }
+            finally:
+                conn.close()
+            self.assertEqual(actual_years, {
+                "ROLLOVER-Y1": "2",
+                "ROLLOVER-Y2": "3",
+                "ROLLOVER-Y3": "4",
+                "ROLLOVER-Y4": "4",
+                "ROLLOVER-OTHER": "Graduate",
+                "ROLLOVER-OTHER-TENANT": "1",
+            })
+            with self.assertRaises(HTTPException) as duplicate:
+                main.apply_onboarding_year_rollover(
+                    main.AcademicYearRolloverReq(academic_year="2026-27"),
+                    request,
+                )
+            self.assertEqual(duplicate.exception.status_code, 409)
         finally:
             main.ACTIVE_COLLEGE_ID.reset(context_token)
 
@@ -1332,6 +1400,97 @@ class TenantSafetyTests(unittest.TestCase):
             self.assertIn("phone", dean)
             self.assertEqual(dean["phone"], "0261-2201500")
         finally:
+            main.ACTIVE_COLLEGE_ID.reset(context_token)
+
+    def test_founder_tenant_listing_includes_aggregate_account_counts(self):
+        context_token = main.ACTIVE_COLLEGE_ID.set("*")
+        try:
+            conn = main.get_conn()
+            try:
+                before_students = main.db_exec(
+                    conn,
+                    "SELECT COUNT(*) AS count FROM users WHERE college_id = 'TESTCOLLEGE' AND UPPER(role) = 'STUDENT'",
+                ).fetchone()["count"]
+                before_main_accounts = main.db_exec(
+                    conn,
+                    "SELECT COUNT(*) AS count FROM users WHERE college_id = 'TESTCOLLEGE' AND UPPER(role) IN ('DEAN', 'STUDENTONBOARDING', 'BEACONMANAGER')",
+                ).fetchone()["count"]
+                for user_id, role in (
+                    ("COUNT-STUDENT", "Student"),
+                    ("COUNT-DEAN", "Dean"),
+                    ("COUNT-ONBOARDING", "StudentOnboarding"),
+                    ("COUNT-BEACON", "BeaconManager"),
+                ):
+                    main.db_exec(
+                        conn,
+                        """
+                        INSERT INTO users
+                            (user_id, full_name, role, department, year, division, college_id)
+                        VALUES (?, ?, ?, '', '', '', 'TESTCOLLEGE')
+                        """,
+                        (user_id, user_id, role),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+
+            request = build_request([(b"host", b"api.example.edu")])
+            request.state.user = {"role": "Founder", "user_id": "FOUNDER"}
+            tenant = next(
+                item for item in main.list_tenants(request)
+                if item["college_id"] == "TESTCOLLEGE"
+            )
+            self.assertEqual(tenant["student_count"], before_students + 1)
+            self.assertEqual(tenant["main_account_count"], before_main_accounts + 3)
+        finally:
+            main.ACTIVE_COLLEGE_ID.reset(context_token)
+
+    def test_founder_billing_status_is_scoped_to_the_configured_razorpay_customer(self):
+        context_token = main.ACTIVE_COLLEGE_ID.set("*")
+        request = build_request([(b"host", b"api.example.edu")])
+        request.state.user = {"role": "Founder", "user_id": "FOUNDER"}
+        customer_id = "cust_12345678901234"
+        try:
+            with patch.dict(os.environ, {"RAZORPAY_KEY_ID": "", "RAZORPAY_KEY_SECRET": ""}):
+                unconfigured = main.get_founder_tenant_billing_status("TESTCOLLEGE", request)
+            self.assertEqual(unconfigured["status"], "not_configured")
+            with self.assertRaises(HTTPException) as invalid_customer:
+                main.update_founder_tenant_razorpay_customer(
+                    "TESTCOLLEGE",
+                    main.RazorpayCustomerIdReq(razorpay_customer_id="invalid"),
+                    request,
+                )
+            self.assertEqual(invalid_customer.exception.status_code, 422)
+            main.update_founder_tenant_razorpay_customer(
+                "TESTCOLLEGE",
+                main.RazorpayCustomerIdReq(razorpay_customer_id=customer_id),
+                request,
+            )
+            subscription_response = io.BytesIO(main.json.dumps({
+                "items": [
+                    {"id": "sub_match", "customer_id": customer_id, "status": "active", "created_at": 1760000000},
+                    {"id": "sub_other", "customer_id": "cust_00000000000000", "status": "active"},
+                ]
+            }).encode("utf-8"))
+            invoice_response = io.BytesIO(main.json.dumps({
+                "items": [
+                    {"id": "inv_match", "customer_id": customer_id, "status": "paid", "amount": 10000, "currency": "INR"},
+                    {"id": "inv_other", "customer_id": "cust_00000000000000", "status": "issued"},
+                ]
+            }).encode("utf-8"))
+            with patch.dict(os.environ, {"RAZORPAY_KEY_ID": "test-key", "RAZORPAY_KEY_SECRET": "test-secret"}):
+                with patch("main.urlopen", side_effect=[subscription_response, invoice_response]):
+                    result = main.get_founder_tenant_billing_status("TESTCOLLEGE", request)
+            self.assertEqual(result["status"], "ready")
+            self.assertEqual([item["id"] for item in result["subscriptions"]], ["sub_match"])
+            self.assertEqual([item["id"] for item in result["invoices"]], ["inv_match"])
+            self.assertNotIn("customer_details", result["invoices"][0])
+        finally:
+            main.update_founder_tenant_razorpay_customer(
+                "TESTCOLLEGE",
+                main.RazorpayCustomerIdReq(razorpay_customer_id=""),
+                request,
+            )
             main.ACTIVE_COLLEGE_ID.reset(context_token)
 
     def test_staff_passwords_are_hashed_and_admin_can_reset_and_sign_in(self):

@@ -44,6 +44,12 @@ Configure these environment variables on the backend host:
 - Optional warden overrides: `CW_GAJJAR_EMAIL`, `CW_BHABHA_EMAIL`,
   `CW_MTB_EMAIL`, `CW_SVB_EMAIL`, `CW_NEHRU_EMAIL`, `CW_TAGORE_EMAIL`,
   `CW_SARABHAI_EMAIL`, `CW_RAMAN_EMAIL`, and `CW_ABVB_EMAIL`.
+- Optional read-only Razorpay billing: set `RAZORPAY_KEY_ID` and
+  `RAZORPAY_KEY_SECRET` as backend deployment secrets for the shared Razorpay
+  account. The Founder maps each college to its Razorpay Customer ID in the
+  Billing view. Billing requests only read subscription and invoice status;
+  they do not create or change payments. Subscription scans are bounded to
+  2,000 records and explicitly report when that limit is reached.
 
 The Founder signs in with account ID `FOUNDER`; the seeded SVNIT Dean uses
 `DEAN`. Creating a college provisions its Dean, Student Onboarding Staff, and

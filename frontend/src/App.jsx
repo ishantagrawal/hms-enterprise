@@ -79,6 +79,8 @@ function AuthenticatedApp() {
   const [staffLoginLoading, setStaffLoginLoading] = useState(false);
   const [loginProgress, setLoginProgress] = useState(0);
   const [loginStage, setLoginStage] = useState('');
+  const [loginDisplayName, setLoginDisplayName] = useState('');
+  const [loginNeedsDeviceCheck, setLoginNeedsDeviceCheck] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(() => localStorage.getItem('vidyut_remember_me') === 'true');
   const [forgotPassword, setForgotPassword] = useState(false);
@@ -164,9 +166,10 @@ function AuthenticatedApp() {
     event.preventDefault();
     if (staffLoginLoading) return;
     setStaffLoginLoading(true);
-    setLoginProgress(10);
-    setLoginStage('Connecting to your college');
+    setLoginProgress(12);
+    setLoginStage('Verifying your credentials');
     setLoginError(null);
+    setLoginDisplayName('');
     try {
       const response = await fetch(`${API_URL}/api/auth/login`, {
         method: 'POST',
@@ -181,8 +184,8 @@ function AuthenticatedApp() {
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(extractErrorMessage(data, 'Sign-in failed.'));
 
-      setLoginProgress(48);
-      setLoginStage('Verifying your account');
+      setLoginProgress(24);
+      setLoginStage('Loading your account');
       const selectedDomain = localStorage.getItem('vidyut_tenant_domain');
       const sessionHeaders = new Headers({ Authorization: `Bearer ${data.token}` });
       if (selectedDomain) sessionHeaders.set('X-Campus-Domain', selectedDomain);
@@ -192,14 +195,16 @@ function AuthenticatedApp() {
         throw new Error(extractErrorMessage(accountData, 'Your account could not be loaded.'));
       }
       const signedInUser = accountData.user;
-
       const needsDeviceCheck = (
         signedInUser.role === 'Student' &&
         (tenant?.modules?.class_attendance || tenant?.modules?.hostel_attendance)
       );
+      setLoginDisplayName(signedInUser.full_name || signedInUser.user_id);
+      setLoginNeedsDeviceCheck(Boolean(needsDeviceCheck));
+
       if (needsDeviceCheck) {
-        setLoginProgress(72);
-        setLoginStage('Checking your secure device');
+        setLoginProgress(38);
+        setLoginStage('Checking this device');
         try {
           const deviceResponse = await fetch(`${API_URL}/api/attendance-v2/device/status`, { headers: sessionHeaders });
           if (!deviceResponse.ok) {
@@ -209,13 +214,15 @@ function AuthenticatedApp() {
         } catch (deviceError) {
           console.warn('Student device status will be checked again in the attendance portal:', deviceError);
         }
+        setLoginProgress(78);
+        setLoginStage('Loading your dashboard');
       } else {
-        setLoginProgress(80);
-        setLoginStage('Preparing your workspace');
+        setLoginProgress(62);
+        setLoginStage('Loading your dashboard');
       }
 
       setLoginProgress(92);
-      setLoginStage('Opening your campus workspace');
+      setLoginStage('Opening your dashboard');
       localStorage.removeItem('vidyut_session_token');
       localStorage.removeItem('vidyut_user');
       sessionStorage.removeItem('vidyut_session_token');
@@ -530,9 +537,66 @@ function AuthenticatedApp() {
             </div>
           </div>
         </div>
-      ) : !user ? (
-        <div className="ptm-login-screen">
+      ) : !user ? (staffLoginLoading ? (
+        <div className="ptm-login-screen ptm-login-screen--progress">
+          <section className="ptm-login-progress-hero">
+            <div className="ptm-login-brand">
+              <span className="ptm-login-logo">
+                <img src={tenant?.logo_url || '/vidyut-os-mark.svg'} alt="" onError={(event) => { event.currentTarget.style.display = 'none'; }} />
+              </span>
+              <span className="ptm-login-college">
+                <strong>{tenant?.college_name || 'College Portal'}</strong>
+                <small>Powered by Vidyut OS</small>
+              </span>
+            </div>
+            <div className="ptm-login-hero-copy">
+              <h1>Hi, {loginDisplayName || staffUsername || 'there'}.<br />One moment.</h1>
+              <p>Setting things up for you.</p>
+            </div>
+          </section>
+          <main className="ptm-login-progress-panel" aria-live="polite">
+            <div className="ptm-login-progress-title">
+              <span>{loginStage || 'Signing in'}</span>
+              <strong>{loginProgress}<small>%</small></strong>
+            </div>
+            <ProgressBar value={loginProgress} label="Sign-in progress" />
+            <ol className="ptm-login-progress-steps">
+              <li className={loginProgress >= 38 ? 'is-complete' : 'is-active'}>
+                <span className="ptm-login-step-indicator">{loginProgress >= 38 ? <Icon name="check" size={16} /> : null}</span>
+                Credentials verified
+              </li>
+              <li className={`${loginNeedsDeviceCheck ? '' : 'is-complete'}${loginNeedsDeviceCheck && loginProgress >= 38 && loginProgress < 78 ? ' is-active' : ''}${loginProgress >= 78 ? ' is-complete' : ''}`}>
+                <span className="ptm-login-step-indicator">{loginProgress >= 78 || !loginNeedsDeviceCheck ? <Icon name="check" size={16} /> : null}</span>
+                {loginNeedsDeviceCheck ? 'Checking this device' : 'Security check complete'}
+              </li>
+              <li className={loginProgress >= 78 ? 'is-active' : ''}>
+                <span className="ptm-login-step-indicator">{loginProgress >= 100 ? <Icon name="check" size={16} /> : null}</span>
+                Loading your dashboard
+              </li>
+            </ol>
+            <div className="ptm-login-skeleton" aria-hidden="true">
+              <span /><span /><i /><i />
+            </div>
+            <footer className="ptm-login-footer"><span><Icon name="lock" size={14} /> Locked to your device</span><span>Powered by Vidyut OS</span></footer>
+          </main>
+        </div>
+      ) : (
+        <div className={`ptm-login-screen${forgotPassword ? ' ptm-login-screen--forgot' : ''}`}>
           <section className="ptm-login-hero">
+            {forgotPassword && (
+              <button
+                type="button"
+                className="ptm-login-back"
+                aria-label="Back to sign in"
+                onClick={() => {
+                  setForgotPassword(false);
+                  setLoginError(null);
+                  setLoginNotice('');
+                }}
+              >
+                <Icon name="arrow" size={20} />
+              </button>
+            )}
             <div className="ptm-login-brand">
               <span className="ptm-login-logo">
                 <img
@@ -547,24 +611,21 @@ function AuthenticatedApp() {
               </span>
             </div>
             <div className="ptm-login-hero-copy">
-              <span className="ptm-login-kicker">VIDYUT OS · CAMPUS PORTAL</span>
-              <h1>Welcome to your campus.</h1>
-              <p>One secure place for attendance, campus life, and student services.</p>
+              {!forgotPassword && <span className="ptm-login-kicker">VIDYUT OS · CAMPUS PORTAL</span>}
+              <h1>{forgotPassword ? <>Forgot your<br />password?</> : <>Welcome<br />back.</>}</h1>
+              <p>{forgotPassword
+                ? 'Your onboarding desk will review your request and issue a one-time password.'
+                : 'Sign in with your roll number to mark attendance, apply for leave and more.'}</p>
             </div>
-            <button type="button" className="ptm-install-chip" onClick={handleInstallClick}>
+            {!forgotPassword && <button type="button" className="ptm-install-chip" onClick={handleInstallClick}>
               <Icon name="arrow" size={17} /> Install Vidyut OS
-            </button>
+            </button>}
           </section>
 
-          <main className="ptm-login-box" aria-labelledby="ptm-login-title">
+          <main className={`ptm-login-box${forgotPassword ? ' ptm-login-box--forgot' : ''}`} aria-labelledby="ptm-login-title">
             <div className="ptm-login-panel-head">
-              <span className="ptm-login-kicker">SECURE CAMPUS ACCESS</span>
-              <h2 id="ptm-login-title">{forgotPassword ? 'Reset your password' : 'Sign in'}</h2>
-              <p>
-                {forgotPassword
-                  ? 'Enter your username or roll number. Student Onboarding Staff will review your request.'
-                  : 'Use the credentials provided by your college.'}
-              </p>
+              {!forgotPassword && <span className="ptm-login-kicker">SECURE CAMPUS ACCESS</span>}
+              {!forgotPassword && <h2 id="ptm-login-title">Sign in</h2>}
             </div>
 
             {isNativeApp && (
@@ -596,10 +657,11 @@ function AuthenticatedApp() {
             {forgotPassword ? (
               <form className="ptm-login-form" onSubmit={handleForgotPassword}>
                 <TextField
-                  label="Username or roll number"
+                  label="Roll number"
                   id="forgot-username"
                   icon="user"
                   autoComplete="username"
+                  placeholder="e.g. 22CE047"
                   value={staffUsername}
                   onChange={(event) => setStaffUsername(event.target.value)}
                   required
@@ -610,31 +672,22 @@ function AuthenticatedApp() {
                   disabled={passwordRequestLoading || tenantDomainLoading || !canSignIn}
                   aria-busy={passwordRequestLoading}
                 >
-                  {passwordRequestLoading ? 'Sending request…' : 'Send reset request'}
-                  {!passwordRequestLoading && <Icon name="arrow" />}
+                  {passwordRequestLoading ? 'Sending request…' : 'Send request to onboarding desk'}
                 </Button>
-                <button
-                  className="ptm-login-link"
-                  type="button"
-                  onClick={() => {
-                    setForgotPassword(false);
-                    setLoginError(null);
-                    setLoginNotice('');
-                  }}
-                >
-                  Back to sign in
-                </button>
-                <p className="ptm-login-note">
-                  If the account is found, the Student Onboarding Staff will provide a one-time password.
-                </p>
+                <ol className="ptm-reset-steps">
+                  <li><span>1</span><div><strong>Request sent</strong><small>The onboarding desk gets your roll number instantly.</small></div></li>
+                  <li><span>2</span><div><strong>Desk verifies you</strong><small>They confirm it is you, then reset your password.</small></div></li>
+                  <li><span>3</span><div><strong>Sign in with the new one</strong><small>You will be asked to set your own password.</small></div></li>
+                </ol>
               </form>
             ) : (
               <form className="ptm-login-form" onSubmit={handleStaffLogin}>
                 <TextField
-                  label="Username or roll number"
+                  label="Roll number / username"
                   id="login-username"
                   icon="user"
                   autoComplete="username"
+                  placeholder="e.g. 22CE047"
                   value={staffUsername}
                   onChange={(event) => setStaffUsername(event.target.value)}
                   required
@@ -704,19 +757,19 @@ function AuthenticatedApp() {
                   </div>
                 )}
                 <p className="ptm-login-note">
-                  Students: contact Student Onboarding Staff for account access. Staff: contact your Dean.
+                  First time here? Use your 10-character one-time password from your onboarding desk. You will be asked to change it.
                 </p>
               </form>
             )}
 
             <footer className="ptm-login-footer">
-              <span>Vidyut OS</span><span>Secure campus platform</span>
+              <span><Icon name="lock" size={14} /> Locked to your device</span><span>Powered by Vidyut OS</span>
             </footer>
           </main>
         </div>
-      ) : (
+      )) : (
         <>
-          <header className="ptm-header">
+          <header className={`ptm-header${user.role === 'Student' ? ' ptm-header--student' : ''}`}>
             <div className="ptm-header-inner">
               <button type="button" className="ptm-header-left ptm-profile-trigger" onClick={() => setShowProfile(true)} aria-label="Open profile">
                 <div className="ptm-user-avatar">{initials}</div>
@@ -742,7 +795,7 @@ function AuthenticatedApp() {
             </div>
           </header>
 
-          <main className="ptm-main-container">
+          <main className={`ptm-main-container${user.role === 'Student' ? ' ptm-main-container--student' : ''}`}>
             <Suspense fallback={
               <BrandLoadingScreen />
             }>
@@ -756,7 +809,7 @@ function AuthenticatedApp() {
                   institutionEmailDomain={tenant?.allowed_email_domain}
                 />
               )}
-              {user.role === 'Student' && <StudentPortal user={user} apiUrl={API_URL} modules={modules} collegeName={tenant?.college_name} collegeLogo={tenant?.logo_url} onUserUpdate={handleStudentProfileRefresh} />}
+              {user.role === 'Student' && <StudentPortal user={user} apiUrl={API_URL} modules={modules} collegeName={tenant?.college_name} collegeLogo={tenant?.logo_url} onUserUpdate={handleStudentProfileRefresh} onLogout={handleLogout} />}
               {user.role === 'Warden' && <WardenPortal user={user} apiUrl={API_URL} modules={modules} />}
               {user.role === 'Faculty' && modules.class_attendance === true && <AttendanceOnlyPortals user={user} apiUrl={API_URL} modules={modules} />}
               {user.role === 'Faculty' && modules.class_attendance !== true && <ModuleUnavailableNotice />}

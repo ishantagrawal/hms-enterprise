@@ -15,7 +15,7 @@ const StudentLeavePassPanel = lazy(() =>
   import('./StudentSecurityServices').then((module) => ({ default: module.StudentLeavePassPanel }))
 );
 
-export default function StudentPortal({ user, apiUrl, onUserUpdate, modules, collegeName, collegeLogo }) {
+export default function StudentPortal({ user, apiUrl, onUserUpdate, onLogout, modules, collegeName, collegeLogo }) {
   const safeUser = user || {};
   const cKey = `complaints_${safeUser.user_id}`;
   const dKey = `departments_${safeUser.hostel_block}`;
@@ -41,6 +41,9 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules, col
   const [clubs, setClubs] = useState(() => getCached('clubs') || []);
   const [notices, setNotices] = useState(() => getCached('notices') || []);
   const [ads, setAds] = useState([]);
+  const [homeClassSummary, setHomeClassSummary] = useState([]);
+  const [homeHostelHistory, setHomeHostelHistory] = useState(null);
+  const [homeOpenSessions, setHomeOpenSessions] = useState([]);
   const [leavePasses, setLeavePasses] = useState(() => getCached(leavePassKey) || []);
   const [attendanceLogs, setAttendanceLogs] = useState(() => getCached(attendanceLogKey) || []);
   const [msg, setMsg] = useState(null);
@@ -134,6 +137,47 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules, col
     !showAttendance && 'Night attendance',
     !isDayScholar && !showOutpass && 'Gate outpass'
   ].filter(Boolean);
+  useEffect(() => {
+    const enabled = modules?.class_attendance || modules?.hostel_attendance;
+    if (!enabled) return undefined;
+    let active = true;
+    const loadHomeAttendance = async () => {
+      try {
+        const fetchData = async (path) => {
+          const response = await apiFetch(`${apiUrl}/api/attendance-v2${path}`);
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data.detail || `Attendance request failed (${response.status}).`);
+          return data;
+        };
+        const requests = [
+          fetchData('/student/open-sessions').then((data) => ['sessions', data])
+        ];
+        if (modules?.class_attendance) {
+          requests.push(fetchData('/student/class-summary').then((data) => ['class', data]));
+        }
+        if (modules?.hostel_attendance) {
+          requests.push(fetchData('/student/hostel-history').then((data) => ['hostel', data]));
+        }
+        const results = await Promise.all(requests);
+        if (!active) return;
+        results.forEach(([kind, data]) => {
+          if (kind === 'sessions') setHomeOpenSessions(data);
+          if (kind === 'class') setHomeClassSummary(data);
+          if (kind === 'hostel') setHomeHostelHistory(data);
+        });
+      } catch (error) {
+        if (!active) return;
+        console.error('Student home attendance sync error:', error);
+        setSyncError('Could not refresh attendance status. Open Attendance to retry.');
+      }
+    };
+    void loadHomeAttendance();
+    const timer = window.setInterval(() => { void loadHomeAttendance(); }, 15000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [apiUrl, modules?.class_attendance, modules?.hostel_attendance]);
   const profileWings = profileHostelOptions.find(
     (hostel) => hostel.name.toLowerCase() === profileDraft.hostel_block.toLowerCase()
   )?.wings || [];
@@ -482,6 +526,17 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules, col
     () => complaints.filter((complaint) => complaint.status === 'Awaiting Confirmation').length,
     [complaints]
   );
+  const classSessionsTotal = homeClassSummary.reduce((total, course) => total + Number(course.total_sessions || 0), 0);
+  const classPresentTotal = homeClassSummary.reduce((total, course) => total + Number(course.present_count || 0), 0);
+  const classAttendancePercent = classSessionsTotal
+    ? Math.round((classPresentTotal / classSessionsTotal) * 100)
+    : null;
+  const latestHomeSession = homeOpenSessions[0] || null;
+  const hostelRecords = homeHostelHistory?.records || [];
+  const latestHostelStatus = hostelRecords.length ? hostelRecords[hostelRecords.length - 1].status : '';
+  const homeSessionTime = latestHomeSession?.created_at
+    ? new Date(latestHomeSession.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : '';
 
   const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   const firstDay = new Date(calYear, calMonth, 1).getDay();
@@ -575,33 +630,40 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules, col
             {page === 'home' && (
               <div className="ptm-student-home">
                 <section className="ptm-student-welcome">
-                  <div>
-                    <span className="ptm-dashboard-kicker">STUDENT PORTAL</span>
-                    <h1>{greeting}, {studentName}</h1>
-                    <p>{collegeName || 'Your college'}{safeUser.department ? ` · ${safeUser.department}` : ''}{safeUser.year ? ` · Year ${safeUser.year}` : ''}{safeUser.division ? ` · Division ${safeUser.division}` : ''}</p>
+                  <div className="ptm-student-greeting">
+                    <div className="ptm-student-avatar" aria-hidden="true">
+                      {(safeUser.full_name || 'ST').split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}
+                    </div>
+                    <div>
+                      <span>{greeting}</span>
+                      <h1>{safeUser.full_name || studentName}</h1>
+                    </div>
                   </div>
-                  <div className="ptm-student-avatar" aria-hidden="true">
-                    {(safeUser.full_name || 'ST').split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}
-                  </div>
+                  <button className="ptm-notification-button" type="button" aria-label="Open notices" onClick={() => setPage('notices')}>
+                    <Icon name="bell" />
+                    {notices.length > 0 && <span>{notices.length}</span>}
+                  </button>
                 </section>
 
                 {showAttendanceV2 && (
                   <section className="ptm-attendance-hero">
                     <div className="ptm-attendance-hero-copy">
-                      <span className="ptm-dashboard-kicker">ATTENDANCE</span>
-                      <h2>Check in to class</h2>
-                      <p>View your attendance history and join an active class or hostel check-in.</p>
+                      <span className="ptm-live-badge"><i /> {latestHomeSession ? 'Attendance open' : 'Attendance'}</span>
+                      <h2>{latestHomeSession?.course_title || latestHomeSession?.course_code || (latestHomeSession ? 'Hostel roll call' : 'Your attendance')}</h2>
+                      <p>{latestHomeSession
+                        ? `${latestHomeSession.beacon?.name || latestHomeSession.wing_name || 'Campus'}${homeSessionTime ? ` · ${homeSessionTime}` : ''}`
+                        : 'No live session right now. Check your class and hostel attendance history.'}</p>
                     </div>
                     <Button type="button" onClick={() => setPage('attendance_v2')}>
-                      <Icon name="attendance" /> Open attendance
+                      <Icon name="attendance" /> {latestHomeSession ? 'Mark attendance' : 'View attendance'}
                     </Button>
                   </section>
                 )}
 
                 <div className="ptm-student-stats">
-                  <StatTile label="Attendance records" value={attendanceLogs.length} detail="Your recent activity" />
-                  <StatTile label="Open requests" value={complaints.filter((item) => item.status !== 'Completed').length} detail={actionNeeded ? `${actionNeeded} need your confirmation` : 'Maintenance and support'} tone={actionNeeded ? 'warning' : 'default'} />
-                  <StatTile label="Upcoming events" value={upcomingEvents.length} detail={showEvents ? 'On your campus' : 'Campus events are not enabled'} />
+                  <StatTile label="Class" value={classAttendancePercent === null ? '—' : `${classAttendancePercent}%`} detail={classSessionsTotal ? 'This semester' : 'No sessions yet'} />
+                  <StatTile label="Hostel" value={latestHostelStatus === 'PRESENT' ? 'In' : '—'} detail={homeHostelHistory?.wing_name || safeUser.wing || 'Not assigned'} />
+                  <StatTile label="Requests" value={complaints.filter((item) => item.status !== 'Completed').length} detail={actionNeeded ? `${actionNeeded} pending` : 'No pending requests'} tone={actionNeeded ? 'warning' : 'default'} />
                 </div>
 
                 {ads.map((ad) => (
@@ -633,45 +695,15 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules, col
                     )}
                   </a>
                 ))}
-                <section className="ptm-card ptm-student-residence">
-                  <div>
-                    <span className="ptm-dashboard-kicker">YOUR PROFILE</span>
-                    <h2>{isDayScholar ? 'Day scholar' : safeUser.hostel_block || 'Residence not set'}</h2>
-                    <p>{isDayScholar ? 'Campus student' : `Wing ${safeUser.wing || '—'} · Room ${safeUser.room || '—'}`}</p>
+                <section className="ptm-home-quick-actions">
+                  <h2>Quick actions</h2>
+                  <div className="ptm-home-quick-grid">
+                    {showOutpass && <button onClick={() => setPage('leave_pass')}><Icon name="calendar" /><span>Leave</span></button>}
+                    {showOutpass && <button onClick={() => setPage('leave_pass')}><Icon name="arrow" /><span>Out pass</span></button>}
+                    {showGrievances && !isDayScholar && <button onClick={() => setPage('new_complaint')}><Icon name="file" /><span>Complaint</span></button>}
+                    {showEvents && <button onClick={() => setPage('clubs_list')}><Icon name="users" /><span>Clubs</span></button>}
                   </div>
-                  <button className="ptm-text-action" onClick={openProfile}>View profile <Icon name="arrow" size={16} /></button>
                 </section>
-
-                {!isDayScholar && (showGrievances || showAttendance || showOutpass) && (
-                  <section className="ptm-card">
-                    <div className="ptm-section-title">Hostel services</div>
-                    <div className="ptm-icon-grid ptm-student-action-grid">
-                      {showGrievances && (
-                        <>
-                          <button className="ptm-icon-tile" onClick={() => setPage('new_complaint')}>
-                            <span className="ptm-icon-circle"><Icon name="file" /></span>
-                            <span className="ptm-icon-label">New maintenance request</span>
-                          </button>
-                          <button className="ptm-icon-tile" onClick={() => setPage('my_complaints')}>
-                            <span className="ptm-icon-circle">
-                              <Icon name="users" />
-                              {actionNeeded > 0 && <span className="ptm-tile-badge">{actionNeeded}</span>}
-                            </span>
-                            <span className="ptm-icon-label">My requests</span>
-                          </button>
-                        </>
-                      )}
-                      {showAttendance && <button className="ptm-icon-tile" onClick={() => setPage('attendance')}>
-                        <span className="ptm-icon-circle light"><Icon name="clock" /></span>
-                        <span className="ptm-icon-label">Night attendance</span>
-                      </button>}
-                      {showOutpass && <button className="ptm-icon-tile" onClick={() => setPage('leave_pass')}>
-                        <span className="ptm-icon-circle light"><Icon name="shield" /></span>
-                        <span className="ptm-icon-label">Leave pass</span>
-                      </button>}
-                    </div>
-                  </section>
-                )}
 
                 {modules && unavailableHostelServices.length > 0 && (
                   <div className="ptm-sync-note" role="status">
@@ -682,16 +714,15 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules, col
                 {showEvents && <section className="ptm-card ptm-upcoming-events">
                   <div className="ptm-row-between">
                     <div>
-                      <div className="ptm-section-title">Upcoming on campus</div>
-                      <p className="ptm-list-sub">Events and announcements approved by your college.</p>
+                      <div className="ptm-section-title">Upcoming events</div>
                     </div>
-                    <button className="ptm-text-action" onClick={() => setPage('events_list')}>View all <Icon name="arrow" size={16} /></button>
+                    <button className="ptm-text-action" onClick={() => setPage('calendar')}>Calendar</button>
                   </div>
                   {upcomingEvents.length ? (
                     <div className="ptm-list">
                       {upcomingEvents.map((event) => (
                         <button className="ptm-list-row ptm-event-preview" key={event.event_id} onClick={() => { setSelectedEvent(event); setPage('event_detail'); }}>
-                          <span className="ptm-event-date"><Icon name="calendar" size={18} /><span>{event.date}</span></span>
+                          <span className="ptm-event-date"><strong>{event.date?.slice(8, 10)}<small>{new Date(`${event.date}T00:00:00`).toLocaleString('en', { month: 'short' }).toUpperCase()}</small></strong></span>
                           <span className="ptm-list-main">
                             <strong className="ptm-list-title">{event.title}</strong>
                             <span className="ptm-list-sub">{event.club_id} · {event.venue}</span>
@@ -1236,6 +1267,9 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, modules, col
                     </>
                   )}
                 </div>
+                <Button variant="outline" type="button" className="ptm-profile-signout" onClick={onLogout}>
+                  Sign out
+                </Button>
               </div>
             )}
 

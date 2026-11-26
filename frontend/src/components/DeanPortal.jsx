@@ -30,6 +30,8 @@ export default function DeanPortal({ apiUrl, user, modules = {}, tenantName = 'V
   const [complaints, setComplaints] = useState(() => getCached('dean_complaints') || []);
   const [students, setStudents] = useState(() => getCached('dean_all_students') || []);
   const [studentsCount, setStudentsCount] = useState(() => getCached('dean_student_count') || 0);
+  const [attendanceToday, setAttendanceToday] = useState(null);
+  const [currentDate] = useState(() => new Date());
   const [hostels, setHostels] = useState([]);
   const [gateSecurityStaff, setGateSecurityStaff] = useState([]);
   const [hostelForm, setHostelForm] = useState({ name: '', wings: 'Wing A, Wing B, Wing C, Wing D' });
@@ -131,12 +133,37 @@ export default function DeanPortal({ apiUrl, user, modules = {}, tenantName = 'V
         setCached('dean_all_students', stArr);
         setCached('dean_student_count', stArr.length);
       }
+      const attendanceScopes = [
+        ...(modules.class_attendance ? ['CLASS'] : []),
+        ...(modules.hostel_attendance ? ['HOSTEL'] : [])
+      ];
+      if (attendanceScopes.length) {
+        try {
+          const now = new Date();
+          const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+          const reportsByScope = await Promise.all(attendanceScopes.map(async (scope) => {
+            const response = await apiFetch(`${apiUrl}/api/attendance-v2/reports/sessions?scope=${scope}&date=${encodeURIComponent(today)}`);
+            if (!response.ok) throw new Error(`Attendance summary request failed (${response.status}).`);
+            return response.json();
+          }));
+          const totals = reportsByScope.flat().reduce((summary, report) => ({
+            present: summary.present + Number(report.present || 0),
+            total: summary.total + Number(report.total || 0)
+          }), { present: 0, total: 0 });
+          setAttendanceToday(totals.total ? `${Math.round((totals.present / totals.total) * 100)}%` : null);
+        } catch (attendanceError) {
+          console.error('Dean attendance summary sync error:', attendanceError);
+          setAttendanceToday(null);
+        }
+      } else {
+        setAttendanceToday(null);
+      }
     } catch (e) {
       console.error('Dean background sync error:', e);
     } finally {
       setDataLoading(false);
     }
-  }, [apiUrl]);
+  }, [apiUrl, modules.class_attendance, modules.hostel_attendance]);
 
   useEffect(() => {
     loadDeanData();
@@ -541,6 +568,29 @@ export default function DeanPortal({ apiUrl, user, modules = {}, tenantName = 'V
   const pendingNotices = notices.filter((n) => n.status === 'Pending Dean Approval');
   const centralDepts = departments.filter((d) => d.type === 'Central');
   const deanInitials = tenantName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
+  const eventsThisMonth = events.filter((event) => {
+    const eventDate = new Date(event.date);
+    return !Number.isNaN(eventDate.getTime())
+      && eventDate.getFullYear() === currentDate.getFullYear()
+      && eventDate.getMonth() === currentDate.getMonth();
+  });
+  const approvedFundsByClub = events.reduce((totals, event) => {
+    if (event.status !== 'Approved') return totals;
+    const amount = Number(String(event.budget || '').replace(/[^\d.]/g, ''));
+    if (Number.isFinite(amount) && amount > 0) {
+      totals[event.club_id] = (totals[event.club_id] || 0) + amount;
+    }
+    return totals;
+  }, {});
+  const fundRows = Object.entries(approvedFundsByClub)
+    .map(([clubId, amount]) => ({
+      clubId,
+      clubName: clubs.find((club) => club.club_id === clubId)?.name || clubId,
+      amount
+    }))
+    .sort((first, second) => second.amount - first.amount)
+    .slice(0, 4);
+  const maxApprovedFunds = Math.max(...fundRows.map((row) => row.amount), 1);
   const deanNavItems = [
     { id: 'home', label: 'Dashboard', icon: 'home' },
     ...(showCampusLife ? [
@@ -622,77 +672,98 @@ export default function DeanPortal({ apiUrl, user, modules = {}, tenantName = 'V
                 1. DEAN DASHBOARD HOME
                 ========================================== */}
             {page === 'home' && (
-                  <div className="ptm-dean-dashboard">
-                    <header className="ptm-dashboard-heading">
-                      <div>
-                        <span className="ptm-dashboard-kicker">DEAN DASHBOARD</span>
-                        <h1>{tenantName}</h1>
-                        <p>College operations, approvals, and attendance oversight.</p>
-                      </div>
-                      <StatusPill tone={pendingEvents.length + pendingNotices.length ? 'warning' : 'success'}>
-                        {pendingEvents.length + pendingNotices.length} pending approvals
-                      </StatusPill>
-                    </header>
+              <div className="ptm-dean-dashboard">
+                <header className="ptm-dean-welcome">
+                  <div>
+                    <span className="ptm-dashboard-kicker">{currentDate.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</span>
+                    <h1>Good morning, {user?.full_name || 'Dean'}</h1>
+                    <p>Here’s what’s happening across {tenantName} today.</p>
+                  </div>
+                  <div className="ptm-dean-header-tools">
+                    <form className="ptm-dean-dashboard-search" onSubmit={(event) => { event.preventDefault(); setPage('clubs_list'); }}>
+                      <input aria-label="Search clubs, staff, and events" placeholder="Search clubs, staff, events..." value={clubSearch} onChange={(event) => setClubSearch(event.target.value)} />
+                      <button type="submit">Search</button>
+                    </form>
+                    <Button type="button" onClick={() => setPage('staff_accounts')}><Icon name="users" /> Create account</Button>
+                  </div>
+                </header>
 
-                    <div className="ptm-dean-stats">
-                      {showCampusLife && <StatTile label="Clubs & chapters" value={clubs.length} detail="Registered groups" />}
-                      {(showCampusLife || showGrievances) && <StatTile label="Students" value={studentsCount} detail="Active college accounts" />}
-                      {showCampusLife && <StatTile label="Pending approvals" value={pendingEvents.length + pendingNotices.length} detail="Events and notices" tone={pendingEvents.length + pendingNotices.length ? 'warning' : 'success'} />}
-                      {showGrievances && <StatTile label="Open maintenance tickets" value={complaints.filter((ticket) => !['Completed', 'Closed'].includes(ticket.status)).length} detail="Needs staff follow-up" />}
-                    </div>
+                <div className="ptm-dean-stats ptm-dean-reference-stats">
+                  {showAttendance && <StatTile label="Attendance today" value={attendanceToday || '—'} detail={attendanceToday ? 'Across today’s attendance sessions' : 'No attendance sessions recorded today'} />}
+                  {showCampusLife && <StatTile label="Pending approvals" value={pendingEvents.length + pendingNotices.length} detail="Events and notices" tone={pendingEvents.length + pendingNotices.length ? 'warning' : 'success'} />}
+                  {showGrievances && <StatTile label="Open complaints" value={complaints.filter((ticket) => !['Completed', 'Closed'].includes(ticket.status)).length} detail="Needs staff follow-up" />}
+                  {showCampusLife && <StatTile label="Events this month" value={eventsThisMonth.length} detail={`${monthNames[currentDate.getMonth()]} ${currentDate.getFullYear()}`} />}
+                </div>
 
-                    {showCampusLife && (
-                      <section className="ptm-card ptm-dean-approval-panel">
-                        <div className="ptm-row-between">
-                          <div>
-                            <div className="ptm-section-title">Needs your approval</div>
-                            <p className="ptm-list-sub">Review event and notice requests from campus groups.</p>
-                          </div>
-                          <button className="ptm-text-action" onClick={() => setPage('event_approvals')}>Open approvals <Icon name="arrow" size={16} /></button>
+                <div className="ptm-dean-home-grid">
+                  {showCampusLife && (
+                    <section className="ptm-card ptm-dean-approval-panel">
+                      <div className="ptm-row-between">
+                        <div>
+                          <div className="ptm-section-title">Pending approvals</div>
+                          <p className="ptm-list-sub">Review event and notice requests from campus groups.</p>
                         </div>
-                        {pendingEvents.slice(0, 3).map((event) => (
-                          <div className="ptm-approval-row" key={`event-${event.event_id}`}>
-                            <span className="ptm-approval-icon"><Icon name="calendar" /></span>
-                            <div className="ptm-approval-copy">
-                              <StatusPill tone="neutral">EVENT · {event.club_id}</StatusPill>
-                              <strong>{event.title}</strong>
-                              <small>{event.date || 'Date not set'} · {event.venue || 'Venue not set'} · Budget {event.budget || 'Not specified'}</small>
-                            </div>
-                            <div className="ptm-approval-actions">
-                              <Button variant="outline" type="button" onClick={() => handleApproveEvent(event.event_id, 'Disapproved')}>Decline</Button>
-                              <Button type="button" onClick={() => handleApproveEvent(event.event_id, 'Approved')}>Approve</Button>
-                            </div>
-                          </div>
-                        ))}
-                        {pendingNotices.slice(0, 3).map((notice) => (
-                          <div className="ptm-approval-row" key={`notice-${notice.notice_id}`}>
-                            <span className="ptm-approval-icon"><Icon name="file" /></span>
-                            <div className="ptm-approval-copy">
-                              <StatusPill tone="neutral">NOTICE · {notice.club_id}</StatusPill>
-                              <strong>{notice.title}</strong>
-                              <small>Target: {notice.target_year || 'All years'} · {notice.target_branch || 'All departments'}</small>
-                            </div>
-                            <div className="ptm-approval-actions">
-                              <Button variant="outline" type="button" onClick={() => handleApproveNotice(notice.notice_id, 'Disapproved')}>Decline</Button>
-                              <Button type="button" onClick={() => handleApproveNotice(notice.notice_id, 'Approved')}>Approve</Button>
-                            </div>
-                          </div>
-                        ))}
-                        {!pendingEvents.length && !pendingNotices.length && <p className="ptm-empty-state">All caught up. There are no pending approvals.</p>}
-                      </section>
-                    )}
-
-                    <section className="ptm-card">
-                      <div className="ptm-section-title">College administration</div>
-                      <div className="ptm-icon-grid ptm-student-action-grid">
-                        {showCampusLife && <button className="ptm-icon-tile" onClick={() => setPage('clubs_list')}><span className="ptm-icon-circle"><Icon name="users" /></span><span className="ptm-icon-label">Clubs & chapters</span></button>}
-                        {showCampusLife && <button className="ptm-icon-tile" onClick={() => setPage('calendar')}><span className="ptm-icon-circle"><Icon name="calendar" /></span><span className="ptm-icon-label">Event calendar</span></button>}
-                        <button className="ptm-icon-tile" onClick={() => setPage('wardens')}><span className="ptm-icon-circle"><Icon name="users" /></span><span className="ptm-icon-label">Hostel wardens</span></button>
-                        <button className="ptm-icon-tile" onClick={() => setPage('staff_accounts')}><span className="ptm-icon-circle"><Icon name="lock" /></span><span className="ptm-icon-label">Staff accounts</span></button>
-                        {showAttendance && <button className="ptm-icon-tile" onClick={() => setPage('attendance_reports')}><span className="ptm-icon-circle"><Icon name="attendance" /></span><span className="ptm-icon-label">Attendance reports</span></button>}
-                        {(showGrievances || showCampusLife) && <button className="ptm-icon-tile" onClick={() => setPage('reports')}><span className="ptm-icon-circle"><Icon name="file" /></span><span className="ptm-icon-label">Audit reports</span></button>}
+                        <button className="ptm-text-action" onClick={() => setPage('event_approvals')}>View all <Icon name="arrow" size={16} /></button>
                       </div>
+                      {pendingEvents.slice(0, 2).map((event) => (
+                        <div className="ptm-approval-row" key={`event-${event.event_id}`}>
+                          <span className="ptm-approval-icon"><Icon name="calendar" /></span>
+                          <div className="ptm-approval-copy">
+                            <StatusPill tone="neutral">EVENT · {event.club_id}</StatusPill>
+                            <strong>{event.title}</strong>
+                            <small>{event.date || 'Date not set'} · {event.venue || 'Venue not set'}</small>
+                          </div>
+                          <div className="ptm-approval-actions">
+                            <Button variant="outline" type="button" onClick={() => handleApproveEvent(event.event_id, 'Disapproved')}>Decline</Button>
+                            <Button type="button" onClick={() => handleApproveEvent(event.event_id, 'Approved')}>Approve</Button>
+                          </div>
+                        </div>
+                      ))}
+                      {pendingNotices.slice(0, 2).map((notice) => (
+                        <div className="ptm-approval-row" key={`notice-${notice.notice_id}`}>
+                          <span className="ptm-approval-icon"><Icon name="file" /></span>
+                          <div className="ptm-approval-copy">
+                            <StatusPill tone="neutral">NOTICE · {notice.club_id}</StatusPill>
+                            <strong>{notice.title}</strong>
+                            <small>Target: {notice.target_year || 'All years'} · {notice.target_branch || 'All departments'}</small>
+                          </div>
+                          <div className="ptm-approval-actions">
+                            <Button variant="outline" type="button" onClick={() => handleApproveNotice(notice.notice_id, 'Disapproved')}>Decline</Button>
+                            <Button type="button" onClick={() => handleApproveNotice(notice.notice_id, 'Approved')}>Approve</Button>
+                          </div>
+                        </div>
+                      ))}
+                      {!pendingEvents.length && !pendingNotices.length && <p className="ptm-empty-state">All caught up. There are no pending approvals.</p>}
                     </section>
+                  )}
+
+                  {showCampusLife && (
+                    <section className="ptm-card ptm-dean-funds-card">
+                      <div className="ptm-row-between">
+                        <div><div className="ptm-section-title">Funds by club</div><p className="ptm-list-sub">Approved event budgets</p></div>
+                        <button className="ptm-text-action" onClick={() => setPage('reports')}>Reports <Icon name="arrow" size={16} /></button>
+                      </div>
+                      {fundRows.length ? fundRows.map((row) => (
+                        <div className="ptm-dean-fund-row" key={row.clubId}>
+                          <div className="ptm-row-between"><strong>{row.clubName}</strong><span>₹{row.amount.toLocaleString('en-IN')}</span></div>
+                          <div className="ptm-dean-fund-track"><span style={{ width: `${(row.amount / maxApprovedFunds) * 100}%` }} /></div>
+                        </div>
+                      )) : <p className="ptm-empty-state">No approved event budgets recorded yet.</p>}
+                    </section>
+                  )}
+                </div>
+
+                <section className="ptm-card">
+                  <div className="ptm-section-title">Quick access</div>
+                  <div className="ptm-icon-grid ptm-student-action-grid">
+                    {showCampusLife && <button className="ptm-icon-tile" onClick={() => setPage('clubs_list')}><span className="ptm-icon-circle"><Icon name="users" /></span><span className="ptm-icon-label">Clubs & chapters</span></button>}
+                    {showCampusLife && <button className="ptm-icon-tile" onClick={() => setPage('calendar')}><span className="ptm-icon-circle"><Icon name="calendar" /></span><span className="ptm-icon-label">Event calendar</span></button>}
+                    <button className="ptm-icon-tile" onClick={() => setPage('wardens')}><span className="ptm-icon-circle"><Icon name="users" /></span><span className="ptm-icon-label">Hostel wardens</span></button>
+                    <button className="ptm-icon-tile" onClick={() => setPage('staff_accounts')}><span className="ptm-icon-circle"><Icon name="lock" /></span><span className="ptm-icon-label">Staff accounts</span></button>
+                    {showAttendance && <button className="ptm-icon-tile" onClick={() => setPage('attendance_reports')}><span className="ptm-icon-circle"><Icon name="attendance" /></span><span className="ptm-icon-label">Attendance reports</span></button>}
+                    {(showGrievances || showCampusLife) && <button className="ptm-icon-tile" onClick={() => setPage('reports')}><span className="ptm-icon-circle"><Icon name="file" /></span><span className="ptm-icon-label">Audit reports</span></button>}
+                  </div>
+                </section>
               </div>
             )}
 

@@ -120,10 +120,188 @@ function CollegeAdManager({ apiUrl, collegeId }) {
   );
 }
 
+function formatBillingAmount(amount, currency) {
+  const numericAmount = Number(amount);
+  if (!Number.isFinite(numericAmount)) return '—';
+  const currencyCode = /^[A-Z]{3}$/.test(currency || '') ? currency : 'INR';
+  try {
+    return new Intl.NumberFormat('en-IN', { style: 'currency', currency: currencyCode })
+      .format(numericAmount / 100);
+  } catch {
+    return `${currencyCode} ${(numericAmount / 100).toFixed(2)}`;
+  }
+}
+
+async function fetchBillingStatus(apiUrl, collegeId) {
+  const response = await apiFetch(`${apiUrl}/api/founder/tenants/${encodeURIComponent(collegeId)}/billing-status`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(extractErrorMessage(data, 'Could not load billing status.'));
+  return data;
+}
+
+function FounderBillingPanel({ apiUrl, tenant, onTenantUpdated }) {
+  const [customerId, setCustomerId] = useState(tenant?.razorpay_customer_id || '');
+  const [billing, setBilling] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const collegeId = tenant?.college_id;
+
+  const loadBilling = useCallback(async () => {
+    if (!collegeId) return;
+    setLoading(true);
+    setError('');
+    try {
+      setBilling(await fetchBillingStatus(apiUrl, collegeId));
+    } catch (loadError) {
+      setError(extractErrorMessage(loadError, 'Could not load billing status.'));
+    } finally {
+      setLoading(false);
+    }
+  }, [apiUrl, collegeId]);
+
+  useEffect(() => {
+    let active = true;
+    fetchBillingStatus(apiUrl, collegeId)
+      .then((data) => {
+        if (!active) return;
+        setError('');
+        setBilling(data);
+      })
+      .catch((loadError) => {
+        if (active) setError(extractErrorMessage(loadError, 'Could not load billing status.'));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [apiUrl, collegeId]);
+
+  const saveCustomerId = async (event) => {
+    event.preventDefault();
+    if (!collegeId || saving) return;
+    setSaving(true);
+    setError('');
+    setMessage('');
+    try {
+      const response = await apiFetch(`${apiUrl}/api/founder/tenants/${encodeURIComponent(collegeId)}/razorpay-customer`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ razorpay_customer_id: customerId.trim() })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(extractErrorMessage(data, 'Could not save the Razorpay Customer ID.'));
+      setCustomerId(data.razorpay_customer_id);
+      setMessage(data.razorpay_customer_id ? 'Razorpay Customer ID saved.' : 'Razorpay Customer ID removed.');
+      await onTenantUpdated();
+      await loadBilling();
+    } catch (saveError) {
+      setError(extractErrorMessage(saveError, 'Could not save the Razorpay Customer ID.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reload = () => loadBilling();
+  const subscriptions = billing?.subscriptions || [];
+  const invoices = billing?.invoices || [];
+
+  return (
+    <div className="ptm-card">
+      <div className="ptm-row-between">
+        <div>
+          <div className="ptm-section-title">Razorpay billing · {tenant?.college_name}</div>
+          <p className="ptm-list-sub">Read-only subscription and invoice status from the shared Razorpay account.</p>
+        </div>
+        <Button variant="outline" type="button" disabled={loading || !collegeId} onClick={reload}>
+          {loading ? 'Loading…' : 'Refresh'}
+        </Button>
+      </div>
+      {message && <div className="ptm-alert-success" role="status">{message}</div>}
+      {error && <div className="ptm-alert-error" role="alert">{error}</div>}
+      <form className="ptm-form-stack" onSubmit={saveCustomerId}>
+        <label className="ptm-label">
+          Razorpay Customer ID
+          <input
+            className="ptm-input"
+            value={customerId}
+            onChange={(event) => setCustomerId(event.target.value)}
+            maxLength={80}
+            placeholder="cust_..."
+            aria-describedby="ptm-razorpay-customer-help"
+          />
+        </label>
+        <p id="ptm-razorpay-customer-help" className="ptm-list-sub">Map each college to its Customer ID in the shared Razorpay account. Leave blank to remove the mapping.</p>
+        <Button type="submit" disabled={saving || !collegeId}>
+          {saving ? 'Saving…' : 'Save Customer ID'}
+        </Button>
+      </form>
+
+      {loading && <ListRowSkeleton count={2} />}
+      {!loading && billing?.status === 'not_configured' && (
+        <div className="ptm-alert-warning" role="status">{billing.message}</div>
+      )}
+      {!loading && billing?.status === 'missing_customer_id' && (
+        <div className="ptm-empty-state">{billing.message}</div>
+      )}
+      {!loading && billing?.status === 'ready' && (
+        <>
+          {!billing.subscription_scan_complete && (
+            <div className="ptm-alert-warning" role="status">Subscription scan reached its page limit. Results may be incomplete; refresh after older records are reviewed.</div>
+          )}
+          <section className="ptm-billing-section">
+            <div className="ptm-section-title">Subscriptions</div>
+            <div className="ptm-list">
+              {subscriptions.map((subscription) => (
+                <div className="ptm-list-row" key={subscription.id}>
+                  <div className="ptm-list-main">
+                    <div className="ptm-list-title">{subscription.id || 'Subscription'}</div>
+                    <div className="ptm-list-sub">
+                      Plan {subscription.plan_id || '—'} · Created {subscription.created_at ? new Date(subscription.created_at).toLocaleDateString() : '—'}
+                    </div>
+                    <div className="ptm-list-sub">
+                      Next charge {subscription.charge_at ? new Date(subscription.charge_at).toLocaleDateString() : '—'} · Paid {subscription.paid_count ?? 0}/{subscription.total_count ?? '—'}
+                    </div>
+                  </div>
+                  <StatusPill tone={subscription.status === 'active' ? 'success' : 'neutral'}>{subscription.status || 'unknown'}</StatusPill>
+                </div>
+              ))}
+              {!subscriptions.length && <p className="ptm-empty-state">No subscriptions were found for this customer.</p>}
+            </div>
+          </section>
+          <section className="ptm-billing-section">
+            <div className="ptm-section-title">Invoices</div>
+            <div className="ptm-list">
+              {invoices.map((invoice) => (
+                <div className="ptm-list-row" key={invoice.id}>
+                  <div className="ptm-list-main">
+                    <div className="ptm-list-title">{invoice.invoice_number || invoice.id || 'Invoice'}</div>
+                    <div className="ptm-list-sub">
+                      {invoice.date ? new Date(invoice.date).toLocaleDateString() : '—'} · {formatBillingAmount(invoice.amount, invoice.currency)}
+                    </div>
+                    <div className="ptm-list-sub">
+                      Paid {formatBillingAmount(invoice.amount_paid, invoice.currency)} · Due {formatBillingAmount(invoice.amount_due, invoice.currency)}
+                    </div>
+                  </div>
+                  <StatusPill tone={invoice.status === 'paid' ? 'success' : 'neutral'}>{invoice.status || 'unknown'}</StatusPill>
+                </div>
+              ))}
+              {!invoices.length && <p className="ptm-empty-state">No invoices were found for this customer.</p>}
+            </div>
+          </section>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function FounderPortal({ apiUrl, onLogout, user, tenantName = 'Vidyut OS' }) {
-  const [page, setPage] = useState('home');
+  const [page, setPage] = useState('colleges');
   usePortalBackNavigation(page, setPage);
   const [tenants, setTenants] = useState([]);
+  const [selectedCollegeId, setSelectedCollegeId] = useState('');
+  const [showCreateCollege, setShowCreateCollege] = useState(false);
   const [tenantLoading, setTenantLoading] = useState(true);
   const [tenantSaving, setTenantSaving] = useState(false);
   const [moduleSaving, setModuleSaving] = useState({});
@@ -149,6 +327,9 @@ export default function FounderPortal({ apiUrl, onLogout, user, tenantName = 'Vi
       const data = await res.json().catch(() => []);
       if (!res.ok) throw new Error(extractErrorMessage(data, 'Could not load college settings.'));
       setTenants(data);
+      setSelectedCollegeId((current) => current && data.some((tenant) => tenant.college_id === current)
+        ? current
+        : data[0]?.college_id || '');
     } catch (error) {
       setMsg(extractErrorMessage(error, 'Could not load college settings.'));
     } finally {
@@ -175,6 +356,7 @@ export default function FounderPortal({ apiUrl, onLogout, user, tenantName = 'Vi
       if (!res.ok || !data.success) throw new Error(extractErrorMessage(data, 'Could not create college.'));
       setCredentials(data.accounts || []);
       setMsg(`College ${data.college_id} configured. Share each temporary password privately; it must be changed at first sign-in.`);
+      setShowCreateCollege(false);
       setTenantForm({
         college_id: '',
         college_name: '',
@@ -247,23 +429,41 @@ export default function FounderPortal({ apiUrl, onLogout, user, tenantName = 'Vi
     0
   );
   const founderNavItems = [
-    { id: 'home', label: 'Overview', icon: 'home' },
+    { id: 'home', label: 'Dashboard', icon: 'home' },
     { id: 'colleges', label: 'Colleges', icon: 'building', count: tenants.length },
     { id: 'features', label: 'Feature access', icon: 'shield' },
+    { id: 'banners', label: 'Banners', icon: 'file' },
     { id: 'accounts', label: 'Main accounts', icon: 'users' },
-    { id: 'banners', label: 'Sponsored banners', icon: 'file' }
+    { id: 'billing', label: 'Billing', icon: 'file' }
   ];
   const founderMobileItems = founderNavItems.map((item) => ({
     ...item,
-    label: item.id === 'features' ? 'Features' : item.id === 'accounts' ? 'Accounts' : item.id === 'banners' ? 'Banners' : item.id === 'colleges' ? 'Colleges' : 'Home'
+    label: item.id === 'features' ? 'Features' : item.id === 'accounts' ? 'Accounts' : item.id === 'banners' ? 'Banners' : item.id === 'billing' ? 'Billing' : item.id === 'colleges' ? 'Colleges' : 'Home'
   }));
   const pageTitles = {
     home: 'Platform overview',
-    colleges: 'College onboarding',
+    colleges: 'Colleges',
     features: 'Feature access',
     accounts: 'Main account access',
-    banners: 'College-wide banners'
+    banners: 'College-wide banners',
+    billing: 'Billing'
   };
+  const activeTenant = tenants.find((tenant) => tenant.college_id === selectedCollegeId) || tenants[0] || null;
+  const renderTenantFeatures = (tenant) => (
+    <div className="ptm-feature-list">
+      {TENANT_MODULES.map(([moduleName, label, available = true]) => (
+        <div className="ptm-feature-row" key={moduleName}>
+          <span><strong>{label}</strong>{!available && <small>Coming soon</small>}</span>
+          <Toggle
+            label={`${label} for ${tenant.college_name}`}
+            checked={available && Boolean(tenant.modules?.[moduleName])}
+            disabled={!available || Boolean(moduleSaving[tenant.college_id])}
+            onChange={(enabled) => handleModuleChange(tenant, moduleName, enabled)}
+          />
+        </div>
+      ))}
+    </div>
+  );
   const renderTenantSection = (section) => (
     tenantLoading ? <ListRowSkeleton count={3} /> : tenants.length === 0 ? (
       <div className="ptm-empty-state">No colleges are configured yet. Add a college to get started.</div>
@@ -291,21 +491,7 @@ export default function FounderPortal({ apiUrl, onLogout, user, tenantName = 'Vi
                 </Button>
               </div>
             )}
-            {section === 'features' && (
-              <div className="ptm-feature-list">
-                {TENANT_MODULES.map(([moduleName, label, available = true]) => (
-                  <div className="ptm-feature-row" key={moduleName}>
-                    <span><strong>{label}</strong>{!available && <small>Coming soon</small>}</span>
-                    <Toggle
-                      label={`${label} for ${tenant.college_name}`}
-                      checked={available && Boolean(tenant.modules?.[moduleName])}
-                      disabled={!available || Boolean(moduleSaving[tenant.college_id])}
-                      onChange={(enabled) => handleModuleChange(tenant, moduleName, enabled)}
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
+            {section === 'features' && renderTenantFeatures(tenant)}
             {section === 'accounts' && <StaffAccountAccess apiUrl={apiUrl} user={user} collegeId={tenant.college_id} />}
             {section === 'banners' && <CollegeAdManager apiUrl={apiUrl} collegeId={tenant.college_id} />}
           </article>
@@ -346,11 +532,18 @@ export default function FounderPortal({ apiUrl, onLogout, user, tenantName = 'Vi
 
         <header className="ptm-founder-page-header">
           <div>
-            <span className="ptm-dashboard-kicker">FOUNDER CONSOLE</span>
+            {page !== 'colleges' && <span className="ptm-dashboard-kicker">FOUNDER CONSOLE</span>}
             <h1>{pageTitles[page]}</h1>
-            <p>Provision colleges, control services, and manage primary accounts.</p>
+            <p>{page === 'colleges'
+              ? 'Create a college and provision its Dean, onboarding desk, and Beacon Manager.'
+              : page === 'billing'
+                ? 'Review Razorpay subscription and invoice status for each college.'
+              : 'Provision colleges, control services, and manage primary accounts.'}</p>
           </div>
-          <Button variant="outline" type="button" onClick={onLogout}><Icon name="user" /> Sign out</Button>
+          <div className="ptm-founder-header-actions">
+            {page === 'colleges' && <Button type="button" onClick={() => setShowCreateCollege(true)}><Icon name="building" /> Add college</Button>}
+            <Button variant="outline" type="button" onClick={onLogout}><Icon name="user" /> Sign out</Button>
+          </div>
         </header>
 
         {page === 'home' && (
@@ -384,10 +577,62 @@ export default function FounderPortal({ apiUrl, onLogout, user, tenantName = 'Vi
         )}
 
         {page === 'colleges' && (
-          <div className="ptm-founder-sections">
-            <section className="ptm-card">
-              <div className="ptm-section-title">Create a college portal</div>
-              <p className="ptm-list-sub">A new college is provisioned with one Dean, Student Onboarding Staff, and Beacon Manager account.</p>
+          <div className="ptm-founder-college-page">
+            <div className="ptm-founder-stats ptm-founder-college-stats">
+              <StatTile label="Colleges" value={tenants.length} detail="Configured portals" />
+              <StatTile label="Students" value={tenants.reduce((total, tenant) => total + Number(tenant.student_count || 0), 0).toLocaleString('en-IN')} detail="Across all college portals" />
+              <StatTile label="Enabled services" value={enabledFeatures} detail="Across all colleges" />
+              <StatTile label="Main accounts" value={tenants.reduce((total, tenant) => total + Number(tenant.main_account_count || 0), 0)} detail="Dean · Onboarding · Beacon" />
+            </div>
+            <div className="ptm-founder-college-layout">
+              <section className="ptm-card ptm-founder-college-list">
+                <div className="ptm-row-between">
+                  <div><div className="ptm-section-title">Your colleges</div><p className="ptm-list-sub">Select a college to manage enabled services.</p></div>
+                </div>
+                {tenantLoading ? <ListRowSkeleton count={3} /> : tenants.map((tenant) => (
+                  <div className={`ptm-founder-college-row${activeTenant?.college_id === tenant.college_id ? ' is-selected' : ''}`} key={tenant.college_id}>
+                    <button type="button" className="ptm-founder-college-select" onClick={() => setSelectedCollegeId(tenant.college_id)}>
+                      <span className="ptm-tenant-mark">{tenant.college_name?.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'CL'}</span>
+                      <span><strong>{tenant.college_name}</strong><small>{Object.values(tenant.modules || {}).filter(Boolean).length} services enabled</small></span>
+                      <StatusPill tone={tenant.enabled ? 'success' : 'warning'}>{tenant.enabled ? 'Live' : 'Onboarding'}</StatusPill>
+                    </button>
+                    <div className="ptm-founder-college-row-actions">
+                      <Button variant="outline" type="button" onClick={() => setPage('accounts')}>Manage</Button>
+                      <Button
+                        variant="outline"
+                        type="button"
+                        disabled={Boolean(provisioningCollege)}
+                        onClick={() => provisionMissingAccounts(tenant)}
+                      >
+                        {provisioningCollege === tenant.college_id ? 'Provisioning…' : 'Provision'}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                {!tenantLoading && !tenants.length && <p className="ptm-empty-state">No colleges are configured yet.</p>}
+              </section>
+              <aside className="ptm-founder-college-side">
+                <section className="ptm-card ptm-founder-feature-card">
+                  <div className="ptm-section-title">{activeTenant?.college_name || 'College'} features</div>
+                  <p className="ptm-list-sub">Features enabled for this college.</p>
+                  {activeTenant ? renderTenantFeatures(activeTenant) : <p className="ptm-empty-state">Add a college to configure services.</p>}
+                </section>
+                <section className="ptm-founder-banner-card">
+                  <span className="ptm-dashboard-kicker">SPONSORED BANNER</span>
+                  <h2>Shown on every student’s home screen at this college.</h2>
+                  <Button variant="outline" type="button" disabled={!activeTenant} onClick={() => setPage('banners')}>Manage banner</Button>
+                </section>
+              </aside>
+            </div>
+          </div>
+        )}
+
+        {showCreateCollege && (
+          <div className="ptm-modal-backdrop" onClick={() => setShowCreateCollege(false)}>
+            <section className="ptm-modal-card ptm-founder-create-modal" role="dialog" aria-modal="true" aria-labelledby="ptm-create-college-title" onClick={(event) => event.stopPropagation()}>
+              <button type="button" className="ptm-modal-close" onClick={() => setShowCreateCollege(false)} aria-label="Close create college">×</button>
+              <h2 id="ptm-create-college-title">Create a college portal</h2>
+              <p>A new college is provisioned with one Dean, Student Onboarding Staff, and Beacon Manager account.</p>
               <form onSubmit={handleCreateTenant} className="ptm-form-stack">
                 <div className="ptm-grid-2">
                   <label className="ptm-label">College ID<input className="ptm-input" value={tenantForm.college_id} onChange={(event) => setTenantForm((current) => ({ ...current, college_id: event.target.value.toUpperCase() }))} required maxLength={40} placeholder="e.g. IITB" /></label>
@@ -407,17 +652,42 @@ export default function FounderPortal({ apiUrl, onLogout, user, tenantName = 'Vi
                 <Button type="submit" disabled={tenantSaving}>{tenantSaving ? 'Creating college…' : 'Create college'} <Icon name="arrow" /></Button>
               </form>
             </section>
-            <section className="ptm-founder-sections__list">
-              <div className="ptm-section-title">College accounts</div>
-              <p className="ptm-list-sub">Provision any missing main accounts for existing colleges.</p>
-              {renderTenantSection('colleges')}
-            </section>
           </div>
         )}
 
         {page === 'features' && <section className="ptm-founder-sections"><div><div className="ptm-section-title">College feature access</div><p className="ptm-list-sub">Each college can use only the modules enabled here.</p></div>{renderTenantSection('features')}</section>}
         {page === 'accounts' && <section className="ptm-founder-sections"><div><div className="ptm-section-title">Main account access</div><p className="ptm-list-sub">Manage or reset a college’s Dean, Student Onboarding Staff, and Beacon Manager accounts.</p></div>{renderTenantSection('accounts')}</section>}
         {page === 'banners' && <section className="ptm-founder-sections"><div><div className="ptm-section-title">College-wide student banners</div><p className="ptm-list-sub">Create or update sponsored banners for a selected college.</p></div>{renderTenantSection('banners')}</section>}
+        {page === 'billing' && (
+          <section className="ptm-founder-sections">
+            <div>
+              <div className="ptm-section-title">College billing status</div>
+              <p className="ptm-list-sub">Billing records are read-only. Configure the shared Razorpay account on the backend using RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.</p>
+            </div>
+            {tenantLoading ? <ListRowSkeleton count={2} /> : activeTenant ? (
+              <>
+                <label className="ptm-label">
+                  College
+                  <select
+                    className="ptm-input"
+                    value={activeTenant.college_id}
+                    onChange={(event) => setSelectedCollegeId(event.target.value)}
+                  >
+                    {tenants.map((tenant) => (
+                      <option key={tenant.college_id} value={tenant.college_id}>{tenant.college_name}</option>
+                    ))}
+                  </select>
+                </label>
+                <FounderBillingPanel
+                  key={activeTenant.college_id}
+                  apiUrl={apiUrl}
+                  tenant={activeTenant}
+                  onTenantUpdated={loadTenants}
+                />
+              </>
+            ) : <div className="ptm-empty-state">Create a college before configuring billing.</div>}
+          </section>
+        )}
       </main>
       <TabBar items={founderMobileItems} active={page} onChange={setPage} className="ptm-founder-tabbar" />
     </div>

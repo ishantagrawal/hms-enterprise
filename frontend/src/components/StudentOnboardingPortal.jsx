@@ -40,6 +40,10 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {}, co
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [deviceAction, setDeviceAction] = useState('');
+  const [yearRolloverPreview, setYearRolloverPreview] = useState(null);
+  const [yearRolloverLoading, setYearRolloverLoading] = useState(false);
+  const [yearRolloverSaving, setYearRolloverSaving] = useState(false);
+  const [rolloverAcademicYear, setRolloverAcademicYear] = useState('');
   const selectedStudent = students.find((student) => student.user_id === selectedStudentId) || students[0] || null;
 
   const loadStudents = useCallback(async (search = '', nextOffset = 0) => {
@@ -57,6 +61,11 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {}, co
     setResetRequests(await readJson(response, 'Could not load password reset requests.'));
   }, [apiUrl]);
 
+  const loadYearRolloverPreview = useCallback(async () => {
+    const response = await apiFetch(`${apiUrl}/api/onboarding/year-rollover/preview`);
+    setYearRolloverPreview(await readJson(response, 'Could not load the year rollover preview.'));
+  }, [apiUrl]);
+
   useEffect(() => {
     setLoading(true);
     Promise.all([loadStudents(), loadResetRequests()])
@@ -69,6 +78,14 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {}, co
       setSelectedStudentId(students[0]?.user_id || '');
     }
   }, [students, selectedStudentId]);
+
+  useEffect(() => {
+    if (page !== 'year_rollover') return;
+    setYearRolloverLoading(true);
+    loadYearRolloverPreview()
+      .catch((loadError) => setError(extractErrorMessage(loadError)))
+      .finally(() => setYearRolloverLoading(false));
+  }, [page, loadYearRolloverPreview]);
 
   const createStudent = async (event) => {
     event.preventDefault();
@@ -163,6 +180,35 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {}, co
       await Promise.all([loadStudents(query, offset), loadResetRequests()]);
     } catch (issueError) {
       setError(extractErrorMessage(issueError));
+    }
+  };
+
+  const applyYearRollover = async (event) => {
+    event.preventDefault();
+    if (yearRolloverSaving || !rolloverAcademicYear.trim()) return;
+    const counts = yearRolloverPreview?.counts || {};
+    const movingCount = Number(counts.year_1 || 0) + Number(counts.year_2 || 0) + Number(counts.year_3 || 0);
+    if (!window.confirm(`Promote ${movingCount} students for academic year ${rolloverAcademicYear.trim()}? Numeric Years 1–3 move up one year. Year 4 and other values remain unchanged.`)) return;
+    setError('');
+    setMessage('');
+    setYearRolloverSaving(true);
+    try {
+      const response = await apiFetch(`${apiUrl}/api/onboarding/year-rollover`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ academic_year: rolloverAcademicYear.trim() })
+      });
+      const data = await readJson(response, 'Could not apply the year rollover.');
+      setMessage(`${data.promoted_total} students promoted for ${data.academic_year}. Year 4 and other year values were left unchanged.`);
+      try {
+        await Promise.all([loadYearRolloverPreview(), loadStudents(query, offset)]);
+      } catch (refreshError) {
+        setError(`Rollover completed, but the latest directory or preview could not be refreshed: ${extractErrorMessage(refreshError)}`);
+      }
+    } catch (rolloverError) {
+      setError(extractErrorMessage(rolloverError));
+    } finally {
+      setYearRolloverSaving(false);
     }
   };
 
@@ -267,6 +313,7 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {}, co
   const onboardingNavItems = [
     { id: 'students', label: 'Student directory', icon: 'users', count: students.length },
     { id: 'add', label: 'Add or import students', icon: 'arrow' },
+    { id: 'year_rollover', label: 'Year rollover', icon: 'calendar' },
     { id: 'requests', label: 'Password requests', icon: 'lock', count: resetRequests.length },
     ...((modules.class_attendance || modules.hostel_attendance) ? [{ id: 'devices', label: 'Device access', icon: 'shield' }] : [])
   ];
@@ -285,7 +332,7 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {}, co
         <header className="av-onboarding-header">
           <div>
             <p className="av-kicker">STUDENT ONBOARDING</p>
-            <h1>{page === 'students' ? 'Student directory' : page === 'add' ? 'Add students' : page === 'requests' ? 'Password requests' : 'Device access'}</h1>
+            <h1>{page === 'students' ? 'Student directory' : page === 'add' ? 'Add students' : page === 'requests' ? 'Password requests' : page === 'year_rollover' ? 'Year rollover' : 'Device access'}</h1>
             <p>Signed in as {user.full_name}. Student passwords are never displayed after creation; one-time temporary passwords can be shared securely.</p>
           </div>
           {page === 'students' && <Button type="button" onClick={() => { setForm(emptyForm); setPage('add'); }}><Icon name="arrow" /> Add student</Button>}
@@ -419,6 +466,43 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {}, co
               {!resetRequests.length && <p className="av-empty">No pending password reset requests.</p>}
             </div>
           </section>
+        )}
+
+        {page === 'year_rollover' && (
+          <div className="av-rollover-grid">
+            <section className="av-panel">
+              <div><h2>Academic year rollover</h2><p className="av-subtitle">Review the affected student counts before promoting a cohort.</p></div>
+              <div className="av-rollover-stats">
+                <StatTile label="Year 1 → 2" value={yearRolloverPreview?.counts?.year_1 ?? '—'} detail="Eligible students" />
+                <StatTile label="Year 2 → 3" value={yearRolloverPreview?.counts?.year_2 ?? '—'} detail="Eligible students" />
+                <StatTile label="Year 3 → 4" value={yearRolloverPreview?.counts?.year_3 ?? '—'} detail="Eligible students" />
+                <StatTile label="Year 4 unchanged" value={yearRolloverPreview?.counts?.year_4_unchanged ?? '—'} detail="Remain active" />
+              </div>
+              <p className="av-rollover-note">Only students whose stored academic year is exactly 1, 2, or 3 are promoted. Year 4 and non-numeric/other values remain unchanged. A rollover label can be applied only once for this college.</p>
+              {yearRolloverLoading && <p className="av-subtitle">Refreshing the preview…</p>}
+              <form className="av-rollover-form" onSubmit={applyYearRollover}>
+                <label>Academic year label
+                  <input required minLength="4" maxLength="20" placeholder="e.g. 2026-27" value={rolloverAcademicYear} onChange={(event) => setRolloverAcademicYear(event.target.value)} />
+                </label>
+                <button className="av-primary" type="submit" disabled={yearRolloverLoading || yearRolloverSaving || !yearRolloverPreview || yearRolloverPreview.history?.some((item) => item.academic_year === rolloverAcademicYear.trim().toUpperCase())}>
+                  {yearRolloverSaving ? 'Promoting students…' : yearRolloverPreview?.history?.some((item) => item.academic_year === rolloverAcademicYear.trim().toUpperCase()) ? 'Already completed' : 'Preview and promote'}
+                </button>
+              </form>
+            </section>
+            <section className="av-panel">
+              <h2>Recent rollovers</h2>
+              <p className="av-subtitle">Completed operations for this college.</p>
+              <div className="av-list">
+                {yearRolloverPreview?.history?.map((item) => (
+                  <div className="av-list-row" key={item.academic_year}>
+                    <div><strong>{item.academic_year}</strong><small>{String(item.created_at || '').replace('T', ' ').slice(0, 16)} · By {item.created_by}</small></div>
+                    <StatusPill tone="success">{Number(item.promoted_counts?.year_1_to_2 || 0) + Number(item.promoted_counts?.year_2_to_3 || 0) + Number(item.promoted_counts?.year_3_to_4 || 0)} promoted</StatusPill>
+                  </div>
+                ))}
+                {!yearRolloverLoading && !yearRolloverPreview?.history?.length && <p className="av-empty">No year rollovers have been recorded.</p>}
+              </div>
+            </section>
+          </div>
         )}
 
         {page === 'add' && (

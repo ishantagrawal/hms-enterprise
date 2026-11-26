@@ -1426,6 +1426,7 @@ def student_open_sessions(request: Request):
                 "faculty_name": faculty["full_name"] if faculty else session.get("created_by"),
                 "class_group": class_group,
                 "beacon": {
+                    "name": beacon["name"],
                     "uuid": beacon["uuid"], "major": beacon["major"],
                     "minor": beacon["minor"], "min_rssi": beacon["min_rssi"],
                 },

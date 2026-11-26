@@ -23,7 +23,9 @@ from functools import lru_cache
 from html import escape as html_escape
 from datetime import datetime, time as datetime_time, timedelta, timezone
 from typing import Optional, List, Dict
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
+from urllib.error import HTTPError, URLError
+from urllib.request import Request as URLRequest, urlopen
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from webauthn import (
     generate_authentication_options,
@@ -791,9 +793,35 @@ def init_db():
             allowed_email_domain TEXT NOT NULL,
             timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata',
             logo_url TEXT NOT NULL DEFAULT '',
+            razorpay_customer_id TEXT NOT NULL DEFAULT '',
             modules_json TEXT NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL
+        )
+    ''')
+    if USE_POSTGRES:
+        db_exec(
+            conn,
+            "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS razorpay_customer_id TEXT NOT NULL DEFAULT ''",
+        )
+    else:
+        tenant_columns = {
+            column["name"]
+            for column in db_exec(conn, "PRAGMA table_info(tenants)").fetchall()
+        }
+        if "razorpay_customer_id" not in tenant_columns:
+            db_exec(
+                conn,
+                "ALTER TABLE tenants ADD COLUMN razorpay_customer_id TEXT NOT NULL DEFAULT ''",
+            )
+    db_exec(conn, '''
+        CREATE TABLE IF NOT EXISTS academic_year_rollovers (
+            college_id TEXT NOT NULL DEFAULT 'SVNIT',
+            academic_year TEXT NOT NULL,
+            promoted_counts_json TEXT NOT NULL,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (college_id, academic_year)
         )
     ''')
     db_exec(conn, '''
@@ -998,6 +1026,7 @@ def init_db():
         "push_subscriptions": "endpoint",
         "notification_outbox": "notification_id",
         "hostels": "hostel_id",
+        "academic_year_rollovers": "academic_year",
     }
     for table_name, key_column in tenant_tables.items():
         if USE_POSTGRES:
@@ -1723,6 +1752,12 @@ class TenantCreateReq(BaseModel):
 class TenantModulesReq(BaseModel):
     modules: Dict[str, bool]
 
+class AcademicYearRolloverReq(BaseModel):
+    academic_year: str = Field(min_length=4, max_length=20)
+
+class RazorpayCustomerIdReq(BaseModel):
+    razorpay_customer_id: str = Field(default="", max_length=80)
+
 class HostelConfigReq(BaseModel):
     name: str
     wings: Optional[List[str]] = None
@@ -2066,9 +2101,25 @@ def list_tenants(request: Request):
     conn = get_conn()
     try:
         rows = db_exec(conn, "SELECT * FROM tenants ORDER BY college_name").fetchall()
+        account_counts = {
+            row["college_id"]: dict(row)
+            for row in db_exec(
+                conn,
+                """
+                SELECT college_id,
+                    SUM(CASE WHEN UPPER(role) = 'STUDENT' THEN 1 ELSE 0 END) AS student_count,
+                    SUM(CASE WHEN UPPER(role) IN ('DEAN', 'STUDENTONBOARDING', 'BEACONMANAGER') THEN 1 ELSE 0 END) AS main_account_count
+                FROM users
+                GROUP BY college_id
+                """,
+            ).fetchall()
+        }
         result = []
         for row in rows:
             item = dict(row)
+            counts = account_counts.get(item["college_id"], {})
+            item["student_count"] = counts.get("student_count", 0)
+            item["main_account_count"] = counts.get("main_account_count", 0)
             item["modules"] = normalize_tenant_modules(
                 json.loads(row["modules_json"] or "{}")
             )
@@ -2076,6 +2127,194 @@ def list_tenants(request: Request):
         return result
     finally:
         conn.close()
+
+
+def _razorpay_get_json(resource: str, params: Dict[str, str], key_id: str, key_secret: str) -> Dict:
+    query = urlencode(params)
+    url = f"https://api.razorpay.com/v1/{resource}?{query}"
+    authorization = base64.b64encode(f"{key_id}:{key_secret}".encode("utf-8")).decode("ascii")
+    request = URLRequest(
+        url,
+        headers={"Authorization": f"Basic {authorization}", "Accept": "application/json"},
+        method="GET",
+    )
+    try:
+        with urlopen(request, timeout=10) as response:
+            raw = response.read(2_000_001)
+    except HTTPError as error:
+        logger.warning("Razorpay billing request failed with status %s.", error.code)
+        raise HTTPException(
+            status_code=502,
+            detail="Razorpay could not provide billing status. Check the server credentials and try again.",
+        ) from error
+    except URLError as error:
+        logger.warning("Razorpay billing service is unavailable: %s", error.reason)
+        raise HTTPException(
+            status_code=502,
+            detail="Razorpay is unavailable. Try loading billing status again later.",
+        ) from error
+    except TimeoutError as error:
+        logger.warning("Razorpay billing request timed out.")
+        raise HTTPException(
+            status_code=502,
+            detail="Razorpay did not respond in time. Try loading billing status again later.",
+        ) from error
+    if len(raw) > 2_000_000:
+        raise HTTPException(status_code=502, detail="Razorpay returned an oversized billing response.")
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=502, detail="Razorpay returned an invalid billing response.") from error
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="Razorpay returned an invalid billing response.")
+    return payload
+
+
+def _razorpay_list_subscriptions(key_id: str, key_secret: str):
+    items = []
+    skip = 0
+    for _ in range(20):
+        payload = _razorpay_get_json(
+            "subscriptions",
+            {"count": "100", "skip": str(skip)},
+            key_id,
+            key_secret,
+        )
+        batch = payload.get("items")
+        if not isinstance(batch, list):
+            raise HTTPException(status_code=502, detail="Razorpay returned an invalid subscription list.")
+        items.extend(item for item in batch if isinstance(item, dict))
+        if len(batch) < 100:
+            return items, True
+        skip += len(batch)
+    return items, False
+
+
+def _razorpay_iso_date(value):
+    try:
+        timestamp = int(value)
+    except (TypeError, ValueError):
+        return None
+    if timestamp <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+@app.put("/api/founder/tenants/{college_id}/razorpay-customer")
+def update_founder_tenant_razorpay_customer(
+    college_id: str,
+    req: RazorpayCustomerIdReq,
+    request: Request,
+):
+    if request.state.user.get("role") != "Founder":
+        raise HTTPException(status_code=403, detail="Founder access is required.")
+    normalized_id = college_id.strip().upper()
+    if not get_tenant_by_id(normalized_id, fresh=True):
+        raise HTTPException(status_code=404, detail="College not found.")
+    customer_id = req.razorpay_customer_id.strip()
+    if customer_id and not re.fullmatch(r"cust_[A-Za-z0-9]{14}", customer_id):
+        raise HTTPException(status_code=422, detail="Enter a valid Razorpay customer ID.")
+    conn = get_conn()
+    try:
+        result = db_exec(
+            conn,
+            "UPDATE tenants SET razorpay_customer_id = ? WHERE college_id = ?",
+            (customer_id, normalized_id),
+        )
+        if result.rowcount != 1:
+            raise HTTPException(status_code=404, detail="College not found.")
+        conn.commit()
+    except HTTPException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    with _TENANT_CACHE_LOCK:
+        _TENANT_CACHE.pop(normalized_id, None)
+    return {"success": True, "razorpay_customer_id": customer_id}
+
+
+@app.get("/api/founder/tenants/{college_id}/billing-status")
+def get_founder_tenant_billing_status(college_id: str, request: Request):
+    if request.state.user.get("role") != "Founder":
+        raise HTTPException(status_code=403, detail="Founder access is required.")
+    normalized_id = college_id.strip().upper()
+    tenant = get_tenant_by_id(normalized_id, fresh=True)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="College not found.")
+    customer_id = str(tenant.get("razorpay_customer_id") or "")
+    key_id = os.getenv("RAZORPAY_KEY_ID", "").strip()
+    key_secret = os.getenv("RAZORPAY_KEY_SECRET", "").strip()
+    if not key_id or not key_secret:
+        return {
+            "status": "not_configured",
+            "message": "Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in the backend environment.",
+            "razorpay_customer_id": customer_id,
+            "subscriptions": [],
+            "invoices": [],
+        }
+    if not customer_id:
+        return {
+            "status": "missing_customer_id",
+            "message": "Add this college’s Razorpay Customer ID to load its billing status.",
+            "razorpay_customer_id": "",
+            "subscriptions": [],
+            "invoices": [],
+        }
+
+    all_subscriptions, scan_complete = _razorpay_list_subscriptions(key_id, key_secret)
+    subscriptions = [
+        {
+            "id": item.get("id"),
+            "status": item.get("status"),
+            "plan_id": item.get("plan_id"),
+            "charge_at": _razorpay_iso_date(item.get("charge_at")),
+            "current_end": _razorpay_iso_date(item.get("current_end")),
+            "paid_count": item.get("paid_count"),
+            "total_count": item.get("total_count"),
+            "created_at": _razorpay_iso_date(item.get("created_at")),
+        }
+        for item in all_subscriptions
+        if item.get("customer_id") == customer_id
+    ]
+    subscriptions.sort(key=lambda item: item["created_at"] or "", reverse=True)
+
+    invoice_payload = _razorpay_get_json(
+        "invoices",
+        {"customer_id": customer_id, "count": "100"},
+        key_id,
+        key_secret,
+    )
+    invoice_items = invoice_payload.get("items")
+    if not isinstance(invoice_items, list):
+        raise HTTPException(status_code=502, detail="Razorpay returned an invalid invoice list.")
+    invoices = [
+        {
+            "id": item.get("id"),
+            "invoice_number": item.get("invoice_number") or item.get("receipt"),
+            "status": item.get("status"),
+            "amount": item.get("amount"),
+            "amount_paid": item.get("amount_paid"),
+            "amount_due": item.get("amount_due"),
+            "currency": item.get("currency"),
+            "date": _razorpay_iso_date(item.get("date")),
+            "paid_at": _razorpay_iso_date(item.get("paid_at")),
+            "expire_by": _razorpay_iso_date(item.get("expire_by")),
+        }
+        for item in invoice_items
+        if isinstance(item, dict) and item.get("customer_id") == customer_id
+    ]
+    invoices.sort(key=lambda item: item["date"] or "", reverse=True)
+    return {
+        "status": "ready",
+        "razorpay_customer_id": customer_id,
+        "subscription_scan_complete": scan_complete,
+        "subscriptions": subscriptions[:10],
+        "invoices": invoices[:10],
+    }
 
 
 def _tenant_main_account_id(prefix: str, college_id: str) -> str:
@@ -3373,6 +3612,141 @@ def list_onboarding_students(
             }
             for row in rows
         ]
+    finally:
+        conn.close()
+
+
+def _year_rollover_counts(conn, college_id: str) -> Dict[str, int]:
+    rows = db_exec(
+        conn,
+        """
+        SELECT TRIM(COALESCE(year, '')) AS academic_year, COUNT(*) AS student_count
+        FROM users
+        WHERE college_id = ? AND role = 'Student'
+        GROUP BY TRIM(COALESCE(year, ''))
+        """,
+        (college_id,),
+    ).fetchall()
+    counts = {str(row["academic_year"]): int(row["student_count"]) for row in rows}
+    known_years = {"1", "2", "3", "4"}
+    return {
+        "year_1": counts.get("1", 0),
+        "year_2": counts.get("2", 0),
+        "year_3": counts.get("3", 0),
+        "year_4_unchanged": counts.get("4", 0),
+        "other_unchanged": sum(count for year, count in counts.items() if year not in known_years),
+    }
+
+
+@app.get("/api/onboarding/year-rollover/preview")
+def preview_onboarding_year_rollover(request: Request):
+    if request.state.user.get("role") != "StudentOnboarding":
+        raise HTTPException(status_code=403, detail="Student Onboarding Staff access is required.")
+    college_id = ACTIVE_COLLEGE_ID.get()
+    conn = get_conn()
+    try:
+        history_rows = db_exec(
+            conn,
+            """
+            SELECT academic_year, promoted_counts_json, created_by, created_at
+            FROM academic_year_rollovers
+            WHERE college_id = ?
+            ORDER BY created_at DESC
+            LIMIT 10
+            """,
+            (college_id,),
+        ).fetchall()
+        history = []
+        for row in history_rows:
+            history.append({
+                "academic_year": row["academic_year"],
+                "promoted_counts": json.loads(row["promoted_counts_json"] or "{}"),
+                "created_by": row["created_by"],
+                "created_at": row["created_at"],
+            })
+        return {
+            "counts": _year_rollover_counts(conn, college_id),
+            "history": history,
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/api/onboarding/year-rollover")
+def apply_onboarding_year_rollover(req: AcademicYearRolloverReq, request: Request):
+    if request.state.user.get("role") != "StudentOnboarding":
+        raise HTTPException(status_code=403, detail="Student Onboarding Staff access is required.")
+    college_id = ACTIVE_COLLEGE_ID.get()
+    academic_year = req.academic_year.strip().upper()
+    if not academic_year:
+        raise HTTPException(status_code=422, detail="Enter an academic year label.")
+    conn = get_conn()
+    try:
+        existing = db_exec(
+            conn,
+            "SELECT 1 FROM academic_year_rollovers WHERE college_id = ? AND academic_year = ?",
+            (college_id, academic_year),
+        ).fetchone()
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail="A year rollover has already been completed for this academic year.",
+            )
+
+        counts = _year_rollover_counts(conn, college_id)
+        db_exec(
+            conn,
+            """
+            UPDATE users
+            SET year = CASE TRIM(COALESCE(year, ''))
+                WHEN '1' THEN '2'
+                WHEN '2' THEN '3'
+                WHEN '3' THEN '4'
+                ELSE year
+            END
+            WHERE college_id = ? AND role = 'Student'
+              AND TRIM(COALESCE(year, '')) IN ('1', '2', '3')
+            """,
+            (college_id,),
+        )
+        promoted_counts = {
+            "year_1_to_2": counts["year_1"],
+            "year_2_to_3": counts["year_2"],
+            "year_3_to_4": counts["year_3"],
+            "year_4_unchanged": counts["year_4_unchanged"],
+            "other_unchanged": counts["other_unchanged"],
+        }
+        db_exec(
+            conn,
+            """
+            INSERT INTO academic_year_rollovers
+                (college_id, academic_year, promoted_counts_json, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                college_id,
+                academic_year,
+                json.dumps(promoted_counts),
+                str(request.state.user.get("user_id") or ""),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+        return {
+            "success": True,
+            "academic_year": academic_year,
+            "promoted_counts": promoted_counts,
+            "promoted_total": counts["year_1"] + counts["year_2"] + counts["year_3"],
+        }
+    except HTTPException:
+        conn.rollback()
+        raise
+    except DB_INTEGRITY_ERRORS as error:
+        conn.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A year rollover has already been completed for this academic year.",
+        ) from error
     finally:
         conn.close()
 

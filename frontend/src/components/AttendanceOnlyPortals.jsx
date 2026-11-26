@@ -179,15 +179,38 @@ function AttendanceCheckIn({ apiUrl, session, onDone, onClose }) {
   };
 
   return (
-    <div className="av-overlay" onClick={onClose}>
-      <section className="av-sheet" role="dialog" aria-modal="true" aria-labelledby="av-checkin-title" onClick={(event) => event.stopPropagation()} {...dismissProps}>
-        <button className="av-close" onClick={onClose} aria-label="Close check-in">×</button>
-        <p className="av-kicker">{session.scope === 'CLASS' ? session.course_code : session.wing_name}</p>
-        <h2 id="av-checkin-title">Verify your presence</h2>
-        <div className="av-camera"><video ref={videoRef} autoPlay playsInline muted /></div>
-        <div className={`av-beacon-state ${scanner.inRange ? 'is-good' : ''}`}>
-          <span>{scanner.inRange ? 'Beacon verified' : 'Searching for room beacon'}</span>
-          <strong>{scanner.rssi === null ? '-- dBm' : `${scanner.rssi} dBm`}</strong>
+    <div className="av-checkin-screen">
+      <header className="av-checkin-header">
+        <button type="button" className="av-checkin-back" onClick={onClose} aria-label="Back to attendance">
+          <Icon name="arrow" />
+        </button>
+        <div>
+          <p>{session.scope === 'CLASS' ? session.course_title || session.course_code : 'Hostel roll call'}</p>
+          <span>{session.beacon?.name || session.wing_name || session.class_group || 'Campus beacon'}</span>
+        </div>
+      </header>
+      <main className="av-checkin-stage">
+        <span className="av-live-badge"><i /> {session.course_code || session.wing_name} · {session.beacon?.name || 'Room beacon'}</span>
+        <div className={`av-checkin-camera${cameraReady ? ' is-ready' : ''}`}>
+          <video ref={videoRef} autoPlay playsInline muted />
+          <span className="av-face-guide" aria-hidden="true"><i /><i /></span>
+        </div>
+        <h1 id="av-checkin-title">Verify your face</h1>
+        <p>Hold your phone at eye level and keep your face in the oval.</p>
+      </main>
+      <section className="av-checkin-panel" role="dialog" aria-modal="true" aria-labelledby="av-checkin-title" {...dismissProps}>
+        <div className="av-checkin-status">
+          <span className={`av-checkin-status-icon${cameraReady ? ' is-good' : ''}`}>{cameraReady ? <Icon name="check" size={16} /> : null}</span>
+          <div><strong>Device verification</strong><small>{cameraReady ? 'Camera is ready for secure verification' : 'Starting secure camera check'}</small></div>
+        </div>
+        <div className="av-checkin-status">
+          <span className={`av-checkin-status-icon${scanner.inRange ? ' is-good' : ''}`}>{scanner.inRange ? <Icon name="check" size={16} /> : null}</span>
+          <div><strong>{scanner.inRange ? `In ${session.beacon?.name || session.wing_name || 'the classroom'}` : 'Finding the room beacon'}</strong><small>{scanner.inRange ? 'Class beacon found nearby' : 'Move closer to the active beacon'}</small></div>
+          <span className="av-checkin-signal">{scanner.rssi === null ? '' : `${scanner.rssi} dBm`}</span>
+        </div>
+        <div className="av-checkin-status">
+          <span className={`av-checkin-status-icon${busy ? ' is-checking' : ''}`} />
+          <div><strong>Face check</strong><small>{busy ? 'Checking your face…' : cameraReady ? 'Ready to verify your presence' : 'Waiting for camera'}</small></div>
         </div>
         {scanner.simulationAvailable && (
           <label className="av-sim-toggle">
@@ -197,8 +220,9 @@ function AttendanceCheckIn({ apiUrl, session, onDone, onClose }) {
         )}
         {scanner.error && <p className="av-error">{scanner.error}</p>}
         {error && <p className="av-error">{error}</p>}
+        <p className="av-checkin-manual"><Icon name="file" size={17} /> Phone issue? Ask your faculty to mark you manually.</p>
         <button className="av-primary" disabled={busy || !cameraReady || !scanner.inRange} onClick={checkIn}>
-          {busy ? 'Verifying...' : 'Mark Present'}
+          {busy ? 'Verifying…' : 'Verify and mark present'}
         </button>
         <p className="av-footnote">The compressed live frame is sent for 1:1 verification and discarded after processing.</p>
       </section>
