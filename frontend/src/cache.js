@@ -1,13 +1,13 @@
 // frontend/src/cache.js
 const memoryCache = new Map();
-const STORAGE_PREFIX = 'campus_os_cache_v3_';
+const STORAGE_PREFIX = 'vidyut_os_cache_v3_';
 
 function scopedKey(key) {
-  const selectedDomain = localStorage.getItem('hms_tenant_domain');
+  const selectedDomain = localStorage.getItem('vidyut_tenant_domain');
   if (selectedDomain) return `${selectedDomain.toLowerCase()}_${key}`;
 
   try {
-    const user = JSON.parse(localStorage.getItem('hms_user') || 'null');
+    const user = JSON.parse(localStorage.getItem('vidyut_user') || 'null');
     if (user?.college_id) return `${String(user.college_id).toLowerCase()}_${key}`;
   } catch (error) {
     console.error('Cache scope read error:', error);

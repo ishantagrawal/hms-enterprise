@@ -1,4 +1,4 @@
-# HMS Enterprise
+# Vidyut OS
 
 ## Sign-in and multi-college setup
 
@@ -96,6 +96,13 @@ For Android on Windows, install Android Studio and its Android SDK, then open
 to the test phone and allow installation from that source. To use the native
 BLE scanner, enable Bluetooth and grant the app's requested nearby-device
 permissions. Re-run `npm run mobile:sync` after changing web assets or plugins.
+Vidyut OS uses the native application ID `com.vidyutos.portal`; existing
+Campus OS package installs are a separate app identity and must be replaced
+with a new installation. Update any store, signing, or notification-provider
+registrations for this ID before distributing production builds. Browser
+sessions and device-binding keys intentionally use new Vidyut OS identifiers;
+users must sign in again, and students with an existing device lock may need
+Student Onboarding Staff to reset enrollment before attendance.
 
 iOS projects are scaffolded under `frontend/ios`, but building or signing an
 iOS app requires macOS and Xcode. On a Mac, run `npm run mobile:ios` from the
@@ -212,10 +219,12 @@ are rejected.
 The Warden or Student Onboarding Staff opens a two-minute device-enrollment
 window for a resident. During that window, the student registers the app-stored
 device token. Production attendance accepts only a signed
-`HMS-<WING_ID>-<8_CHAR_HMAC>` beacon within
-the current rolling time window and stronger than -80 dBm. Student-controlled
-beacon simulation is not available; supervised test overrides must be
-explicitly scoped and time-limited by an authorized Warden.
+`VIDYUT-<WING_ID>-<8_CHAR_HMAC>` beacon within
+the current rolling time window and stronger than -80 dBm. Legacy `HMS-...`
+beacon IDs are no longer accepted; reconfigure beacon provisioning before
+rollout. Student-controlled beacon simulation is not available; supervised
+test overrides must be explicitly scoped and time-limited by an authorized
+Warden.
 
 The Face Landmarker model, MobileFaceNet ONNX graph and external weights, and
 required WebAssembly runtimes are bundled under `frontend/public/models/` for
@@ -243,7 +252,7 @@ npm install --prefix frontend
 npm run dev
 ```
 
-## Deploy the Campus OS frontend to Vercel
+## Deploy the Vidyut OS frontend to Vercel
 
 The root `vercel.json` builds `frontend/` when the Vercel project root is the
 repository. If the Vercel project root is set to `frontend`, its

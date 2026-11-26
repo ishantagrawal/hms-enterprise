@@ -1,4 +1,4 @@
-export async function downloadComplaintRegister({ title, hostel, wing, category, complaints, collegeName = 'Campus OS' }) {
+export async function downloadComplaintRegister({ title, hostel, wing, category, complaints, collegeName = 'Vidyut OS' }) {
   const [{ jsPDF }, { default: autoTable }] = await Promise.all([
     import('jspdf'),
     import('jspdf-autotable')

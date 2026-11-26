@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 os.environ["DATABASE_URL"] = ""
-_test_db_dir = tempfile.TemporaryDirectory(prefix="hms-tenant-safety-")
+_test_db_dir = tempfile.TemporaryDirectory(prefix="vidyut-tenant-safety-")
 os.environ["DB_FILE"] = os.path.join(_test_db_dir.name, "test.db")
 os.environ["AUTH_SECRET"] = "unit-test-secret-with-at-least-32-characters"
 
@@ -1958,7 +1958,7 @@ class TenantSafetyTests(unittest.TestCase):
                 f"A:{beacon_slot}".encode(),
                 main.hashlib.sha256,
             ).hexdigest()[:8]
-            beacon_id = f"HMS-A-{beacon_signature}"
+            beacon_id = f"VIDYUT-A-{beacon_signature}"
             device_token = "a" * 64
             token_hash = main.hashlib.sha256(device_token.encode("ascii")).hexdigest()
             today = datetime.now(main.ZoneInfo("Asia/Kolkata")).date().isoformat()
@@ -2135,6 +2135,11 @@ class TenantSafetyTests(unittest.TestCase):
                 request,
             )
         self.assertEqual(wrong_beacon.exception.status_code, 403)
+
+    def test_vidyut_beacon_identity_rejects_legacy_hms_prefix(self):
+        self.assertTrue(main.is_valid_vidyut_beacon_id("VIDYUT-A-0123abcd"))
+        self.assertFalse(main.is_valid_vidyut_beacon_id("HMS-A-0123abcd"))
+        self.assertFalse(main.is_valid_vidyut_beacon_id("VIDYUT-A-1234567"))
 
     def test_attendance_beacon_window_uses_college_local_date(self):
         hostel = {"attendance_start_time": "21:00", "attendance_end_time": "02:00"}

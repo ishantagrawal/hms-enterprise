@@ -84,8 +84,8 @@ function useDismissSheet(onClose) {
       event.preventDefault();
       onClose();
     };
-    window.addEventListener('hms-native-back', handleBack);
-    return () => window.removeEventListener('hms-native-back', handleBack);
+    window.addEventListener('vidyut-native-back', handleBack);
+    return () => window.removeEventListener('vidyut-native-back', handleBack);
   }, [onClose]);
   return {
     onTouchStart: (event) => { startY.current = event.touches[0]?.clientY ?? null; },
@@ -432,7 +432,7 @@ function AttendanceHistorySheet({ course, onClose }) {
 function AttendanceShell({ title, tabs, tab, setTab, children, error, message, setMessage, bottomTabs = false }) {
   return (
     <div className="av-root">
-      <header className="av-heading"><span className="av-brand-mark">OS</span><div><p className="av-kicker">CAMPUS OS</p><h1>{title}</h1></div></header>
+      <header className="av-heading"><span className="av-brand-mark">VO</span><div><p className="av-kicker">VIDYUT OS</p><h1>{title}</h1></div></header>
       {tabs.length > 1 && <nav className={`av-tabs ${bottomTabs ? 'av-bottom-tabs' : ''}`} aria-label="Attendance sections">{tabs.map((item) => <button key={item.id} className={tab === item.id ? 'is-active' : ''} onClick={() => setTab(item.id)}>{item.label}</button>)}</nav>}
       {error && <p className="av-error">{error}</p>}
       {message && <button className="av-message" onClick={() => setMessage('')}>{message} ×</button>}
@@ -503,8 +503,8 @@ function BeaconManagerPortal({ apiUrl, modules }) {
   return (
     <div className="av-root">
       <header className="av-heading">
-        <span className="av-brand-mark">OS</span>
-        <div><p className="av-kicker">CAMPUS OS</p><h1>Beacon management</h1></div>
+        <span className="av-brand-mark">VO</span>
+        <div><p className="av-kicker">VIDYUT OS</p><h1>Beacon management</h1></div>
       </header>
       {!scopes.length && <p className="av-empty">Beacon attendance modules are not enabled for this college.</p>}
       {scopes.map((scope) => <BeaconManager key={scope} apiUrl={apiUrl} scope={scope} />)}
@@ -774,7 +774,7 @@ export function DeanAttendanceOverview({ apiUrl, modules = {} }) {
   if (!tabs.length) return null;
   return (
     <div className="av-root">
-      <header className="av-heading"><span className="av-brand-mark">OS</span><div><p className="av-kicker">CAMPUS OS</p><h1>Attendance reports</h1></div></header>
+      <header className="av-heading"><span className="av-brand-mark">VO</span><div><p className="av-kicker">VIDYUT OS</p><h1>Attendance reports</h1></div></header>
       {tabs.length > 1 && <nav className="av-tabs" aria-label="Attendance report scopes">{tabs.map((item) => <button key={item.id} className={scope === item.id ? 'is-active' : ''} onClick={() => setScope(item.id)}>{item.label}</button>)}</nav>}
       <DailyReportsPanel apiUrl={apiUrl} scope={scope} showEmailSettings={false} />
     </div>

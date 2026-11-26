@@ -1,4 +1,4 @@
-package com.hmsenterprise.portal;
+package com.vidyutos.portal;
 
 import com.getcapacitor.BridgeActivity;
 

@@ -279,7 +279,7 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
               Sign Out
             </button>
           </div>
-          <h1 className="ptm-page-title">Campus OS Founder Console</h1>
+          <h1 className="ptm-page-title">Vidyut OS Founder Console</h1>
           <p className="ptm-page-sub">Provision colleges and their three main accounts, manage tenant features, and reset main-account passwords.</p>
         </div>
 

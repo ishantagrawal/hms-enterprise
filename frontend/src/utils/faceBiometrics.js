@@ -10,7 +10,7 @@ async function loadCachedModel() {
     return new Uint8Array(await response.arrayBuffer());
   }
 
-  const cache = await caches.open('hms-face-model-v1');
+  const cache = await caches.open('vidyut-face-model-v1');
   let response = await cache.match(modelUrl);
   if (!response) {
     response = await fetch(modelUrl);

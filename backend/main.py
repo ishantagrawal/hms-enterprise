@@ -4189,6 +4189,13 @@ def action_digital_leave(req: LeaveActionReq, request: Request):
         conn.close()
 
 
+_VIDYUT_BEACON_ID_PATTERN = re.compile(r"VIDYUT-[A-Za-z0-9_-]+-[A-Fa-f0-9]{8}")
+
+
+def is_valid_vidyut_beacon_id(beacon_id: str) -> bool:
+    return bool(_VIDYUT_BEACON_ID_PATTERN.fullmatch(beacon_id))
+
+
 def leave_return_challenge_purpose(leave_pass, request_body) -> str:
     challenge_context = {
         "college_id": ACTIVE_COLLEGE_ID.get(),
@@ -4256,8 +4263,8 @@ def validate_leave_return_request(conn, request_body, request: Request, for_upda
         raise HTTPException(status_code=409, detail=f"Your Warden has not configured the {student['wing']} beacon yet.")
     if request_body.wing_beacon_id != expected_beacon:
         raise HTTPException(status_code=403, detail="The detected beacon does not match your assigned hostel wing.")
-    if not re.fullmatch(r"HMS-[A-Za-z0-9_-]+-[A-Fa-f0-9]{8}", request_body.wing_beacon_id):
-        raise HTTPException(status_code=403, detail="The beacon identity is not a valid HMS beacon.")
+    if not is_valid_vidyut_beacon_id(request_body.wing_beacon_id):
+        raise HTTPException(status_code=403, detail="The beacon identity is not a valid Vidyut beacon.")
     wing_id = request_body.wing_beacon_id.split("-", 2)[1]
     secret = BEACON_HMAC_SECRETS.get(wing_id)
     if not isinstance(secret, str) or not any(
@@ -5422,8 +5429,8 @@ def verify_device_beacon(student, req, hostel):
         raise HTTPException(status_code=409, detail=f"Your Warden has not configured the {student['wing']} beacon yet.")
     if req.wing_beacon_id != expected_beacon:
         raise HTTPException(status_code=403, detail="The detected beacon does not match your assigned hostel wing.")
-    if not re.fullmatch(r"HMS-[A-Za-z0-9_-]+-[A-Fa-f0-9]{8}", req.wing_beacon_id):
-        raise HTTPException(status_code=403, detail="The beacon identity is not a valid HMS beacon.")
+    if not is_valid_vidyut_beacon_id(req.wing_beacon_id):
+        raise HTTPException(status_code=403, detail="The beacon identity is not a valid Vidyut beacon.")
     wing_id = req.wing_beacon_id.split("-", 2)[1]
     secret = BEACON_HMAC_SECRETS.get(wing_id)
     if not isinstance(secret, str) or not secret:

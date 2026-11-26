@@ -75,16 +75,16 @@ function AuthenticatedApp() {
   const [staffUsername, setStaffUsername] = useState('');
   const [staffPassword, setStaffPassword] = useState('');
   const [staffLoginLoading, setStaffLoginLoading] = useState(false);
-  const [rememberMe, setRememberMe] = useState(() => localStorage.getItem('hms_remember_me') === 'true');
+  const [rememberMe, setRememberMe] = useState(() => localStorage.getItem('vidyut_remember_me') === 'true');
   const [forgotPassword, setForgotPassword] = useState(false);
   const [passwordRequestLoading, setPasswordRequestLoading] = useState(false);
   const [loginNotice, setLoginNotice] = useState('');
   const [tenant, setTenant] = useState(null);
   const [tenantDomain, setTenantDomain] = useState(
-    () => localStorage.getItem('hms_tenant_domain') || (isNativeApp ? 'svnitcampus.in' : '')
+    () => localStorage.getItem('vidyut_tenant_domain') || (isNativeApp ? 'svnitcampus.in' : '')
   );
   const [tenantDomainConnected, setTenantDomainConnected] = useState(
-    () => !isNativeApp || Boolean(localStorage.getItem('hms_tenant_domain'))
+    () => !isNativeApp || Boolean(localStorage.getItem('vidyut_tenant_domain'))
   );
   const [tenantDomainLoading, setTenantDomainLoading] = useState(false);
   const [tenantDomainError, setTenantDomainError] = useState('');
@@ -110,7 +110,7 @@ function AuthenticatedApp() {
   useEffect(() => {
     let active = true;
     const loadTenantConfig = () => {
-      const selectedDomain = localStorage.getItem('hms_tenant_domain');
+      const selectedDomain = localStorage.getItem('vidyut_tenant_domain');
       const headers = selectedDomain ? { 'X-Campus-Domain': selectedDomain } : undefined;
       fetch(`${API_URL}/api/tenant`, { headers })
         .then((response) => {
@@ -136,7 +136,7 @@ function AuthenticatedApp() {
         })
         .catch((error) => {
           if (!active) return;
-          if (isNativeApp && localStorage.getItem('hms_tenant_domain')) setTenantDomainConnected(false);
+          if (isNativeApp && localStorage.getItem('vidyut_tenant_domain')) setTenantDomainConnected(false);
           setTenant((current) => (
             current && Object.values(current.modules || {}).some((enabled) => enabled === true)
               ? { ...current, modules: {} }
@@ -165,22 +165,22 @@ function AuthenticatedApp() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(localStorage.getItem('hms_tenant_domain')
-            ? { 'X-Campus-Domain': localStorage.getItem('hms_tenant_domain') }
+          ...(localStorage.getItem('vidyut_tenant_domain')
+            ? { 'X-Campus-Domain': localStorage.getItem('vidyut_tenant_domain') }
             : {})
         },
         body: JSON.stringify({ username: staffUsername, password: staffPassword })
       });
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(extractErrorMessage(data, 'Sign-in failed.'));
-      localStorage.removeItem('hms_session_token');
-      localStorage.removeItem('hms_user');
-      sessionStorage.removeItem('hms_session_token');
-      sessionStorage.removeItem('hms_user');
+      localStorage.removeItem('vidyut_session_token');
+      localStorage.removeItem('vidyut_user');
+      sessionStorage.removeItem('vidyut_session_token');
+      sessionStorage.removeItem('vidyut_user');
       const credentialStore = rememberMe ? localStorage : sessionStorage;
-      credentialStore.setItem('hms_session_token', data.token);
-      localStorage.removeItem('hms_google_credential');
-      credentialStore.setItem('hms_user', JSON.stringify(data.user));
+      credentialStore.setItem('vidyut_session_token', data.token);
+      localStorage.removeItem('vidyut_google_credential');
+      credentialStore.setItem('vidyut_user', JSON.stringify(data.user));
       setStaffPassword('');
       setProfileDraft(profileDraftFromUser(data.user));
       setUser(data.user);
@@ -202,8 +202,8 @@ function AuthenticatedApp() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(localStorage.getItem('hms_tenant_domain')
-            ? { 'X-Campus-Domain': localStorage.getItem('hms_tenant_domain') }
+          ...(localStorage.getItem('vidyut_tenant_domain')
+            ? { 'X-Campus-Domain': localStorage.getItem('vidyut_tenant_domain') }
             : {})
         },
         body: JSON.stringify({ username: staffUsername })
@@ -231,15 +231,15 @@ function AuthenticatedApp() {
     setTenantDomainLoading(true);
     setTenantDomainError('');
     setTenant(null);
-    const previousDomain = localStorage.getItem('hms_tenant_domain');
+    const previousDomain = localStorage.getItem('vidyut_tenant_domain');
     if (previousDomain !== domain) {
-      localStorage.removeItem('hms_session_token');
-      localStorage.removeItem('hms_user');
-      sessionStorage.removeItem('hms_session_token');
-      sessionStorage.removeItem('hms_user');
+      localStorage.removeItem('vidyut_session_token');
+      localStorage.removeItem('vidyut_user');
+      sessionStorage.removeItem('vidyut_session_token');
+      sessionStorage.removeItem('vidyut_user');
       setUser(null);
     }
-    localStorage.setItem('hms_tenant_domain', domain);
+    localStorage.setItem('vidyut_tenant_domain', domain);
     setTenantDomain(domain);
 
     try {
@@ -268,35 +268,35 @@ function AuthenticatedApp() {
 
   useEffect(() => {
     const restoreSession = async () => {
-      localStorage.removeItem('hms_google_credential');
-      const credentialStore = localStorage.getItem('hms_session_token') ? localStorage : sessionStorage;
-      const credential = credentialStore.getItem('hms_session_token');
-      const cachedUser = credentialStore.getItem('hms_user');
+      localStorage.removeItem('vidyut_google_credential');
+      const credentialStore = localStorage.getItem('vidyut_session_token') ? localStorage : sessionStorage;
+      const credential = credentialStore.getItem('vidyut_session_token');
+      const cachedUser = credentialStore.getItem('vidyut_user');
       if (credential && cachedUser) {
         try {
           const parsed = JSON.parse(cachedUser);
           setProfileDraft(profileDraftFromUser(parsed));
           setUser(parsed);
         } catch {
-          credentialStore.removeItem('hms_user');
+          credentialStore.removeItem('vidyut_user');
         }
         // Render the cached portal immediately, then validate the session in the background.
         apiFetch(`${API_URL}/api/auth/me`)
           .then(async (res) => {
             if (!res.ok) throw new Error('Session expired');
             const data = await res.json();
-            credentialStore.setItem('hms_session_token', credential);
-            localStorage.removeItem('hms_google_credential');
-            credentialStore.setItem('hms_user', JSON.stringify(data.user));
+            credentialStore.setItem('vidyut_session_token', credential);
+            localStorage.removeItem('vidyut_google_credential');
+            credentialStore.setItem('vidyut_user', JSON.stringify(data.user));
             setProfileDraft(profileDraftFromUser(data.user));
             setUser(data.user);
           })
           .catch(() => {
-            localStorage.removeItem('hms_session_token');
-            localStorage.removeItem('hms_google_credential');
-            localStorage.removeItem('hms_user');
-            sessionStorage.removeItem('hms_session_token');
-            sessionStorage.removeItem('hms_user');
+            localStorage.removeItem('vidyut_session_token');
+            localStorage.removeItem('vidyut_google_credential');
+            localStorage.removeItem('vidyut_user');
+            sessionStorage.removeItem('vidyut_session_token');
+            sessionStorage.removeItem('vidyut_user');
             setUser(null);
           });
       }
@@ -309,20 +309,20 @@ function AuthenticatedApp() {
       setDeferredPrompt(e);
     };
     const handleAuthExpired = () => {
-      localStorage.removeItem('hms_session_token');
-      localStorage.removeItem('hms_google_credential');
-      localStorage.removeItem('hms_user');
-      sessionStorage.removeItem('hms_session_token');
-      sessionStorage.removeItem('hms_user');
+      localStorage.removeItem('vidyut_session_token');
+      localStorage.removeItem('vidyut_google_credential');
+      localStorage.removeItem('vidyut_user');
+      sessionStorage.removeItem('vidyut_session_token');
+      sessionStorage.removeItem('vidyut_user');
       setUser(null);
       setShowProfile(false);
       setLoginError('Your session expired. Please sign in again.');
     };
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    window.addEventListener('hms-auth-expired', handleAuthExpired);
+    window.addEventListener('vidyut-auth-expired', handleAuthExpired);
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-      window.removeEventListener('hms-auth-expired', handleAuthExpired);
+      window.removeEventListener('vidyut-auth-expired', handleAuthExpired);
     };
   }, []);
 
@@ -332,7 +332,7 @@ function AuthenticatedApp() {
     let listenerHandle;
     import('@capacitor/app')
       .then(({ App: NativeApp }) => NativeApp.addListener('backButton', ({ canGoBack }) => {
-        const event = new Event('hms-native-back', { cancelable: true });
+        const event = new Event('vidyut-native-back', { cancelable: true });
         const handled = !window.dispatchEvent(event);
         if (!handled) {
           if (canGoBack) window.history.back();
@@ -376,8 +376,8 @@ function AuthenticatedApp() {
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(extractErrorMessage(data, 'Could not save your profile.'));
-      const credentialStore = localStorage.getItem('hms_session_token') ? localStorage : sessionStorage;
-      credentialStore.setItem('hms_user', JSON.stringify(data.user));
+      const credentialStore = localStorage.getItem('vidyut_session_token') ? localStorage : sessionStorage;
+      credentialStore.setItem('vidyut_user', JSON.stringify(data.user));
       setProfileDraft(profileDraftFromUser(data.user));
       setUser(data.user);
     } catch (error) {
@@ -390,32 +390,32 @@ function AuthenticatedApp() {
   const handleStudentProfileRefresh = useCallback((updatedUser) => {
     setUser((currentUser) => {
       const mergedUser = { ...currentUser, ...updatedUser };
-      const credentialStore = localStorage.getItem('hms_session_token') ? localStorage : sessionStorage;
-      credentialStore.setItem('hms_user', JSON.stringify(mergedUser));
+      const credentialStore = localStorage.getItem('vidyut_session_token') ? localStorage : sessionStorage;
+      credentialStore.setItem('vidyut_user', JSON.stringify(mergedUser));
       return mergedUser;
     });
   }, []);
 
   const handlePasswordChangeComplete = useCallback((data) => {
-    localStorage.removeItem('hms_session_token');
-    localStorage.removeItem('hms_user');
-    sessionStorage.removeItem('hms_session_token');
-    sessionStorage.removeItem('hms_user');
-    const credentialStore = localStorage.getItem('hms_remember_me') === 'true'
+    localStorage.removeItem('vidyut_session_token');
+    localStorage.removeItem('vidyut_user');
+    sessionStorage.removeItem('vidyut_session_token');
+    sessionStorage.removeItem('vidyut_user');
+    const credentialStore = localStorage.getItem('vidyut_remember_me') === 'true'
       ? localStorage
       : sessionStorage;
-    credentialStore.setItem('hms_session_token', data.token);
-    credentialStore.setItem('hms_user', JSON.stringify(data.user));
+    credentialStore.setItem('vidyut_session_token', data.token);
+    credentialStore.setItem('vidyut_user', JSON.stringify(data.user));
     setUser(data.user);
     setShowPasswordChange(false);
   }, []);
 
   const handleLogout = () => {
-    localStorage.removeItem('hms_user');
-    localStorage.removeItem('hms_session_token');
-    localStorage.removeItem('hms_google_credential');
-    sessionStorage.removeItem('hms_user');
-    sessionStorage.removeItem('hms_session_token');
+    localStorage.removeItem('vidyut_user');
+    localStorage.removeItem('vidyut_session_token');
+    localStorage.removeItem('vidyut_google_credential');
+    sessionStorage.removeItem('vidyut_user');
+    sessionStorage.removeItem('vidyut_session_token');
     setUser(null);
     setShowProfile(false);
   };
@@ -446,7 +446,7 @@ function AuthenticatedApp() {
   const modules = tenant?.modules || {};
   const canSignIn = !isNativeApp || (
     tenantDomainConnected &&
-    tenantDomain.trim().toLowerCase() === (localStorage.getItem('hms_tenant_domain') || '')
+    tenantDomain.trim().toLowerCase() === (localStorage.getItem('vidyut_tenant_domain') || '')
   );
 
   return (
@@ -458,7 +458,7 @@ function AuthenticatedApp() {
           <div className="ptm-page-wrap">
             <div className="ptm-drill-header">
               <button className="ptm-back-btn" onClick={() => setShowInstallHelp(false)}>←</button>
-              <h1 className="ptm-page-title">Install Campus OS</h1>
+              <h1 className="ptm-page-title">Install Vidyut OS</h1>
             </div>
             <div className="ptm-card">
               <div className="ptm-section-title">Download on Your Phone</div>
@@ -490,7 +490,7 @@ function AuthenticatedApp() {
             <div className="ptm-login-top-row">
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <img
-                  src={tenant?.logo_url || '/campus-os-mark.svg'}
+                  src={tenant?.logo_url || '/vidyut-os-mark.svg'}
                   alt={tenant?.college_name || 'College'}
                   style={{ width: '32px', height: '32px', objectFit: 'contain' }}
                   onError={(e) => { e.currentTarget.style.display = 'none'; }}
@@ -567,7 +567,7 @@ function AuthenticatedApp() {
                     checked={rememberMe}
                     onChange={(event) => {
                       setRememberMe(event.target.checked);
-                      localStorage.setItem('hms_remember_me', String(event.target.checked));
+                      localStorage.setItem('vidyut_remember_me', String(event.target.checked));
                     }}
                   />
                   Remember me on this device

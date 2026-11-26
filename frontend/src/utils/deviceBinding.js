@@ -3,7 +3,7 @@ import { Preferences } from '@capacitor/preferences';
 function bindingStorageKey(user) {
   const collegeId = user?.college_id || 'college';
   const studentId = user?.user_id || 'student';
-  return `hms_device_binding_${collegeId}_${studentId}`;
+  return `vidyut_device_binding_${collegeId}_${studentId}`;
 }
 
 export async function getOrCreateDeviceBindingToken(user) {

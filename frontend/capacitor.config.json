@@ -1,6 +1,6 @@
 {
-  "appId": "com.hmsenterprise.portal",
-  "appName": "Campus OS",
+  "appId": "com.vidyutos.portal",
+  "appName": "Vidyut OS",
   "webDir": "dist",
   "plugins": {
     "CapacitorUpdater": {

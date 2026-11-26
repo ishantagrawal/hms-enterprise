@@ -10,9 +10,9 @@ const ALLOWED_API_ORIGINS = new Set([
 
 export async function apiFetch(input, init = {}) {
   const headers = new Headers(init.headers || {});
-  const tenantDomain = localStorage.getItem('hms_tenant_domain');
-  const credential = localStorage.getItem('hms_session_token')
-    || sessionStorage.getItem('hms_session_token');
+  const tenantDomain = localStorage.getItem('vidyut_tenant_domain');
+  const credential = localStorage.getItem('vidyut_session_token')
+    || sessionStorage.getItem('vidyut_session_token');
   const requestUrl = typeof input === 'string' ? input : input.url;
   const targetOrigin = new URL(requestUrl, window.location.origin).origin;
 
@@ -23,11 +23,11 @@ export async function apiFetch(input, init = {}) {
 
   const response = await fetch(input, { ...init, headers });
   if (response.status === 401 && credential && ALLOWED_API_ORIGINS.has(targetOrigin)) {
-    localStorage.removeItem('hms_session_token');
-    localStorage.removeItem('hms_user');
-    sessionStorage.removeItem('hms_session_token');
-    sessionStorage.removeItem('hms_user');
-    window.dispatchEvent(new Event('hms-auth-expired'));
+    localStorage.removeItem('vidyut_session_token');
+    localStorage.removeItem('vidyut_user');
+    sessionStorage.removeItem('vidyut_session_token');
+    sessionStorage.removeItem('vidyut_user');
+    window.dispatchEvent(new Event('vidyut-auth-expired'));
   }
   if (!response.ok && response.headers.get('content-type')?.includes('application/json')) {
     const data = await response.clone().json().catch(() => null);

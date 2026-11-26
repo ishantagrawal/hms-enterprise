@@ -7,7 +7,7 @@ import { GridCardSkeleton } from './SkeletonLoader';
 import usePortalBackNavigation from '../hooks/usePortalBackNavigation';
 import { escapeHtml } from '../utils/html';
 
-export default function DeanPortal({ apiUrl, user, modules = {}, tenantName = 'Campus OS', institutionEmailDomain = '' }) {
+export default function DeanPortal({ apiUrl, user, modules = {}, tenantName = 'Vidyut OS', institutionEmailDomain = '' }) {
   const [page, setPage] = useState('home');
   usePortalBackNavigation(page, setPage);
   const [dataLoading, setDataLoading] = useState(false);
@@ -477,7 +477,7 @@ export default function DeanPortal({ apiUrl, user, modules = {}, tenantName = 'C
           <div class="hdr">
             <div>
               <h1>${escapeHtml(tenantName)} — OFFICE OF THE DEAN</h1>
-              <p>Official Club Events, Hostel Grievance & Resident Audit Report • Generated via Campus OS</p>
+              <p>Official Club Events, Hostel Grievance & Resident Audit Report • Generated via Vidyut OS</p>
             </div>
             <div style="text-align:right;">
               <p><strong>Scope:</strong> ${escapeHtml(selectedReportScope)} | <strong>Club Filter:</strong> ${escapeHtml(reportClub)} | <strong>Year:</strong> ${escapeHtml(reportYear)}</p>

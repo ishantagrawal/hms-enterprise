@@ -1,5 +1,5 @@
 {
-  "name": "hms-enterprise",
+  "name": "vidyut-os",
   "private": true,
   "scripts": {
     "dev": "npm --prefix frontend run dev --",

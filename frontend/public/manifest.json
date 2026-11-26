@@ -1,6 +1,6 @@
 {
-  "name": "Campus OS",
-  "short_name": "Campus OS",
+  "name": "Vidyut OS",
+  "short_name": "Vidyut OS",
   "description": "A connected platform for campus administration and daily operations",
   "start_url": "/app",
   "scope": "/",
@@ -10,7 +10,7 @@
   "orientation": "portrait-primary",
   "icons": [
     {
-      "src": "/campus-os-mark.svg",
+      "src": "/vidyut-os-mark.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any maskable"

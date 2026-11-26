@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Campus OS</string>
-    <string name="title_activity_main">Campus OS</string>
-    <string name="package_name">com.hmsenterprise.portal</string>
-    <string name="custom_url_scheme">com.hmsenterprise.portal</string>
+    <string name="app_name">Vidyut OS</string>
+    <string name="title_activity_main">Vidyut OS</string>
+    <string name="package_name">com.vidyutos.portal</string>
+    <string name="custom_url_scheme">com.vidyutos.portal</string>
 </resources>

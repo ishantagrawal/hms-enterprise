@@ -53,9 +53,9 @@ export default function CompanyLandingPage() {
   return (
     <main className="cv-landing">
       <header className="cv-header">
-        <a className="cv-brand" href="/" aria-label="Campus OS home">
-          <span className="cv-mark">OS</span>
-          <span>Campus OS</span>
+        <a className="cv-brand" href="/" aria-label="Vidyut OS home">
+          <span className="cv-mark">VO</span>
+          <span>Vidyut OS</span>
         </a>
         <nav aria-label="Main navigation">
           <a href="#platform">Platform</a>
@@ -72,7 +72,7 @@ export default function CompanyLandingPage() {
           <div className="cv-eyebrow"><span className="cv-live-dot" /> ONE CONNECTED CAMPUS PLATFORM</div>
           <h1>Campus operations, connected in one OS.</h1>
           <p className="cv-hero-copy">
-            Campus OS brings institute administration, student services, hostel operations, events, leave and gate workflows, campus safety, and attendance together in one tenant-aware platform. Attendance is one part of the system, not the whole product.
+            Vidyut OS brings institute administration, student services, hostel operations, events, leave and gate workflows, campus safety, and attendance together in one tenant-aware platform. Attendance is one part of the system, not the whole product.
           </p>
           <div className="cv-actions">
             <a className="cv-button" href="/app">Open Live App <span aria-hidden="true">-&gt;</span></a>
@@ -90,9 +90,9 @@ export default function CompanyLandingPage() {
       <section className="cv-section cv-section-muted" id="platform">
         <div className="cv-container">
           <div className="cv-section-heading">
-            <span className="cv-eyebrow">THE CAMPUS OS PLATFORM</span>
+            <span className="cv-eyebrow">THE VIDYUT OS PLATFORM</span>
             <h2>One platform for the work happening across campus.</h2>
-            <p className="cv-platform-intro">Campus OS is the campus management platform. It connects the everyday tools used by institute leaders, students, faculty, Wardens, clubs, and campus staff.</p>
+            <p className="cv-platform-intro">Vidyut OS is the campus management platform. It connects the everyday tools used by institute leaders, students, faculty, Wardens, clubs, and campus staff.</p>
           </div>
           <div className="cv-card-grid cv-platform-grid">
             {platformModules.map(([title, description], index) => (
@@ -175,7 +175,7 @@ export default function CompanyLandingPage() {
 
       <footer className="cv-footer" id="compliance">
         <div className="cv-container cv-footer-inner">
-          <div><strong>Campus OS</strong><p>One connected platform for campus administration and daily operations.</p></div>
+          <div><strong>Vidyut OS</strong><p>One connected platform for campus administration and daily operations.</p></div>
           <div className="cv-footer-links">
             <button onClick={() => setModal('privacy')}>Privacy Policy</button>
             <button onClick={() => setModal('terms')}>Terms of Use</button>
@@ -207,12 +207,12 @@ export default function CompanyLandingPage() {
               </>
             ) : (
               <>
-                <span className="cv-eyebrow">CAMPUS OS</span>
+                <span className="cv-eyebrow">VIDYUT OS</span>
                 <h2 id="cv-modal-title">{modal === 'privacy' ? 'Privacy Policy' : 'Terms of Use'}</h2>
                 <p>
                   {modal === 'privacy'
                     ? 'Attendance and approved-leave return verification use a device-bound passkey, room-level BLE proximity, and a 1:1 face comparison. The enrollment reference is encrypted; live camera frames are processed for verification and not retained. Account and attendance records are handled under institute policy and applicable law.'
-                    : 'Campus OS is provided for authorized institute operations. Users must use assigned accounts and approved devices, follow their institute policies, and must not attempt to falsify attendance or gate records.'}
+                    : 'Vidyut OS is provided for authorized institute operations. Users must use assigned accounts and approved devices, follow their institute policies, and must not attempt to falsify attendance or gate records.'}
                 </p>
                 <p>Data residency: AWS Mumbai (ap-south-1). Privacy requests: <a href="mailto:compliance@svnitcampus.in">compliance@svnitcampus.in</a>.</p>
               </>

@@ -459,7 +459,7 @@ def _build_report_pdf(report):
     left = 32
     pdf.setTitle(f'{report["course_code"]} attendance report')
     pdf.setFont("Helvetica-Bold", 15)
-    pdf.drawString(left, page_height - 38, "Campus OS Attendance Report")
+    pdf.drawString(left, page_height - 38, "Vidyut OS Attendance Report")
     pdf.setFont("Helvetica", 9)
     pdf.drawString(left, page_height - 56, str(report["institute"])[:110])
     pdf.setFont("Helvetica-Bold", 11)
@@ -1523,11 +1523,11 @@ def _send_report_email_verification(email: str, code: str):
     if not host or not sender:
         raise HTTPException(status_code=503, detail="Report email verification is not configured. Contact your college administrator.")
     message = EmailMessage()
-    message["Subject"] = "Campus OS report email verification"
-    message["From"] = formataddr((os.getenv("SMTP_FROM_NAME", "Campus OS"), sender))
+    message["Subject"] = "Vidyut OS report email verification"
+    message["From"] = formataddr((os.getenv("SMTP_FROM_NAME", "Vidyut OS"), sender))
     message["To"] = email
     message.set_content(
-        f"Your Campus OS report email verification code is {code}. "
+        f"Your Vidyut OS report email verification code is {code}. "
         "It expires in 10 minutes. If you did not request this, ignore this message."
     )
     try:
@@ -1788,7 +1788,7 @@ def _build_student_daily_pdf(report):
     _, page_height = A4
     pdf.setTitle(f'{report["student_id"]} attendance {report["date"]}')
     pdf.setFont("Helvetica-Bold", 15)
-    pdf.drawString(32, page_height - 40, "Campus OS · Personal Attendance")
+    pdf.drawString(32, page_height - 40, "Vidyut OS · Personal Attendance")
     pdf.setFont("Helvetica", 9)
     pdf.drawString(32, page_height - 58, f'{report["institute"]} · {report["student_name"]} · {report["student_id"]}')
     pdf.drawString(32, page_height - 74, f'Daily attendance · {report["date"]}')

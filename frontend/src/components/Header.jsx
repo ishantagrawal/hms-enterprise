@@ -2,7 +2,7 @@ import React from 'react';
 
 export default function Header({ user, tenant, onLogout }) {
   const getHeaderTitle = () => {
-    const collegeName = tenant?.college_name || 'Campus OS';
+    const collegeName = tenant?.college_name || 'Vidyut OS';
     if (user.role === 'Founder') return `${collegeName} Founder Console`;
     if (user.role === 'Dean') return `${collegeName} Dean Portal`;
     if (user.role === 'Warden') return `${collegeName} · ${user.hostel_block}`;
@@ -20,7 +20,7 @@ export default function Header({ user, tenant, onLogout }) {
     <header style={styles.header}>
       <div style={styles.inner}>
         <div style={styles.left}>
-          <div style={styles.appBadge}>HMS</div>
+          <div style={styles.appBadge}>VO</div>
           <div style={styles.textWrap}>
             <div style={styles.title}>{getHeaderTitle()}</div>
             <div style={styles.subtitle}>{getSubTitle()}</div>

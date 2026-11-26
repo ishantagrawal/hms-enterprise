@@ -8,7 +8,7 @@ export default function usePortalBackNavigation(page, setPage) {
         event.preventDefault();
       }
     };
-    window.addEventListener('hms-native-back', handleBack);
-    return () => window.removeEventListener('hms-native-back', handleBack);
+    window.addEventListener('vidyut-native-back', handleBack);
+    return () => window.removeEventListener('vidyut-native-back', handleBack);
   }, [page, setPage]);
 }
