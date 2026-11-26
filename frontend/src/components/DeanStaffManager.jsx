@@ -68,7 +68,7 @@ export default function DeanStaffManager({ apiUrl }) {
       });
       const data = await readJson(response, 'Could not create the staff account.');
       setCredentials([data]);
-      setMessage('Account created. Share this temporary passphrase privately; the staff member must change it at first sign-in.');
+      setMessage('Account created. Share this temporary password privately; the staff member must change it at first sign-in.');
       setForm(EMPTY_FORM);
       await loadAccounts();
     } catch (createError) {
@@ -93,7 +93,7 @@ export default function DeanStaffManager({ apiUrl }) {
       const response = await apiFetch(`${apiUrl}/api/dean/staff/csv`, { method: 'POST', body });
       const data = await readJson(response, 'Could not import staff accounts.');
       setCredentials(data.accounts || []);
-      setMessage(`${data.accounts?.length || 0} accounts created. Share these temporary passphrases privately.`);
+      setMessage(`${data.accounts?.length || 0} accounts created. Share these temporary passwords privately.`);
       formElement.reset();
       await loadAccounts();
     } catch (uploadError) {
@@ -150,7 +150,7 @@ export default function DeanStaffManager({ apiUrl }) {
         role: account.role,
         temporary_password: data.temporary_password
       }]);
-      setMessage('A new temporary passphrase is ready. It is shown only once and must be changed at first sign-in.');
+      setMessage('A new temporary password is ready. It is shown only once and must be changed at first sign-in.');
       await loadAccounts();
     } catch (resetError) {
       setError(extractErrorMessage(resetError));
@@ -165,7 +165,7 @@ export default function DeanStaffManager({ apiUrl }) {
     <div className="av-staff-manager">
       <section className="av-panel">
         <h2>Create a staff account</h2>
-        <p className="av-subtitle">Temporary passphrases are shown once. Passwords are never stored in a readable form.</p>
+        <p className="av-subtitle">Temporary passwords are shown once. Passwords are never stored in a readable form.</p>
         {error && <div className="av-error" role="alert">{error}</div>}
         {message && <div className="av-message" role="status">{message}</div>}
         {credentials.length > 0 && (
@@ -209,7 +209,7 @@ export default function DeanStaffManager({ apiUrl }) {
 
       <section className="av-panel">
         <h2>Staff directory</h2>
-        <p className="av-subtitle">Edit contact and assignment details, or issue a new one-time passphrase. Account IDs and roles remain fixed for audit safety.</p>
+        <p className="av-subtitle">Edit contact and assignment details, or issue a new one-time password. Account IDs and roles remain fixed for audit safety.</p>
         {groupedAccounts.map((group) => (
           <section className="av-staff-group" key={group.title}>
             <div className="av-row-between"><h3>{group.title}</h3><span className="av-count">{group.accounts.length}</span></div>

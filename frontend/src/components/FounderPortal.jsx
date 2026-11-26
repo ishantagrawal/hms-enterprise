@@ -173,7 +173,7 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.success) throw new Error(extractErrorMessage(data, 'Could not create college.'));
       setCredentials(data.accounts || []);
-      setMsg(`College ${data.college_id} configured. Share each temporary passphrase privately; it must be changed at first sign-in.`);
+      setMsg(`College ${data.college_id} configured. Share each temporary password privately; it must be changed at first sign-in.`);
       setTenantForm({
         college_id: '',
         college_name: '',
@@ -206,7 +206,7 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
       if (!res.ok || !data.success) throw new Error(extractErrorMessage(data, 'Could not provision college accounts.'));
       setCredentials(data.accounts || []);
       setMsg(data.accounts?.length
-        ? `Created ${data.accounts.length} missing main account${data.accounts.length === 1 ? '' : 's'}. Share each passphrase privately.`
+        ? `Created ${data.accounts.length} missing main account${data.accounts.length === 1 ? '' : 's'}. Share each temporary password privately.`
         : 'The Student Onboarding Staff and Beacon Manager accounts are already provisioned.');
       await loadTenants();
     } catch (error) {
@@ -257,7 +257,7 @@ export default function FounderPortal({ apiUrl, onLogout, user }) {
         {credentials.length > 0 && (
           <section className="ptm-card" aria-live="polite">
             <div className="ptm-section-title">One-time initial credentials</div>
-            <p className="ptm-list-sub">These passphrases are shown only now. Share them privately; each account must change its password at first sign-in.</p>
+            <p className="ptm-list-sub">These temporary passwords are shown only now. Share them privately; each account must change its password at first sign-in.</p>
             <div className="ptm-list">
               {credentials.map((account) => (
                 <div className="ptm-list-row" key={account.user_id}>

@@ -74,7 +74,7 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {} }) 
       const data = await readJson(response, 'Could not create the student account.');
       setCredentials(data.account?.temporary_password ? [data.account] : []);
       setMessage(data.account?.temporary_password
-        ? 'Student account is ready. Share this one-time passphrase securely.'
+        ? 'Student account is ready. Share this one-time password securely.'
         : 'Student details updated. The existing password was not changed.');
       setForm(emptyForm);
       await loadStudents(query, offset);
@@ -101,7 +101,7 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {} }) 
       const data = await readJson(response, 'Could not import student accounts.');
       const issued = (data.accounts || []).filter((item) => item.temporary_password);
       setCredentials(issued);
-      setMessage(`${data.accounts?.length || 0} student records processed; ${issued.length} temporary passphrases issued.`);
+      setMessage(`${data.accounts?.length || 0} student records processed; ${issued.length} temporary passwords issued.`);
       formElement.reset();
       await loadStudents(query, offset);
     } catch (uploadError) {
@@ -126,7 +126,7 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {} }) 
         full_name: student.full_name,
         temporary_password: data.temporary_password
       }]);
-      setMessage('One-time passphrase generated. Share it securely; the student must change it at first sign-in.');
+      setMessage('One-time password generated. Share it securely; the student must change it at first sign-in.');
       await loadStudents(query, offset);
     } catch (resetError) {
       setError(extractErrorMessage(resetError));
@@ -142,13 +142,13 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {} }) 
         `${apiUrl}/api/onboarding/password-reset-requests/${encodeURIComponent(resetRequest.request_id)}/issue`,
         { method: 'POST' }
       );
-      const data = await readJson(response, 'Could not issue a temporary passphrase.');
+      const data = await readJson(response, 'Could not issue a temporary password.');
       setCredentials([{
         user_id: data.user_id,
         full_name: resetRequest.full_name,
         temporary_password: data.temporary_password
       }]);
-      setMessage('One-time passphrase issued. Share it privately; it is shown only once and must be changed at sign-in.');
+      setMessage('One-time password issued. Share it privately; it is shown only once and must be changed at sign-in.');
       await Promise.all([loadStudents(query, offset), loadResetRequests()]);
     } catch (issueError) {
       setError(extractErrorMessage(issueError));
@@ -218,7 +218,7 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {} }) 
         <div>
           <p className="av-kicker">Student account administration</p>
           <h1>Student Onboarding</h1>
-          <p>Signed in as {user.full_name}. Create student accounts and issue one-time nine-word passphrases. Changed student passwords cannot be viewed; issue a reset if a password is lost.</p>
+          <p>Signed in as {user.full_name}. Create student accounts and issue one-time 10-character passwords. Changed student passwords cannot be viewed; issue a reset if a password is lost.</p>
         </div>
       </header>
       {error && <div className="av-error" role="alert">{error}</div>}
@@ -228,7 +228,7 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {} }) 
           <div className="av-row-between">
             <div>
               <h2>One-time credentials</h2>
-              <p>These passphrases are shown only in this response. Share them privately; first sign-in requires a change.</p>
+              <p>These temporary passwords are shown only in this response. Share them privately; first sign-in requires a change.</p>
             </div>
             <button type="button" className="av-secondary" onClick={downloadCredentials}>Download secure handoff CSV</button>
           </div>
@@ -247,7 +247,7 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {} }) 
         <div className="av-row-between">
           <div>
             <h2>Password reset requests</h2>
-            <p>Issue a one-time passphrase for a student who cannot sign in.</p>
+            <p>Issue a one-time password for a student who cannot sign in.</p>
           </div>
           <button type="button" className="av-secondary" onClick={() => loadResetRequests().catch((loadError) => setError(extractErrorMessage(loadError)))}>
             Refresh
@@ -262,7 +262,7 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {} }) 
               </div>
               <span className="av-status">{new Date(item.created_at).toLocaleString()}</span>
               <button type="button" className="av-primary" onClick={() => issueRequestedPassword(item)}>
-                Issue temporary passphrase
+                Issue temporary password
               </button>
             </div>
           ))}
@@ -307,7 +307,7 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {} }) 
               <span className={`av-status ${student.has_password ? 'is-good' : 'is-absent'}`}>
                 {!student.has_password ? 'Password needed' : student.password_reset_required ? 'Must change password' : 'Active'}
               </span>
-              <button type="button" className="av-secondary" onClick={() => resetPassword(student)}>Issue temporary passphrase</button>
+              <button type="button" className="av-secondary" onClick={() => resetPassword(student)}>Issue temporary password</button>
               {(modules.class_attendance || modules.hostel_attendance) && (
                 <div className="av-inline-form">
                   <button

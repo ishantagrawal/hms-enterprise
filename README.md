@@ -9,9 +9,9 @@ hashes. Password access follows the college hierarchy: the Founder manages the
 Dean, Student Onboarding Staff, and Beacon Manager; the Dean manages Wardens,
 clubs, gate security, and central staff; each Warden manages only staff
 accounts created for that Warden's hostel. New accounts receive a unique
-nine-word temporary passphrase and must change it at first sign-in. Passphrases
+10-character temporary password and must change it at first sign-in. Temporary passwords
 are shown only when generated or reset; the database never stores recoverable
-plaintext passwords. If a password is lost, issue a new temporary passphrase.
+plaintext passwords. If a password is lost, issue a new temporary password.
 Never share one password across accounts.
 
 The current SVNIT tenant is seeded for migration compatibility. Additional
@@ -49,7 +49,7 @@ The Founder signs in with account ID `FOUNDER`; the seeded SVNIT Dean uses
 `DEAN`. Creating a college provisions its Dean, Student Onboarding Staff, and
 Beacon Manager accounts. The Founder can provision missing onboarding and
 beacon accounts for older colleges and reset all three main accounts. Share
-each generated passphrase privately; it is displayed only once. Each college
+each generated temporary password privately; it is displayed only once. Each college
 must have its DNS and TLS configured for its exact
 approved portal domain; wildcard DNS/TLS is not used.
 The Founder can also publish and remove college-specific sponsored banners
@@ -70,7 +70,7 @@ Email addresses on staff profiles are contact information; they are not used
 for staff sign-in. Legacy plaintext passwords are cleared at startup.
 
 Students can submit a password-reset request from the sign-in page. The request
-appears in Student Onboarding; staff can issue a new one-time passphrase, which
+appears in Student Onboarding; staff can issue a new one-time password, which
 the student must change at sign-in. Remember Me stores the signed-in session on
 the current device; without it, the session is limited to the browser tab
 session. Passwords are never retrievable after they are changed.

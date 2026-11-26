@@ -12,6 +12,7 @@ import random
 import re
 import secrets
 import sqlite3
+import string
 import threading
 import time
 import uuid
@@ -120,6 +121,7 @@ DEFAULT_ADMIN_PASS = ""
 PASSWORD_HASH_PREFIX = "pbkdf2_sha256$"
 PASSWORD_HASH_ITERATIONS = 600_000
 PASSWORD_MIN_LENGTH = 12
+TEMPORARY_PASSWORD_LENGTH = 10
 FACE_EMBEDDING_MODEL_VERSION = "qualcomm-mobilefacenet-v0.67.0"
 TENANT_MODULE_DEFAULTS = {
     "grievances": False,
@@ -142,14 +144,6 @@ def normalize_tenant_modules(modules):
     }
 
 
-_TEMP_PASSWORD_ADJECTIVES = (
-    "amber", "brave", "calm", "clever", "cool", "eager", "gentle", "golden",
-    "happy", "jolly", "kind", "lucky", "merry", "polite", "quiet", "sunny",
-)
-_TEMP_PASSWORD_NOUNS = (
-    "apple", "bird", "breeze", "cloud", "comet", "daisy", "forest", "garden",
-    "harbor", "island", "meadow", "moon", "ocean", "river", "star", "turtle",
-)
 STAFF_LOGIN_ROLES = {
     "Dean",
     "Founder",
@@ -434,9 +428,7 @@ def verify_session_token(token: str) -> Optional[tuple]:
     return None
 
 
-def hash_password(password: str) -> str:
-    if not isinstance(password, str) or not PASSWORD_MIN_LENGTH <= len(password) <= 128:
-        raise HTTPException(status_code=400, detail="Passwords must be between 12 and 128 characters.")
+def _hash_password_value(password: str) -> str:
     salt = secrets.token_bytes(16)
     derived = hashlib.pbkdf2_hmac(
         "sha256", password.encode("utf-8"), salt, PASSWORD_HASH_ITERATIONS
@@ -448,15 +440,36 @@ def hash_password(password: str) -> str:
     )
 
 
-def generate_temporary_password() -> str:
-    return " ".join(
-        word
-        for _ in range(5)
-        for word in (
-            secrets.choice(_TEMP_PASSWORD_ADJECTIVES),
-            secrets.choice(_TEMP_PASSWORD_NOUNS),
+def hash_password(password: str) -> str:
+    if not isinstance(password, str) or not PASSWORD_MIN_LENGTH <= len(password) <= 128:
+        raise HTTPException(status_code=400, detail="Passwords must be between 12 and 128 characters.")
+    return _hash_password_value(password)
+
+
+def hash_temporary_password(password: str) -> str:
+    if not isinstance(password, str) or len(password) != TEMPORARY_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Temporary passwords must be exactly {TEMPORARY_PASSWORD_LENGTH} characters.",
         )
+    return _hash_password_value(password)
+
+
+def generate_temporary_password() -> str:
+    alphabet = string.ascii_letters + string.digits
+    characters = [
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.digits),
+    ]
+    characters.extend(
+        secrets.choice(alphabet)
+        for _ in range(TEMPORARY_PASSWORD_LENGTH - len(characters))
     )
+    for index in range(len(characters) - 1, 0, -1):
+        swap_index = secrets.randbelow(index + 1)
+        characters[index], characters[swap_index] = characters[swap_index], characters[index]
+    return "".join(characters)
 
 
 def verify_password(password: str, stored_hash: str) -> bool:
@@ -2193,7 +2206,7 @@ def create_tenant(req: TenantCreateReq, request: Request):
                     conn,
                     (
                         account_id,
-                        hash_password(temporary_password),
+                        hash_temporary_password(temporary_password),
                         name,
                         role,
                         title,
@@ -2322,7 +2335,7 @@ def provision_founder_tenant_accounts(college_id: str, request: Request):
                 conn,
                 (
                     user_id,
-                    hash_password(temporary_password),
+                    hash_temporary_password(temporary_password),
                     full_name,
                     role,
                     "Student Onboarding Staff" if role == "StudentOnboarding" else "Beacon Manager",
@@ -2385,7 +2398,7 @@ def reset_founder_tenant_account_password(
             WHERE college_id = ? AND UPPER(user_id) = ?
               AND role IN ('Dean', 'StudentOnboarding', 'BeaconManager')
             """,
-            (hash_password(temporary_password), normalized_id, user_id),
+            (hash_temporary_password(temporary_password), normalized_id, user_id),
         )
         if result.rowcount != 1:
             raise HTTPException(status_code=404, detail="College administrator account not found.")
@@ -3015,7 +3028,7 @@ def set_staff_account_password(req: StaffPasswordSetReq, request: Request):
         db_exec(
             conn,
             "UPDATE users SET password = ?, password_reset_required = 1 WHERE college_id = ? AND UPPER(user_id) = ?",
-            (hash_password(temporary_password), ACTIVE_COLLEGE_ID.get(), user_id),
+            (hash_temporary_password(temporary_password), ACTIVE_COLLEGE_ID.get(), user_id),
         )
         conn.commit()
         invalidate_user_cache(user_id)
@@ -3158,7 +3171,7 @@ def _create_dean_staff_account(conn, values: dict, actor_id: str) -> dict:
         VALUES (?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, '', '', ?, 1)
         """,
         (
-            user_id, hash_password(temporary_password), full_name, role, title,
+            user_id, hash_temporary_password(temporary_password), full_name, role, title,
             ACTIVE_COLLEGE_ID.get(), hostel_block, phone, email, department,
             ACTIVE_COLLEGE_ID.get(),
         ),
@@ -3262,7 +3275,7 @@ def _create_or_update_student_account(conn, values: dict) -> dict:
         password_hash = str(existing["password"] or "")
         if not password_hash.startswith(PASSWORD_HASH_PREFIX):
             temporary_password = generate_temporary_password()
-            password_hash = hash_password(temporary_password)
+            password_hash = hash_temporary_password(temporary_password)
         db_exec(
             conn,
             """
@@ -3299,7 +3312,7 @@ def _create_or_update_student_account(conn, values: dict) -> dict:
             VALUES (?, ?, ?, 'Student', 'Student', ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, 1)
             """,
             (
-                user_id, hash_password(temporary_password), full_name, ACTIVE_COLLEGE_ID.get(),
+                user_id, hash_temporary_password(temporary_password), full_name, ACTIVE_COLLEGE_ID.get(),
                 fields["hostel_block"], fields["year"], fields["division"], fields["room"], fields["phone"],
                 email, department, fields["wing"], fields["guardian_phone"], ACTIVE_COLLEGE_ID.get(),
             ),
@@ -3439,7 +3452,7 @@ def reset_onboarding_student_password(user_id: str, request: Request):
             UPDATE users SET password = ?, password_reset_required = 1
             WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'
             """,
-            (hash_password(temporary_password), ACTIVE_COLLEGE_ID.get(), student_id),
+            (hash_temporary_password(temporary_password), ACTIVE_COLLEGE_ID.get(), student_id),
         )
         if result.rowcount != 1:
             raise HTTPException(status_code=404, detail="Student account not found.")
@@ -3503,7 +3516,7 @@ def issue_requested_student_password(request_id: str, request: Request):
             UPDATE users SET password = ?, password_reset_required = 1
             WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'
             """,
-            (hash_password(temporary_password), ACTIVE_COLLEGE_ID.get(), student_id),
+            (hash_temporary_password(temporary_password), ACTIVE_COLLEGE_ID.get(), student_id),
         )
         if updated.rowcount != 1:
             raise HTTPException(status_code=404, detail="Student account not found.")
@@ -6653,7 +6666,7 @@ def create_or_update_warden(req: WardenCreateReq, request: Request):
         else:
             if not str(existing["password"] or "").startswith(PASSWORD_HASH_PREFIX):
                 temporary_password = generate_temporary_password()
-            password = hash_password(temporary_password) if temporary_password else existing["password"]
+            password = hash_temporary_password(temporary_password) if temporary_password else existing["password"]
             db_exec(
                 conn,
                 """
@@ -6724,7 +6737,7 @@ def create_gate_security(req: GateSecurityCreateReq, request: Request):
         account_password = ""
         if not existing or not str(existing["password"] or "").startswith(PASSWORD_HASH_PREFIX):
             temporary_password = generate_temporary_password()
-            account_password = hash_password(temporary_password)
+            account_password = hash_temporary_password(temporary_password)
         upsert_user(
             conn,
             (
@@ -6791,7 +6804,7 @@ def create_club(req: ClubCreateReq, request: Request):
         account_password = ""
         if not existing or not str(existing["password"] or "").startswith(PASSWORD_HASH_PREFIX):
             temporary_password = generate_temporary_password()
-            account_password = hash_password(temporary_password)
+            account_password = hash_temporary_password(temporary_password)
         upsert_club(
             conn,
             (

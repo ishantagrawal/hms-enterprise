@@ -62,16 +62,16 @@ export default function StaffAccountAccess({ apiUrl, user, collegeId }) {
       <div className="ptm-section-title">Staff account access</div>
       <p className="ptm-list-sub">
         {collegeId
-          ? 'Manage the Dean, Student Onboarding Staff, and Beacon Manager accounts for this college. Each reset creates a one-time passphrase that must be changed at first sign-in.'
+          ? 'Manage the Dean, Student Onboarding Staff, and Beacon Manager accounts for this college. Each reset creates a one-time password that must be changed at first sign-in.'
           : user?.role === 'Dean'
-            ? 'Reset staff accounts. Each reset creates a temporary passphrase that must be changed at first sign-in. Student passwords are managed by Student Onboarding Staff.'
+            ? 'Reset staff accounts. Each reset creates a temporary password that must be changed at first sign-in. Student passwords are managed by Student Onboarding Staff.'
             : 'Reset the Dean account password. Deans manage other staff accounts.'}
       </p>
       {message && <div className="ptm-alert-success" role="status">{message}</div>}
       {error && <div className="ptm-alert-error" role="alert">{error}</div>}
       {credential && (
         <div className="ptm-alert-success" role="status">
-          Temporary passphrase for <strong>{credential.user_id}</strong>: <code>{credential.password}</code>. Share privately; it is shown only once.
+          Temporary password for <strong>{credential.user_id}</strong>: <code>{credential.password}</code>. Share privately; it is shown only once.
         </div>
       )}
       {loading ? (
@@ -94,7 +94,7 @@ export default function StaffAccountAccess({ apiUrl, user, collegeId }) {
                   {account.hostel_block && account.hostel_block !== 'All' ? ` · ${account.hostel_block}` : ''}
                 </div>
                 <div className="ptm-list-sub">
-                  {!account.has_password ? 'Password not set' : account.password_reset_required ? 'Must change temporary passphrase' : 'Password is set'}
+                  {!account.has_password ? 'Password not set' : account.password_reset_required ? 'Must change temporary password' : 'Password is set'}
                 </div>
                 {!account.can_manage && (
                   <div className="ptm-list-sub">Your role does not have permission to change this account's password.</div>
@@ -106,7 +106,7 @@ export default function StaffAccountAccess({ apiUrl, user, collegeId }) {
                 disabled={!account.can_manage || savingId === account.user_id}
                 style={{ width: 'auto', alignSelf: 'flex-end' }}
               >
-                {savingId === account.user_id ? 'Generating…' : 'Issue temporary passphrase'}
+                {savingId === account.user_id ? 'Generating…' : 'Issue temporary password'}
               </button>
             </form>
           ))}
