@@ -142,6 +142,267 @@ class TenantSafetyTests(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_onboarding_student_changes_sync_hostel_wing_membership(self):
+        context_token = main.ACTIVE_COLLEGE_ID.set("TESTCOLLEGE")
+        try:
+            conn = main.get_conn()
+            try:
+                details = {
+                    "roll_no": "HOSTEL-SYNC-001",
+                    "full_name": "Hostel Sync Student",
+                    "department": "Civil",
+                    "year": "2",
+                    "division": "A",
+                    "hostel_block": "Gajjar",
+                    "wing": "A",
+                    "room": "101",
+                }
+                main._create_or_update_student_account(conn, details)
+                conn.commit()
+                member = main.db_exec(
+                    conn,
+                    """
+                    SELECT hostel_block, wing_name, room_no
+                    FROM attendance_v2_hostel_wing_members
+                    WHERE college_id = ? AND UPPER(student_id) = ?
+                    """,
+                    ("TESTCOLLEGE", "HOSTEL-SYNC-001"),
+                ).fetchone()
+                self.assertEqual((member["hostel_block"], member["wing_name"], member["room_no"]), ("Gajjar", "A", "101"))
+
+                details.update({"hostel_block": "Gajjar", "wing": "B", "room": "202"})
+                main._create_or_update_student_account(conn, details)
+                conn.commit()
+                member = main.db_exec(
+                    conn,
+                    """
+                    SELECT hostel_block, wing_name, room_no
+                    FROM attendance_v2_hostel_wing_members
+                    WHERE college_id = ? AND UPPER(student_id) = ?
+                    """,
+                    ("TESTCOLLEGE", "HOSTEL-SYNC-001"),
+                ).fetchone()
+                self.assertEqual((member["hostel_block"], member["wing_name"], member["room_no"]), ("Gajjar", "B", "202"))
+
+                details.update({"hostel_block": "Day Scholar", "wing": ""})
+                main._create_or_update_student_account(conn, details)
+                conn.commit()
+                member = main.db_exec(
+                    conn,
+                    """
+                    SELECT 1 FROM attendance_v2_hostel_wing_members
+                    WHERE college_id = ? AND UPPER(student_id) = ?
+                    """,
+                    ("TESTCOLLEGE", "HOSTEL-SYNC-001"),
+                ).fetchone()
+                self.assertIsNone(member)
+            finally:
+                conn.close()
+        finally:
+            main.ACTIVE_COLLEGE_ID.reset(context_token)
+
+    def test_rotating_beacon_validation_checks_signature_and_time_slot(self):
+        attendance = main._attendance_v2_module
+        code = "A1B2C3D4"
+        secret = b"S" * 32
+        now = datetime.now(timezone.utc)
+        slot = int(now.timestamp() // 30)
+        signature = main.hmac.new(
+            secret,
+            f"{code}:{slot}".encode("ascii"),
+            main.hashlib.sha256,
+        ).digest()[:8]
+        beacon = {
+            "beacon_code": code,
+            "signing_secret_enc": main._beacon_signing_cipher().encrypt(secret.hex().encode("ascii")).decode("ascii"),
+        }
+        rotating_uuid = f"{code}{slot:08X}{signature.hex()}".upper()
+        self.assertTrue(attendance._validate_rotating_beacon(beacon, rotating_uuid, main.__dict__, now))
+        self.assertFalse(attendance._validate_rotating_beacon(beacon, rotating_uuid[:-1] + "0", main.__dict__, now))
+        expired_slot = slot - 2
+        expired_signature = main.hmac.new(
+            secret,
+            f"{code}:{expired_slot}".encode("ascii"),
+            main.hashlib.sha256,
+        ).digest()[:8]
+        expired_uuid = f"{code}{expired_slot:08X}{expired_signature.hex()}".upper()
+        self.assertFalse(attendance._validate_rotating_beacon(beacon, expired_uuid, main.__dict__, now))
+
+    def test_rotating_beacon_response_never_exposes_encrypted_secret(self):
+        attendance = main._attendance_v2_module
+        row = {
+            "id": "BEACON-TEST",
+            "beacon_code": "A1B2C3D4",
+            "signing_secret_enc": "encrypted-value",
+        }
+        response = attendance._beacon_response(row, "one-time-secret")
+        self.assertNotIn("signing_secret_enc", response)
+        self.assertEqual(response["provisioning_secret"], "one-time-secret")
+
+    def test_device_enrollment_window_is_onboarding_staff_only(self):
+        context_token = main.ACTIVE_COLLEGE_ID.set("TESTCOLLEGE")
+        try:
+            conn = main.get_conn()
+            try:
+                main._create_or_update_student_account(
+                    conn,
+                    {
+                        "roll_no": "DEVICE-WINDOW-001",
+                        "full_name": "Device Window Student",
+                        "department": "Civil",
+                        "year": "2",
+                        "division": "A",
+                    },
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            request = build_request([(b"host", b"api.example.edu")])
+            request.scope["app"] = main.app
+            request.state.college_id = "TESTCOLLEGE"
+            request.state.tenant = {"modules": {"class_attendance": True, "hostel_attendance": False}}
+            attendance = main._attendance_v2_module
+            request.state.user = {"user_id": "WARDEN-1", "role": "Warden", "hostel_block": "Gajjar"}
+            with self.assertRaises(HTTPException) as denied:
+                attendance.open_device_enrollment(
+                    attendance.EnrollmentWindowInput(student_id="DEVICE-WINDOW-001"),
+                    request,
+                )
+            self.assertEqual(denied.exception.status_code, 403)
+
+            request.state.user = {"user_id": "ONBOARDING-1", "role": "StudentOnboarding"}
+            opened = attendance.open_device_enrollment(
+                attendance.EnrollmentWindowInput(student_id="DEVICE-WINDOW-001"),
+                request,
+            )
+            self.assertTrue(opened["success"])
+            conn = main.get_conn()
+            try:
+                student = main.db_exec(
+                    conn,
+                    """
+                    SELECT biometric_status, enroll_window_until
+                    FROM users WHERE college_id = ? AND UPPER(user_id) = ?
+                    """,
+                    ("TESTCOLLEGE", "DEVICE-WINDOW-001"),
+                ).fetchone()
+                self.assertEqual(student["biometric_status"], "Enrollment Unlocked")
+                self.assertGreater(student["enroll_window_until"], int(datetime.now(timezone.utc).timestamp()))
+            finally:
+                conn.close()
+        finally:
+            main.ACTIVE_COLLEGE_ID.reset(context_token)
+
+    def test_warden_can_start_all_wings_with_multiple_configured_beacons(self):
+        context_token = main.ACTIVE_COLLEGE_ID.set("TESTCOLLEGE")
+        try:
+            conn = main.get_conn()
+            try:
+                modules_row = main.db_exec(
+                    conn, "SELECT modules_json FROM tenants WHERE college_id = ?", ("TESTCOLLEGE",)
+                ).fetchone()
+                modules = main.json.loads(modules_row["modules_json"])
+                modules["hostel_attendance"] = True
+                main.db_exec(
+                    conn,
+                    "UPDATE tenants SET modules_json = ? WHERE college_id = ?",
+                    (main.json.dumps(modules), "TESTCOLLEGE"),
+                )
+                main.db_exec(
+                    conn,
+                    "INSERT OR REPLACE INTO hostels (college_id, hostel_id, name, wings_json, enabled) VALUES (?, ?, ?, ?, 1)",
+                    ("TESTCOLLEGE", "ALL-WING-HOSTEL", "Gajjar", '["A", "B"]'),
+                )
+                for roll, wing, room in (
+                    ("ALL-WING-STUDENT-A", "A", "101"),
+                    ("ALL-WING-STUDENT-B", "B", "202"),
+                ):
+                    main._create_or_update_student_account(
+                        conn,
+                        {
+                            "roll_no": roll,
+                            "full_name": roll,
+                            "department": "Civil",
+                            "year": "2",
+                            "division": "A",
+                            "hostel_block": "Gajjar",
+                            "wing": wing,
+                            "room": room,
+                        },
+                    )
+                main._create_or_update_student_account(
+                    conn,
+                    {
+                        "roll_no": "ALL-WING-DAY-STUDENT",
+                        "full_name": "Day Scholar",
+                        "department": "Civil",
+                        "year": "2",
+                        "division": "A",
+                        "hostel_block": "Day Scholar",
+                    },
+                )
+                secret = main._beacon_signing_cipher().encrypt(b"test-hostel-beacon-secret").decode("ascii")
+                for beacon_id, code, wing in (
+                    ("ALL-WING-BEACON-A", "A0A0B001", "A"),
+                    ("ALL-WING-BEACON-B", "A0A0B002", "B"),
+                ):
+                    main.db_exec(
+                        conn,
+                        """
+                        INSERT INTO attendance_v2_beacons
+                            (college_id, tenant_id, id, name, scope, owner_id, uuid, major, minor,
+                             min_rssi, beacon_code, signing_secret_enc, hostel_block, wing_name,
+                             is_active, created_at)
+                        VALUES (?, ?, ?, ?, 'HOSTEL', ?, ?, 1, 1, -78, ?, ?, 'Gajjar', ?, 1, ?)
+                        """,
+                        (
+                            "TESTCOLLEGE", "TESTCOLLEGE", beacon_id, f"Gajjar {wing}",
+                            "TEST-WARDEN", "00000000-0000-0000-0000-000000000001",
+                            code, secret, wing, datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+            with main._TENANT_CACHE_LOCK:
+                main._TENANT_CACHE.pop("TESTCOLLEGE", None)
+
+            request = build_request([(b"host", b"api.example.edu")])
+            request.scope["app"] = main.app
+            request.state.college_id = "TESTCOLLEGE"
+            request.state.user = {"user_id": "TEST-WARDEN", "role": "Warden", "hostel_block": "Gajjar"}
+            request.state.tenant = {
+                "college_name": "Test College",
+                "timezone": "Asia/Kolkata",
+                "modules": {"class_attendance": False, "hostel_attendance": True},
+            }
+            attendance = main._attendance_v2_module
+            session = attendance.start_session(
+                attendance.SessionInput(
+                    scope="HOSTEL",
+                    hostel_block="Gajjar",
+                    wing_name="ALL",
+                    beacon_id="ALL-WING-BEACON-A",
+                    beacon_ids=["ALL-WING-BEACON-A", "ALL-WING-BEACON-B"],
+                ),
+                request,
+            )
+            conn = main.get_conn()
+            try:
+                row = main.db_exec(
+                    conn,
+                    "SELECT * FROM attendance_v2_sessions WHERE college_id = ? AND id = ?",
+                    ("TESTCOLLEGE", session["id"]),
+                ).fetchone()
+                roster = attendance._session_roster(conn, main.__dict__, dict(row))
+            finally:
+                conn.close()
+            self.assertEqual({student["roll_no"] for student in roster}, {"ALL-WING-STUDENT-A", "ALL-WING-STUDENT-B"})
+            self.assertEqual(row["wing_name"], "ALL")
+        finally:
+            main.ACTIVE_COLLEGE_ID.reset(context_token)
+
     def test_student_onboarding_stores_and_updates_division_without_clearing_omitted_values(self):
         context_token = main.ACTIVE_COLLEGE_ID.set("TESTCOLLEGE")
         try:
@@ -339,12 +600,14 @@ class TenantSafetyTests(unittest.TestCase):
                     """
                     INSERT INTO attendance_v2_beacons
                         (college_id, tenant_id, id, name, scope, owner_id, uuid, major, minor,
-                         min_rssi, is_active, created_at)
-                    VALUES (?, ?, ?, ?, 'CLASS', ?, ?, 1, 1, -78, 1, ?)
+                         min_rssi, beacon_code, signing_secret_enc, is_active, created_at)
+                    VALUES (?, ?, ?, ?, 'CLASS', ?, ?, 1, 1, -78, ?, ?, 1, ?)
                     """,
                     (
                         "TESTCOLLEGE", "TESTCOLLEGE", "DIVISION-ROOM-BEACON", "Civil Room",
                         "COURSE-OWNER", "00000000-0000-0000-0000-000000000001",
+                        "A0A0A001",
+                        main._beacon_signing_cipher().encrypt(b"test-class-beacon-secret").decode("ascii"),
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )
@@ -419,6 +682,16 @@ class TenantSafetyTests(unittest.TestCase):
                 conn.commit()
             finally:
                 conn.close()
+            marked = attendance.override_attendance(
+                session_id,
+                attendance.OverrideInput(
+                    student_id="DIVISION-CLASS-001",
+                    status="PRESENT",
+                    reason="Verified in classroom",
+                ),
+                request,
+            )
+            self.assertEqual(marked["method"], "MANUAL_OVERRIDE")
 
             student_request = build_request([(b"host", b"api.example.edu")])
             student_request.scope["app"] = main.app
@@ -444,10 +717,10 @@ class TenantSafetyTests(unittest.TestCase):
                     ("TESTCOLLEGE", session_id),
                 ).fetchone()
                 report = attendance._report_data(conn, main.__dict__, dict(stored_session))
-                absent = main.db_exec(
+                manually_marked = main.db_exec(
                     conn,
                     """
-                    SELECT status, method FROM attendance_v2_records
+                    SELECT status, method, override_reason FROM attendance_v2_records
                     WHERE college_id = ? AND session_id = ? AND UPPER(student_id) = ?
                     """,
                     ("TESTCOLLEGE", session_id, "DIVISION-CLASS-001"),
@@ -457,13 +730,20 @@ class TenantSafetyTests(unittest.TestCase):
             self.assertEqual(report["owner_id"], "SESSION-FACULTY")
             self.assertEqual(report["report_email"], "session@example.edu")
             self.assertEqual([item["roll_no"] for item in report["students"]], list(student_ids[:2]))
-            self.assertEqual([item["status"] for item in report["students"]], ["ABSENT", "PRESENT"])
-            self.assertEqual(absent["status"], "ABSENT")
-            self.assertEqual(absent["method"], "NO_CHECK_IN")
+            self.assertEqual([item["status"] for item in report["students"]], ["PRESENT", "PRESENT"])
+            self.assertEqual(manually_marked["status"], "PRESENT")
+            self.assertEqual(manually_marked["method"], "MANUAL_OVERRIDE")
+            self.assertEqual(manually_marked["override_reason"], "Verified in classroom")
+            self.assertEqual(report["overrides"], 1)
 
             report_date = report["date"][:10]
             reports = attendance.list_daily_report_sessions(request, scope="CLASS", date=report_date)
             self.assertTrue(any(item["session_id"] == session_id for item in reports))
+            self.assertEqual(next(item for item in reports if item["session_id"] == session_id)["manual_overrides"], 1)
+            self.assertEqual(next(item for item in reports if item["session_id"] == session_id)["audit_entries"], 1)
+            audit = attendance.get_session_attendance_audit(session_id, request)
+            self.assertEqual(audit[0]["roll_no"], "DIVISION-CLASS-001")
+            self.assertEqual(audit[0]["actor_name"], "Session Faculty")
             own_pdf = attendance.download_session_report(session_id, request)
             self.assertEqual(own_pdf.media_type, "application/pdf")
             self.assertTrue(own_pdf.body.startswith(b"%PDF"))
@@ -478,7 +758,7 @@ class TenantSafetyTests(unittest.TestCase):
             summary = attendance.student_class_summary(request)
             self.assertEqual(len(summary), 1)
             self.assertEqual(summary[0]["faculty_name"], "Session Faculty")
-            self.assertEqual(summary[0]["sessions"][0]["status"], "ABSENT")
+            self.assertEqual(summary[0]["sessions"][0]["status"], "PRESENT")
             student_request.state.user = {"user_id": student_ids[0], "role": "Student"}
             captured_report = {}
             with patch.object(
@@ -490,7 +770,7 @@ class TenantSafetyTests(unittest.TestCase):
                     student_request, report_date
                 )
             self.assertEqual(personal_report.body, b"test-pdf")
-            self.assertEqual(captured_report["records"][0]["status"], "ABSENT")
+            self.assertEqual(captured_report["records"][0]["status"], "PRESENT")
             self.assertIn("Session Faculty", captured_report["records"][0]["label"])
         finally:
             conn = main.get_conn()
@@ -1167,6 +1447,17 @@ class TenantSafetyTests(unittest.TestCase):
             self.assertEqual(student["wing"], "Wing B")
             self.assertEqual(student["room"], "202")
             self.assertEqual(student["guardian_phone"], "+919876543210")
+            conn = main.get_conn()
+            member = main.db_exec(
+                conn,
+                "SELECT hostel_block, wing_name, room_no FROM attendance_v2_hostel_wing_members WHERE college_id = ? AND UPPER(student_id) = ?",
+                ("TESTCOLLEGE", "MOVE-STUDENT"),
+            ).fetchone()
+            conn.close()
+            self.assertEqual(
+                (member["hostel_block"], member["wing_name"], member["room_no"]),
+                ("Destination Hostel", "Wing B", "202"),
+            )
         finally:
             main.ACTIVE_COLLEGE_ID.reset(context_token)
 
@@ -1929,7 +2220,7 @@ class TenantSafetyTests(unittest.TestCase):
         finally:
             main.ACTIVE_COLLEGE_ID.reset(tenant_context)
 
-    def test_warden_unlock_and_digital_leave_approval_write_attendance_logs(self):
+    def test_onboarding_unlock_and_digital_leave_approval_write_attendance_logs(self):
         tenant_context = main.ACTIVE_COLLEGE_ID.set("TESTCOLLEGE")
         try:
             conn = main.get_conn()
@@ -1983,6 +2274,13 @@ class TenantSafetyTests(unittest.TestCase):
             request = build_request([(b"host", b"portal.example.edu")])
             request.state.tenant = main.get_tenant_by_id("TESTCOLLEGE")
             request.state.user = {"user_id": "TEST-WARDEN", "role": "Warden", "hostel_block": "Leave Hostel"}
+            with self.assertRaises(HTTPException) as warden_denied:
+                main.unlock_student_biometric(
+                    main.BiometricUnlockReq(student_id="BIOMETRIC-LEAVE-STUDENT"),
+                    request,
+                )
+            self.assertEqual(warden_denied.exception.status_code, 403)
+            request.state.user = {"user_id": "TEST-ONBOARDING", "role": "StudentOnboarding"}
             unlock = main.unlock_student_biometric(
                 main.BiometricUnlockReq(student_id="BIOMETRIC-LEAVE-STUDENT"),
                 request,

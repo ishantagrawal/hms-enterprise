@@ -5298,6 +5298,14 @@ def _embedding_cipher():
 
 
 @lru_cache(maxsize=1)
+def _beacon_signing_cipher():
+    key_material = hashlib.sha256(
+        b"vidyut-attendance-beacon-signing-v1:" + AUTH_SECRET.encode("utf-8")
+    ).digest()
+    return Fernet(base64.urlsafe_b64encode(key_material))
+
+
+@lru_cache(maxsize=1)
 def _face_embedding_session():
     try:
         import onnxruntime as ort
@@ -5423,10 +5431,11 @@ def _verify_face_image(live_image_base64: str, encrypted_reference: str) -> bool
 
 
 @app.post("/api/warden/unlock-biometric")
+@app.post("/api/onboarding/unlock-biometric")
 def unlock_student_biometric(req: BiometricUnlockReq, request: Request):
-    warden = request.state.user
-    if warden.get("role") != "Warden":
-        raise HTTPException(status_code=403, detail="Only the student's Warden can unlock biometric enrollment.")
+    onboarding_staff = request.state.user
+    if onboarding_staff.get("role") != "StudentOnboarding":
+        raise HTTPException(status_code=403, detail="Only Student Onboarding Staff can unlock device enrollment.")
     student_id = req.student_id.strip().upper()
     if not student_id or len(student_id) > 64:
         raise HTTPException(status_code=400, detail="Enter a valid student account ID.")
@@ -5435,8 +5444,6 @@ def unlock_student_biometric(req: BiometricUnlockReq, request: Request):
         student = student_biometric_record(conn, student_id, for_update=True)
         if not student:
             raise HTTPException(status_code=404, detail="Student record not found.")
-        if str(student["hostel_block"] or "").casefold() != str(warden.get("hostel_block") or "").casefold():
-            raise HTTPException(status_code=403, detail="You can unlock enrollment only for students in your hostel.")
         until = int(time.time()) + 120
         if student["biometric_cred_id"]:
             db_exec(
@@ -6753,6 +6760,8 @@ def review_student_profile_request(req: ProfileRequestReviewReq, request: Reques
                 f"UPDATE users SET {columns} WHERE college_id = ? AND UPPER(user_id) = ?",
                 (*changes.values(), ACTIVE_COLLEGE_ID.get(), row["student_id"].upper()),
             )
+            if set(changes) & {"hostel_block", "wing", "room"}:
+                _link_attendance_v2_student(conn, row["student_id"])
 
         reviewed_at = datetime.now().isoformat(timespec="seconds")
         db_exec(
@@ -7358,6 +7367,7 @@ def update_student_by_warden(req: WardenStudentUpdateReq, request: Request):
         "UPDATE complaints SET hostel_block = ?, wing = ?, room = ?, student_name = ? WHERE college_id = ? AND UPPER(student_id) = ? AND status != 'Completed'",
         (new_hostel, new_wing, new_room, full_name, ACTIVE_COLLEGE_ID.get(), uid)
     )
+    _link_attendance_v2_student(conn, uid)
     conn.commit()
     conn.close()
     invalidate_user_cache(uid)

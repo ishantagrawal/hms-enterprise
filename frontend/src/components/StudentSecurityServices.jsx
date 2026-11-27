@@ -141,11 +141,11 @@ export function StudentLeavePassPanel({ apiUrl, user, hostels = [], initialPasse
     setError('');
     setMessage('');
     if (user?.biometric_status !== 'Locked') {
-      setError('Ask your Warden to unlock device enrollment before confirming your return.');
+      setError('Ask Student Onboarding Staff to unlock device enrollment before confirming your return.');
       return;
     }
     if (!expectedBeacon) {
-      setError(`Your Warden has not configured the ${user?.wing || 'assigned wing'} beacon yet.`);
+      setError(`The Beacon Manager has not configured the ${user?.wing || 'assigned wing'} beacon yet.`);
       return;
     }
     setReturningPassId(pass.pass_id);
@@ -172,7 +172,7 @@ export function StudentLeavePassPanel({ apiUrl, user, hostels = [], initialPasse
     try {
       const deviceBindingToken = await getDeviceBindingToken(user);
       if (!deviceBindingToken) {
-        throw new Error('This device binding is missing. Ask your Warden to unlock device enrollment again.');
+        throw new Error('This device binding is missing. Ask Student Onboarding Staff to unlock device enrollment again.');
       }
       const requestBody = {
         pass_id: pass.pass_id,
@@ -306,7 +306,7 @@ export function StudentLeavePassPanel({ apiUrl, user, hostels = [], initialPasse
                             {returningPassId === pass.pass_id ? 'Scanning beacon and verifying…' : '📡 Confirm Return at Hostel Wing Beacon'}
                           </button>
                           {!expectedBeacon && <span className="ptm-list-sub">Your Warden must configure the {user?.wing || 'assigned wing'} beacon.</span>}
-                          {user?.biometric_status !== 'Locked' && <span className="ptm-list-sub">Ask your Warden to unlock device enrollment before return verification.</span>}
+                          {user?.biometric_status !== 'Locked' && <span className="ptm-list-sub">Ask Student Onboarding Staff to unlock device enrollment before return verification.</span>}
                         </div>
                       )}
                     </div>
@@ -552,7 +552,7 @@ export function StudentBiometricAttendancePanel({
     setCached(cacheKey, initialLogs);
   }, [cacheKey, initialLogs]);
 
-  // A Warden can unlock enrollment while the student portal remains open.
+  // Student Onboarding Staff can unlock enrollment while the student portal remains open.
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect
     setBiometricStatus(user?.biometric_status || 'Unenrolled');
@@ -599,7 +599,7 @@ export function StudentBiometricAttendancePanel({
 
   const registerAndLock = async (disclosureAlreadyAccepted = false) => {
     if (!enrollmentOpen) {
-      setError('Ask your Warden to unlock the 2-minute enrollment window first.');
+      setError('Ask Student Onboarding Staff to unlock the 2-minute enrollment window first.');
       return;
     }
     if (!faceConsent) {
@@ -669,11 +669,11 @@ export function StudentBiometricAttendancePanel({
       return;
     }
     if (biometricStatus !== 'Locked' || !faceEnrolled) {
-      setError('Complete face verification enrollment during a Warden-authorized setup window first.');
+      setError('Complete face verification enrollment during a Student Onboarding-approved setup window first.');
       return;
     }
     if (!expectedBeacon) {
-      setError(`Your Warden has not configured the ${user?.wing || 'assigned wing'} beacon yet.`);
+      setError(`The Beacon Manager has not configured the ${user?.wing || 'assigned wing'} beacon yet.`);
       return;
     }
     setBusy(true);
@@ -683,7 +683,7 @@ export function StudentBiometricAttendancePanel({
     try {
       const deviceBindingToken = await getDeviceBindingToken(user);
       if (!deviceBindingToken) {
-        throw new Error('This device binding is missing. Ask your Warden to unlock device enrollment again.');
+        throw new Error('This device binding is missing. Ask Student Onboarding Staff to unlock device enrollment again.');
       }
       const detectedBeacon = await scanWingBeacon(expectedBeacon, true);
       const beacon = {
@@ -780,7 +780,7 @@ export function StudentBiometricAttendancePanel({
       {error && <div className="ptm-alert-error" role="alert">{error}</div>}
       {message && <div className="ptm-sync-note" role="status">{message}</div>}
       <div className="ptm-card">
-        <div className="ptm-section-title">Warden-authorized face enrollment</div>
+        <div className="ptm-section-title">Student Onboarding-approved face enrollment</div>
         <p className="ptm-list-sub">Face verification is used for attendance and approved-leave return checks. With your confirmation, the enrollment image and derived 128D reference are stored encrypted. Live attendance frames stay on your device while only the embedding is sent for comparison; return frames are sent securely and not retained.</p>
         {biometricStatus === 'Locked' && faceEnrolled ? (
           <div className="ptm-sync-note" role="status">✅ Face reference enrolled · attendance requires a server-side 1:1 match and this device token.</div>
@@ -788,8 +788,8 @@ export function StudentBiometricAttendancePanel({
           <>
             <div className="ptm-list-sub">Status: {biometricStatus === 'Enrollment Unlocked' ? 'Enrollment window open' : 'Face enrollment required'}</div>
             {enrollmentOpen
-              ? <p className="ptm-list-sub">Complete setup before {new Date(enrollmentUntil * 1000).toLocaleTimeString()} while standing with your Warden.</p>
-              : <p className="ptm-list-sub">Ask your Warden to unlock a two-minute setup window while you are together.</p>}
+              ? <p className="ptm-list-sub">Complete setup before {new Date(enrollmentUntil * 1000).toLocaleTimeString()} while standing with Student Onboarding Staff.</p>
+              : <p className="ptm-list-sub">Ask Student Onboarding Staff to unlock a two-minute setup window while you are together.</p>}
             <label className="ptm-list-sub" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 12 }}>
               <input
                 type="checkbox"

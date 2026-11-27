@@ -105,9 +105,9 @@ function AttendanceCheckIn({ apiUrl, session, onDone, onClose }) {
   const [error, setError] = useState('');
   const dismissProps = useDismissSheet(onClose);
   const scanner = useBeaconScanner({
-    uuid: session.beacon.uuid,
-    major: session.beacon.major,
-    minor: session.beacon.minor,
+    beacons: session.beacons?.length
+      ? session.beacons
+      : [{ beacon_code: session.beacon.beacon_code, min_rssi: session.beacon.min_rssi }],
     minRssi: session.beacon.min_rssi
   });
 
@@ -132,6 +132,10 @@ function AttendanceCheckIn({ apiUrl, session, onDone, onClose }) {
   }, []);
 
   const checkIn = async () => {
+    if (scanner.simulation) {
+      setError('Beacon simulation is for preview only. Real attendance requires a native device to detect the physical beacon.');
+      return;
+    }
     if (!scanner.inRange || scanner.rssi === null) {
       setError('Move closer to the active room beacon before checking in.');
       return;
@@ -162,7 +166,7 @@ function AttendanceCheckIn({ apiUrl, session, onDone, onClose }) {
           session_id: session.id,
           session_nonce: currentSession.current_nonce,
           credential: encodeCredential(credential),
-          uuid: session.beacon.uuid,
+          uuid: scanner.rotatingUuid,
           major: session.beacon.major,
           minor: session.beacon.minor,
           rssi: scanner.rssi,
@@ -205,7 +209,7 @@ function AttendanceCheckIn({ apiUrl, session, onDone, onClose }) {
         </div>
         <div className="av-checkin-status">
           <span className={`av-checkin-status-icon${scanner.inRange ? ' is-good' : ''}`}>{scanner.inRange ? <Icon name="check" size={16} /> : null}</span>
-          <div><strong>{scanner.inRange ? `In ${session.beacon?.name || session.wing_name || 'the classroom'}` : 'Finding the room beacon'}</strong><small>{scanner.inRange ? 'Class beacon found nearby' : 'Move closer to the active beacon'}</small></div>
+          <div><strong>{scanner.inRange ? 'Rotating beacon detected' : 'Finding the room beacon'}</strong><small>{scanner.inRange ? 'Signed beacon token will be checked by the server' : 'Move closer to an assigned active beacon'}</small></div>
           <span className="av-checkin-signal">{scanner.rssi === null ? '' : `${scanner.rssi} dBm`}</span>
         </div>
         <div className="av-checkin-status">
@@ -213,15 +217,18 @@ function AttendanceCheckIn({ apiUrl, session, onDone, onClose }) {
           <div><strong>Face check</strong><small>{busy ? 'Checking your face…' : cameraReady ? 'Ready to verify your presence' : 'Waiting for camera'}</small></div>
         </div>
         {scanner.simulationAvailable && (
-          <label className="av-sim-toggle">
-            <input type="checkbox" checked={scanner.simulation} onChange={(event) => event.target.checked ? scanner.startSimulation() : scanner.stopSimulation()} />
-            Simulate Beacon in Browser
-          </label>
+          <>
+            <label className="av-sim-toggle">
+              <input type="checkbox" checked={scanner.simulation} onChange={(event) => event.target.checked ? scanner.startSimulation() : scanner.stopSimulation()} />
+              Simulate Beacon in Browser
+            </label>
+            <p className="av-footnote">Simulation only previews this screen. Attendance can be recorded only from a supported native device near the physical beacon.</p>
+          </>
         )}
         {scanner.error && <p className="av-error">{scanner.error}</p>}
         {error && <p className="av-error">{error}</p>}
-        <p className="av-checkin-manual"><Icon name="file" size={17} /> Phone issue? Ask your faculty to mark you manually.</p>
-        <button className="av-primary" disabled={busy || !cameraReady || !scanner.inRange} onClick={checkIn}>
+        <p className="av-checkin-manual"><Icon name="file" size={17} /> Phone issue? Ask your faculty or Warden to mark you manually.</p>
+        <button className="av-primary" disabled={busy || !cameraReady || !scanner.inRange || scanner.simulation} onClick={checkIn}>
           {busy ? 'Verifying…' : 'Verify and mark present'}
         </button>
         <p className="av-footnote">The compressed live frame is sent for 1:1 verification and discarded after processing.</p>
@@ -283,12 +290,12 @@ function DeviceEnrollment({ apiUrl, onComplete, onClose }) {
     <div className="av-overlay">
       <section className="av-sheet" role="dialog" aria-modal="true" aria-labelledby="av-enroll-title" {...dismissProps}>
         <button className="av-close" onClick={onClose} aria-label="Close enrollment">×</button>
-        <p className="av-kicker">WARDEN-APPROVED ENROLLMENT</p>
+        <p className="av-kicker">STUDENT ONBOARDING-APPROVED ENROLLMENT</p>
         <h2 id="av-enroll-title">Bind this device</h2>
         <div className="av-camera"><video ref={videoRef} autoPlay playsInline muted /></div>
         {error && <p className="av-error">{error}</p>}
         <button className="av-primary" disabled={busy || !ready} onClick={enroll}>{busy ? 'Securing device...' : 'Create passkey and face reference'}</button>
-        <p className="av-footnote">Only one approved device is active. Ask your Warden to reset the lock when changing phones.</p>
+        <p className="av-footnote">Only one approved device is active. Ask Student Onboarding Staff to reset the lock when changing phones.</p>
       </section>
     </div>
   );
@@ -368,7 +375,7 @@ export function StudentAttendance({ apiUrl, modules }) {
           {deviceStatus && !deviceStatus.device_locked && (
             <div className="av-panel av-device-enrollment">
               <strong>Secure your attendance device</strong>
-              <p>{deviceStatus.enrollment_window_expires_at ? 'Your Warden-approved enrollment window is open.' : 'Ask your Warden to open a timed device enrollment window.'}</p>
+              <p>{deviceStatus.enrollment_window_expires_at ? 'Your Student Onboarding-approved enrollment window is open.' : 'Ask Student Onboarding Staff to open a timed device enrollment window.'}</p>
               {deviceStatus.enrollment_window_expires_at && <button className="av-primary" onClick={() => setEnrolling(true)}>Enroll this device</button>}
             </div>
           )}
@@ -408,7 +415,7 @@ export function StudentAttendance({ apiUrl, modules }) {
               : <span className="av-device-state">Device not enrolled</span>}
           </div>
           {!deviceStatus?.device_locked && deviceStatus?.enrollment_window_expires_at && (
-            <button className="av-primary av-enroll-button" onClick={() => setEnrolling(true)}>Complete Warden-approved device enrollment</button>
+            <button className="av-primary av-enroll-button" onClick={() => setEnrolling(true)}>Complete approved device enrollment</button>
           )}
           <section className="av-panel">
             <h2>Nightly roll call</h2>
@@ -468,19 +475,44 @@ function AttendanceShell({ title, tabs, tab, setTab, children, error, message, s
 
 function BeaconManager({ apiUrl, scope }) {
   const [beacons, setBeacons] = useState([]);
-  const [form, setForm] = useState({ name: '', uuid: '', major: 1, minor: 1, min_rssi: -78 });
+  const [hostels, setHostels] = useState([]);
+  const [form, setForm] = useState({ name: '', hostel_block: '', wing_name: '', min_rssi: -78 });
+  const [provisioning, setProvisioning] = useState(null);
+  const [editingBeaconId, setEditingBeaconId] = useState('');
+  const [editingBeaconName, setEditingBeaconName] = useState('');
   const [error, setError] = useState('');
   const load = useCallback(async () => setBeacons(await requestJson(apiUrl, `/beacons?scope=${scope}`)), [apiUrl, scope]);
   useEffect(() => { void load().catch((loadError) => setError(extractErrorMessage(loadError))); }, [load]);
+  useEffect(() => {
+    if (scope !== 'HOSTEL') return undefined;
+    let active = true;
+    apiFetch(`${apiUrl}/api/hostels/config`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => []);
+        if (!response.ok) throw new Error(extractErrorMessage(data, 'Could not load hostel wings.'));
+        if (active) {
+          setHostels(data);
+          setForm((current) => ({
+            ...current,
+            hostel_block: current.hostel_block || data[0]?.name || '',
+            wing_name: current.wing_name || data[0]?.wings?.[0] || ''
+          }));
+        }
+      })
+      .catch((loadError) => { if (active) setError(extractErrorMessage(loadError)); });
+    return () => { active = false; };
+  }, [apiUrl, scope]);
   const save = async (event) => {
     event.preventDefault();
     setError('');
+    setProvisioning(null);
     try {
-      await requestJson(apiUrl, '/beacons', {
+      const created = await requestJson(apiUrl, '/beacons', {
         method: 'POST',
-        body: JSON.stringify({ ...form, scope, major: Number(form.major), minor: Number(form.minor), min_rssi: Number(form.min_rssi) })
+        body: JSON.stringify({ ...form, scope, min_rssi: Number(form.min_rssi) })
       });
-      setForm({ name: '', uuid: '', major: 1, minor: 1, min_rssi: -78 });
+      setProvisioning(created);
+      setForm((current) => ({ ...current, name: '', min_rssi: -78 }));
       await load();
     } catch (saveError) { setError(extractErrorMessage(saveError)); }
   };
@@ -494,23 +526,79 @@ function BeaconManager({ apiUrl, scope }) {
     try { await requestJson(apiUrl, `/beacons/${encodeURIComponent(beacon.id)}/toggle`, { method: 'POST' }); await load(); }
     catch (toggleError) { setError(extractErrorMessage(toggleError)); }
   };
+  const rotateKey = async (beacon) => {
+    setError('');
+    setProvisioning(null);
+    try {
+      const result = await requestJson(apiUrl, `/beacons/${encodeURIComponent(beacon.id)}/provision`, { method: 'POST' });
+      setProvisioning({ ...beacon, ...result });
+      await load();
+    } catch (provisionError) { setError(extractErrorMessage(provisionError)); }
+  };
+  const renameBeacon = async (beacon) => {
+    const name = editingBeaconName.trim();
+    if (!name) {
+      setError('Beacon display name is required.');
+      return;
+    }
+    setError('');
+    try {
+      await requestJson(apiUrl, `/beacons/${encodeURIComponent(beacon.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ ...beacon, name })
+      });
+      setEditingBeaconId('');
+      setEditingBeaconName('');
+      await load();
+    } catch (renameError) {
+      setError(extractErrorMessage(renameError));
+    }
+  };
+  const selectedHostel = hostels.find((hostel) => hostel.name === form.hostel_block);
+  const updateHostel = (hostelName) => {
+    const hostel = hostels.find((item) => item.name === hostelName);
+    setForm((current) => ({
+      ...current,
+      hostel_block: hostelName,
+      wing_name: hostel?.wings?.[0] || ''
+    }));
+  };
   return (
     <section className="av-panel">
       <h2>{scope === 'CLASS' ? 'Room Beacons' : 'Hostel Beacons'}</h2>
+      <p className="av-subtitle">Beacon names are display labels in Vidyut OS. Renaming a label does not reflash the ESP32; its signed rotating ID stays linked to this record.</p>
+      <p className="av-subtitle">ESP32 iBeacon IDs rotate every 30 seconds and are validated server-side. Rotation rejects stale captures, but not live BLE relays or cloning after a signing key is extracted from a physically accessed device.</p>
       {error && <p className="av-error">{error}</p>}
       <form className="av-form-grid" onSubmit={save}>
-        <label>Beacon name<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
-        <label>iBeacon UUID<input required value={form.uuid} onChange={(event) => setForm({ ...form, uuid: event.target.value })} /></label>
-        <label>Major<input type="number" min="0" max="65535" value={form.major} onChange={(event) => setForm({ ...form, major: event.target.value })} /></label>
-        <label>Minor<input type="number" min="0" max="65535" value={form.minor} onChange={(event) => setForm({ ...form, minor: event.target.value })} /></label>
+        <label>Display name<input required maxLength="100" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder={scope === 'CLASS' ? 'Lecture Hall 1' : 'Gajjar · Wing A beacon 1'} /></label>
+        {scope === 'HOSTEL' && <>
+          <label>Hostel<select required value={form.hostel_block} onChange={(event) => updateHostel(event.target.value)}><option value="">Choose a hostel</option>{hostels.map((hostel) => <option key={hostel.hostel_id} value={hostel.name}>{hostel.name}</option>)}</select></label>
+          <label>Wing<select required value={form.wing_name} onChange={(event) => setForm({ ...form, wing_name: event.target.value })}><option value="">Choose a wing</option>{(selectedHostel?.wings || []).map((wing) => <option key={wing} value={wing}>{wing}</option>)}</select></label>
+        </>}
         <label>Minimum RSSI <b className="av-tabular">{form.min_rssi} dBm</b><input type="range" min="-85" max="-65" value={form.min_rssi} onChange={(event) => setForm({ ...form, min_rssi: event.target.value })} /></label>
-        <button className="av-primary">Add beacon</button>
+        <button className="av-primary" disabled={scope === 'HOSTEL' && !form.wing_name}>Add and provision ESP32 beacon</button>
       </form>
+      {provisioning?.provisioning_secret && (
+        <div className="av-credentials" role="status">
+          <strong>One-time ESP32 provisioning values</strong>
+          <p>Copy these to the ESP32 firmware setup now. Vidyut OS stores only an encrypted copy and will never show this secret again.</p>
+          <div className="av-list-row"><span>Beacon code</span><code>{provisioning.beacon_code}</code></div>
+          <div className="av-list-row"><span>Signing secret</span><code className="av-temp-password">{provisioning.provisioning_secret}</code></div>
+          <p className="av-subtitle">Keep the secret private and unique to this beacon. Rotate it here if the device is replaced or the secret is exposed.</p>
+        </div>
+      )}
       <div className="av-list">
         {beacons.map((beacon) => (
           <div className="av-list-row" key={beacon.id}>
-            <div><strong>{beacon.name}</strong><small>{beacon.uuid} · {beacon.major}/{beacon.minor}</small></div>
+            <div>
+              {editingBeaconId === beacon.id
+                ? <form className="av-inline-form" onSubmit={(event) => { event.preventDefault(); void renameBeacon(beacon); }}><label>Display name<input required maxLength="100" value={editingBeaconName} onChange={(event) => setEditingBeaconName(event.target.value)} /></label><button className="av-secondary">Save name</button></form>
+                : <><strong>{beacon.name}</strong><small>{beacon.scope === 'HOSTEL' ? `${beacon.hostel_block} · ${beacon.wing_name} · ` : ''}Device code {beacon.beacon_code || 'not provisioned'}</small></>}
+            </div>
             <label className="av-rssi-slider">Min {beacon.min_rssi} dBm<input type="range" min="-85" max="-65" value={beacon.min_rssi} onChange={(event) => updateRssi(beacon, event.target.value)} /></label>
+            {!beacon.is_provisioned && <span className="av-status is-absent">Provisioning required</span>}
+            <button type="button" className="av-secondary" onClick={() => { setEditingBeaconId(editingBeaconId === beacon.id ? '' : beacon.id); setEditingBeaconName(beacon.name); }}>Rename</button>
+            <button className="av-secondary" onClick={() => rotateKey(beacon)}>{beacon.is_provisioned ? 'Rotate key' : 'Provision ESP32'}</button>
             <button className="av-secondary" onClick={() => toggle(beacon)}>{beacon.is_active ? 'Deactivate' : 'Activate'}</button>
           </div>
         ))}
@@ -550,7 +638,7 @@ function FacultyAttendance({ apiUrl }) {
   const [courseForm, setCourseForm] = useState({ code: '', title: '' });
   const [activeCourse, setActiveCourse] = useState('');
   const [activeGroup, setActiveGroup] = useState('');
-  const [activeBeacon, setActiveBeacon] = useState('');
+  const [selectedBeaconIds, setSelectedBeaconIds] = useState([]);
   const [duration, setDuration] = useState('manual');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -569,9 +657,11 @@ function FacultyAttendance({ apiUrl }) {
     setActiveGroup((current) => current && groupList.some((group) => classGroupKey(group) === current)
       ? current
       : groupList[0] ? classGroupKey(groupList[0]) : '');
-    setActiveBeacon((current) => current && beaconList.some((beacon) => beacon.id === current && beacon.is_active)
-      ? current
-      : beaconList.find((beacon) => beacon.is_active)?.id || '');
+    setSelectedBeaconIds((current) => {
+      const activeIds = beaconList.filter((beacon) => beacon.is_active && beacon.is_provisioned).map((beacon) => beacon.id);
+      const retained = current.filter((id) => activeIds.includes(id));
+      return retained.length ? retained : activeIds.slice(0, 1);
+    });
   }, [apiUrl]);
   useEffect(() => { void reload().catch((loadError) => setError(extractErrorMessage(loadError))); }, [reload]);
   useEffect(() => {
@@ -602,7 +692,8 @@ function FacultyAttendance({ apiUrl }) {
         department: selectedGroup?.department,
         year: selectedGroup?.year,
         division: selectedGroup?.division,
-        beacon_id: activeBeacon,
+        beacon_id: selectedBeaconIds[0],
+        beacon_ids: selectedBeaconIds,
         duration_minutes: duration === 'manual' ? null : Number(duration)
       })
     }), 'Class session started for the selected division.');
@@ -629,19 +720,22 @@ function FacultyAttendance({ apiUrl }) {
     }
   };
   const override = async (session, item) => {
-    const reason = window.prompt(`Audit reason for ${item.roll_no}:`);
-    if (!reason) return;
+    const reason = window.prompt(`Audit reason for ${item.roll_no} (minimum 3 characters):`);
+    if (!reason?.trim()) return;
+    if (reason.trim().length < 3) {
+      setError('Enter an audit reason of at least 3 characters.');
+      return;
+    }
     await run(() => requestJson(apiUrl, `/sessions/${encodeURIComponent(session.id)}/override`, {
       method: 'POST', body: JSON.stringify({ student_id: item.student_id, status: item.status === 'PRESENT' ? 'ABSENT' : 'PRESENT', reason })
     }), 'Attendance override recorded.');
   };
-  const activeBeacons = beacons.filter((beacon) => beacon.is_active);
+  const activeBeacons = beacons.filter((beacon) => beacon.is_active && beacon.is_provisioned);
   return (
     <AttendanceShell title="Faculty attendance" tabs={[
       { id: 'session', label: 'Class Sessions' },
       { id: 'courses', label: 'Subject Labels' },
-      { id: 'reports', label: 'Reports' },
-      { id: 'beacons', label: 'Room Beacons' }
+      { id: 'reports', label: 'Reports' }
     ]} tab={tab} setTab={setTab} error={error} message={message} setMessage={setMessage}>
       {tab === 'courses' && <section className="av-panel">
         <h2>Subject labels</h2>
@@ -660,7 +754,7 @@ function FacultyAttendance({ apiUrl }) {
               <div><h2>Attendance is live</h2><p className="av-subtitle">Monitor check-ins and record attendance manually when needed.</p></div>
               <StatusPill tone="live"><span className="av-live-dot" /> LIVE</StatusPill>
             </div>
-            <SessionCards sessions={sessions} onClose={close} onOverride={override} />
+            <SessionCards apiUrl={apiUrl} sessions={sessions} onClose={close} onOverride={override} />
           </div>
         ) : (
           <>
@@ -698,20 +792,22 @@ function FacultyAttendance({ apiUrl }) {
             </select>
           </label>
           <fieldset className="av-choice-field av-beacon-choice">
-            <legend>Choose the classroom beacon</legend>
+            <legend>Choose one or more classroom beacons</legend>
             <div className="av-beacon-grid">
               {activeBeacons.map((beacon) => (
                 <button
                   type="button"
                   key={beacon.id}
-                  className={`av-beacon-option${activeBeacon === beacon.id ? ' is-selected' : ''}`}
-                  aria-pressed={activeBeacon === beacon.id}
-                  onClick={() => setActiveBeacon(beacon.id)}
+                  className={`av-beacon-option${selectedBeaconIds.includes(beacon.id) ? ' is-selected' : ''}`}
+                  aria-pressed={selectedBeaconIds.includes(beacon.id)}
+                  onClick={() => setSelectedBeaconIds((current) => current.includes(beacon.id)
+                    ? current.filter((id) => id !== beacon.id)
+                    : [...current, beacon.id])}
                 >
                   <span className="av-beacon-icon"><Icon name="map" /></span>
                   <span className="av-beacon-copy"><strong>{beacon.name}</strong><small>Classroom beacon</small></span>
-                  <StatusPill tone={activeBeacon === beacon.id ? 'success' : 'neutral'}>
-                    {activeBeacon === beacon.id ? 'Selected' : 'Available'}
+                  <StatusPill tone={selectedBeaconIds.includes(beacon.id) ? 'success' : 'neutral'}>
+                    {selectedBeaconIds.includes(beacon.id) ? 'Selected' : 'Available'}
                   </StatusPill>
                 </button>
               ))}
@@ -722,22 +818,44 @@ function FacultyAttendance({ apiUrl }) {
               <option value="2">2 minutes</option><option value="3">3 minutes</option><option value="5">5 minutes</option><option value="manual">Stop manually</option>
             </select>
           </label>
-          <Button className="av-start-button" type="submit" disabled={!activeGroup || !activeBeacon}>
+          <Button className="av-start-button" type="submit" disabled={!activeGroup || !selectedBeaconIds.length}>
             <Icon name="attendance" /> Start attendance
           </Button>
         </form>
         {!classGroups.length && <p className="av-empty">Assign department, academic year, and division to student profiles in Student Onboarding before starting attendance.</p>}
-        {!activeBeacons.length && <p className="av-empty">Register and activate a classroom beacon before starting attendance.</p>}
+        {!activeBeacons.length && <p className="av-empty">Register, provision, and activate a classroom beacon before starting attendance.</p>}
           </>
         )}
       </section>}
       {tab === 'reports' && <DailyReportsPanel apiUrl={apiUrl} scope="CLASS" />}
-      {tab === 'beacons' && <BeaconManager apiUrl={apiUrl} scope="CLASS" />}
     </AttendanceShell>
   );
 }
 
-function SessionCards({ sessions, onClose, onOverride }) {
+function SessionCards({ apiUrl, sessions, onClose, onOverride }) {
+  const [auditRows, setAuditRows] = useState({});
+  const [auditOpen, setAuditOpen] = useState({});
+  const [auditLoading, setAuditLoading] = useState({});
+  const [auditErrors, setAuditErrors] = useState({});
+  const loadAudit = async (session) => {
+    if (auditOpen[session.id]) {
+      setAuditOpen((current) => ({ ...current, [session.id]: false }));
+      return;
+    }
+    setAuditOpen((current) => ({ ...current, [session.id]: true }));
+    if (auditRows[session.id]) return;
+    setAuditLoading((current) => ({ ...current, [session.id]: true }));
+    setAuditErrors((current) => ({ ...current, [session.id]: '' }));
+    try {
+      const rows = await requestJson(apiUrl, `/sessions/${encodeURIComponent(session.id)}/audit`);
+      setAuditRows((current) => ({ ...current, [session.id]: rows }));
+    } catch (loadError) {
+      setAuditOpen((current) => ({ ...current, [session.id]: false }));
+      setAuditErrors((current) => ({ ...current, [session.id]: extractErrorMessage(loadError) }));
+    } finally {
+      setAuditLoading((current) => ({ ...current, [session.id]: false }));
+    }
+  };
   return <div className="av-list">{sessions.map((session) => {
     const students = session.students || [];
     const presentCount = session.present_count ?? students.filter((student) => student.status === 'PRESENT').length;
@@ -759,18 +877,34 @@ function SessionCards({ sessions, onClose, onOverride }) {
           <span><Icon name="clock" size={16} /> Live attendance session</span>
         </div>
         <div className="av-roster-section">
-          <div className="av-row-between"><div><h4>Manual attendance</h4><p className="av-subtitle">Use only when a student cannot check in from their device.</p></div><StatusPill tone="warning">{absentStudents.length} absent</StatusPill></div>
+          <div className="av-row-between"><div><h4>Manual attendance</h4><p className="av-subtitle">For phone or battery issues, mark the student present and enter a reason. Every change is audited.</p></div><StatusPill tone="warning">{absentStudents.length} absent</StatusPill></div>
           <div className="av-roster">
             {absentStudents.map((item) => (
               <div className="av-roster-row" key={`${session.id}-${item.roll_no}`}>
                 <span className="av-tabular">{item.roll_no}</span>
                 <span>{item.student_name || item.student_id || 'Not linked'}</span>
                 <StatusPill tone="warning">Absent</StatusPill>
-                {item.student_id && <button className="av-text-button" onClick={() => onOverride(session, item)}>Mark present</button>}
+                {item.student_id && <button className="av-text-button" onClick={() => onOverride(session, item)}>Manual mark present</button>}
               </div>
             ))}
             {!absentStudents.length && <p className="av-empty">All students are marked present.</p>}
           </div>
+          <button type="button" className="av-secondary" onClick={() => void loadAudit(session)}>
+            {auditLoading[session.id] ? 'Loading audit…' : auditOpen[session.id] ? 'Hide audit trail' : 'View audit trail'}
+          </button>
+          {auditErrors[session.id] && <p className="av-error" role="alert">{auditErrors[session.id]}</p>}
+          {auditOpen[session.id] && (
+            <div className="av-history-list" aria-live="polite">
+              {(auditRows[session.id] || []).map((entry) => (
+                <div className="av-history-row" key={entry.id}>
+                  <span><strong>{entry.roll_no || entry.student_id}</strong> · {entry.previous_status || 'Unmarked'} → {entry.new_status}</span>
+                  <span>{entry.actor_name || entry.actor_id}</span>
+                  <small>{entry.reason} · {new Date(entry.created_at).toLocaleString()}</small>
+                </div>
+              ))}
+              {auditRows[session.id]?.length === 0 && <p className="av-empty">No manual attendance changes have been recorded.</p>}
+            </div>
+          )}
         </div>
         <div className="av-live-session-actions">
           <Button variant="outline" type="button" onClick={() => onClose(session)}>
@@ -846,6 +980,8 @@ function ReportEmailSettings({ apiUrl }) {
 function DailyReportsPanel({ apiUrl, scope, showEmailSettings = true }) {
   const [date, setDate] = useState(localDateString);
   const [reports, setReports] = useState([]);
+  const [auditSession, setAuditSession] = useState('');
+  const [auditRows, setAuditRows] = useState([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -871,6 +1007,21 @@ function DailyReportsPanel({ apiUrl, scope, showEmailSettings = true }) {
       await downloadPdf(apiUrl, `/reports/session/${encodeURIComponent(report.session_id)}.pdf`, `${date}-${report.scope.toLowerCase()}-attendance.pdf`);
     } catch (downloadError) { setError(extractErrorMessage(downloadError)); }
   };
+  const viewAudit = async (report) => {
+    if (auditSession === report.session_id) {
+      setAuditSession('');
+      setAuditRows([]);
+      return;
+    }
+    setError('');
+    try {
+      const rows = await requestJson(apiUrl, `/sessions/${encodeURIComponent(report.session_id)}/audit`);
+      setAuditRows(rows);
+      setAuditSession(report.session_id);
+    } catch (auditError) {
+      setError(extractErrorMessage(auditError));
+    }
+  };
 
   return (
     <>
@@ -886,9 +1037,24 @@ function DailyReportsPanel({ apiUrl, scope, showEmailSettings = true }) {
         {error && <p className="av-error">{error}</p>}
         <div className="av-list">
           {reports.map((report) => (
-            <div className="av-list-row" key={report.session_id}>
-              <div><strong>{report.title}</strong><small>{report.date} · {report.status} · {report.present}/{report.total} present · {report.absent} absent</small></div>
-              <button className="av-secondary" onClick={() => void download(report)}>Download PDF</button>
+            <div key={report.session_id}>
+              <div className="av-list-row">
+                <div><strong>{report.title}</strong><small>{report.date} · {report.status} · {report.present}/{report.total} present · {report.absent} absent</small></div>
+                <button type="button" className="av-secondary" onClick={() => void download(report)}>Download PDF</button>
+                {report.audit_entries > 0 && <button type="button" className="av-secondary" onClick={() => void viewAudit(report)}>{auditSession === report.session_id ? 'Hide audit' : `Audit (${report.audit_entries})`}</button>}
+              </div>
+              {auditSession === report.session_id && (
+                <div className="av-history-list">
+                  {auditRows.map((entry) => (
+                    <div className="av-history-row" key={entry.id}>
+                      <span><strong>{entry.roll_no || entry.student_id}</strong> · {entry.previous_status || 'Unmarked'} → {entry.new_status}</span>
+                      <span>{entry.actor_name || entry.actor_id}</span>
+                      <small>{entry.reason} · {new Date(entry.created_at).toLocaleString()}</small>
+                    </div>
+                  ))}
+                  {!auditRows.length && <p className="av-empty">No manual attendance changes have been recorded.</p>}
+                </div>
+              )}
             </div>
           ))}
           {!reports.length && !busy && <p className="av-empty">No attendance sessions for this date.</p>}
@@ -922,16 +1088,15 @@ export function DeanAttendanceOverview({ apiUrl, modules = {} }) {
   );
 }
 
-export function WardenAttendance({ apiUrl, modules }) {
-  const [tab, setTab] = useState(modules?.hostel_attendance ? 'rollcall' : 'devices');
+export function WardenAttendance({ apiUrl, modules, user }) {
+  const [tab, setTab] = useState('rollcall');
   const [beacons, setBeacons] = useState([]);
   const [sessions, setSessions] = useState([]);
-  const [students, setStudents] = useState([]);
-  const [student, setStudent] = useState('');
+  const [hostels, setHostels] = useState([]);
+  const assignedHostel = String(user?.hostel_block || '').trim();
+  const [hostelBlock, setHostelBlock] = useState(assignedHostel);
   const [wing, setWing] = useState('');
-  const [room, setRoom] = useState('');
-  const [roll, setRoll] = useState('');
-  const [name, setName] = useState('');
+  const [selectedBeaconIds, setSelectedBeaconIds] = useState([]);
   const [duration, setDuration] = useState('3');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -946,11 +1111,22 @@ export function WardenAttendance({ apiUrl, modules }) {
   }, [apiUrl, modules?.hostel_attendance]);
   useEffect(() => { void reload().catch((loadError) => setError(extractErrorMessage(loadError))); }, [reload]);
   useEffect(() => {
-    if (!modules?.hostel_attendance) return;
-    requestJson(apiUrl, '/directory/students?scope=HOSTEL')
-      .then(setStudents)
-      .catch((loadError) => setError(extractErrorMessage(loadError)));
-  }, [apiUrl, modules?.hostel_attendance]);
+    let active = true;
+    apiFetch(`${apiUrl}/api/hostels/config`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => []);
+        if (!response.ok) throw new Error(extractErrorMessage(data, 'Could not load configured hostel wings.'));
+        if (!active) return;
+        setHostels(data);
+        const initialHostel = assignedHostel && assignedHostel.toLowerCase() !== 'all'
+          ? assignedHostel
+          : data[0]?.name || '';
+        setHostelBlock((current) => current || initialHostel);
+        setWing((current) => current || data.find((item) => item.name === initialHostel)?.wings?.[0] || '');
+      })
+      .catch((loadError) => { if (active) setError(extractErrorMessage(loadError)); });
+    return () => { active = false; };
+  }, [apiUrl, assignedHostel]);
   const run = async (action, success) => {
     setError('');
     try {
@@ -962,17 +1138,22 @@ export function WardenAttendance({ apiUrl, modules }) {
   };
   const start = (event) => {
     event.preventDefault();
-    return run(() => requestJson(apiUrl, '/sessions', { method: 'POST', body: JSON.stringify({ scope: 'HOSTEL', wing_name: wing, beacon_id: beacons[0]?.id, duration_minutes: duration === 'manual' ? null : Number(duration) }) }), 'Wing roll call started.');
+    if (!selectedBeaconIds.length) {
+      setError('Choose at least one active beacon for this hostel and wing.');
+      return;
+    }
+    return run(() => requestJson(apiUrl, '/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        scope: 'HOSTEL',
+        hostel_block: hostelBlock,
+        wing_name: wing,
+        beacon_id: selectedBeaconIds[0],
+        beacon_ids: selectedBeaconIds,
+        duration_minutes: duration === 'manual' ? null : Number(duration)
+      })
+    }), `${wing === 'ALL' ? 'All-wing' : 'Wing'} roll call started.`);
   };
-  const addMember = (event) => {
-    event.preventDefault();
-    return run(() => requestJson(apiUrl, '/hostel/members', { method: 'POST', body: JSON.stringify({ wing_name: wing, room_no: room, roll_no: roll, student_name: name }) }), 'Student added to the wing roster.');
-  };
-  const openWindow = (event) => {
-    event.preventDefault();
-    return run(() => requestJson(apiUrl, '/device/enrollment/open', { method: 'POST', body: JSON.stringify({ student_id: student, duration_seconds: 120 }) }), 'Two-minute enrollment window opened.');
-  };
-  const reset = () => run(() => requestJson(apiUrl, `/device/reset/${encodeURIComponent(student)}`, { method: 'POST' }), 'Device lock reset.');
   const close = async (session) => {
     setError('');
     try {
@@ -995,16 +1176,34 @@ export function WardenAttendance({ apiUrl, modules }) {
     }
   };
   const override = async (session, item) => {
-    const reason = window.prompt(`Audit reason for ${item.roll_no}:`);
-    if (!reason) return;
+    const reason = window.prompt(`Audit reason for ${item.roll_no} (minimum 3 characters):`);
+    if (!reason?.trim()) return;
+    if (reason.trim().length < 3) {
+      setError('Enter an audit reason of at least 3 characters.');
+      return;
+    }
     await run(() => requestJson(apiUrl, `/sessions/${encodeURIComponent(session.id)}/override`, { method: 'POST', body: JSON.stringify({ student_id: item.student_id, status: item.status === 'PRESENT' ? 'ABSENT' : 'PRESENT', reason }) }), 'Roll-call override recorded.');
   };
   const tabs = [
     ...(modules?.hostel_attendance ? [{ id: 'rollcall', label: 'Wing Roll Call' }] : []),
-    ...(modules?.class_attendance || modules?.hostel_attendance ? [{ id: 'devices', label: 'Device Approvals' }] : []),
-    ...(modules?.hostel_attendance ? [{ id: 'reports', label: 'Reports' }] : []),
-    ...(modules?.hostel_attendance ? [{ id: 'beacons', label: 'Hostel Beacons' }] : [])
+    ...(modules?.hostel_attendance ? [{ id: 'reports', label: 'Reports' }] : [])
   ];
+  const selectedHostel = hostels.find((item) => item.name === hostelBlock);
+  const availableBeacons = beacons.filter((beacon) => (
+    beacon.is_active
+    && beacon.is_provisioned
+    && beacon.hostel_block?.toLowerCase() === hostelBlock.toLowerCase()
+    && (wing.toUpperCase() === 'ALL' || beacon.wing_name?.toLowerCase() === wing.toLowerCase() || beacon.wing_name?.toUpperCase() === 'ALL')
+  ));
+  const updateWing = (value) => {
+    setWing(value);
+    setSelectedBeaconIds([]);
+  };
+  const toggleBeaconSelection = (beaconId) => {
+    setSelectedBeaconIds((current) => current.includes(beaconId)
+      ? current.filter((id) => id !== beaconId)
+      : [...current, beaconId]);
+  };
   return (
     <AttendanceShell title="Warden attendance" tabs={tabs} tab={tab} setTab={setTab} error={error} message={message} setMessage={setMessage}>
       {tab === 'rollcall' && <section className={`av-panel${sessions.length ? ' av-live-container' : ''}`}>
@@ -1018,16 +1217,28 @@ export function WardenAttendance({ apiUrl, modules }) {
           </div>
         ) : (
           <>
-        <h2>Open wing roll call</h2>
-        <form className="av-form-grid" onSubmit={start}><label>Wing name<input required value={wing} onChange={(event) => setWing(event.target.value)} /></label><label>Session duration<select value={duration} onChange={(event) => setDuration(event.target.value)}><option value="2">2 minutes</option><option value="3">3 minutes</option><option value="5">5 minutes</option><option value="manual">Manual stop</option></select></label><button className="av-primary" disabled={!beacons.length}>Start roll call</button></form>
-        <h2>Add resident to roster</h2>
-        <form className="av-form-grid" onSubmit={addMember}><label>Room<input required value={room} onChange={(event) => setRoom(event.target.value)} /></label><label>Existing student<select required value={roll} onChange={(event) => { const selected = students.find((item) => item.roll_no === event.target.value); setRoll(event.target.value); setName(selected?.student_name || ''); }}><option value="">Select roll number</option>{students.map((item) => <option key={item.user_id} value={item.roll_no}>{item.roll_no} · {item.student_name}</option>)}</select></label><button className="av-secondary" disabled={!students.length}>Add resident</button></form>
+        <h2>Open hostel roll call</h2>
+        <p className="av-subtitle">Student Onboarding maintains hostel and wing assignments. Start one wing or all wings; multi-wing roll calls can use multiple provisioned beacons.</p>
+        <form className="av-form-grid" onSubmit={start}>
+          <label>Hostel<select required value={hostelBlock} onChange={(event) => { setHostelBlock(event.target.value); setWing(''); setSelectedBeaconIds([]); }} disabled={assignedHostel && assignedHostel.toLowerCase() !== 'all'}><option value="">Choose hostel</option>{hostels.map((hostel) => <option key={hostel.hostel_id} value={hostel.name}>{hostel.name}</option>)}</select></label>
+          <label>Wing<select required value={wing} onChange={(event) => updateWing(event.target.value)}><option value="">Choose wing</option>{selectedHostel?.wings?.map((item) => <option key={item} value={item}>{item}</option>)}<option value="ALL">All wings</option></select></label>
+          <label>Session duration<select value={duration} onChange={(event) => setDuration(event.target.value)}><option value="2">2 minutes</option><option value="3">3 minutes</option><option value="5">5 minutes</option><option value="manual">Manual stop</option></select></label>
+          <fieldset className="av-choice-field">
+            <legend>Active beacon(s) for this selection</legend>
+            {availableBeacons.map((beacon) => (
+              <label className="av-beacon-option" key={beacon.id}>
+                <input type="checkbox" checked={selectedBeaconIds.includes(beacon.id)} onChange={() => toggleBeaconSelection(beacon.id)} />
+                <span><strong>{beacon.name}</strong><small>{beacon.wing_name} · code {beacon.beacon_code}</small></span>
+              </label>
+            ))}
+            {!availableBeacons.length && <p className="av-empty">No active, provisioned beacon matches this hostel and wing. Ask the Beacon Manager to configure one.</p>}
+          </fieldset>
+          <button className="av-primary" disabled={!hostelBlock || !wing || !selectedBeaconIds.length}>Start roll call</button>
+        </form>
           </>
         )}
       </section>}
       {tab === 'reports' && <DailyReportsPanel apiUrl={apiUrl} scope="HOSTEL" />}
-      {tab === 'devices' && <section className="av-panel"><h2>Device approvals</h2><form className="av-form-grid" onSubmit={openWindow}><label>Student roll number<input required value={student} onChange={(event) => setStudent(event.target.value)} /></label><button className="av-primary">Open 120-second enrollment window</button></form><button className="av-secondary" disabled={!student} onClick={reset}>Reset device lock for phone change</button></section>}
-      {tab === 'beacons' && <BeaconManager apiUrl={apiUrl} scope="HOSTEL" />}
     </AttendanceShell>
   );
 }
@@ -1042,7 +1253,7 @@ function DeanAttendance({ apiUrl, user }) {
 export default function AttendanceOnlyPortals({ apiUrl, user, modules = {} }) {
   if (user?.role === 'Student') return <StudentAttendance apiUrl={apiUrl} modules={modules} />;
   if (user?.role === 'Faculty') return <FacultyAttendance apiUrl={apiUrl} />;
-  if (user?.role === 'Warden') return <WardenAttendance apiUrl={apiUrl} modules={modules} />;
+  if (user?.role === 'Warden') return <WardenAttendance apiUrl={apiUrl} modules={modules} user={user} />;
   if (user?.role === 'Dean') return <DeanAttendance apiUrl={apiUrl} user={user} />;
   if (user?.role === 'BeaconManager') return <BeaconManagerPortal apiUrl={apiUrl} modules={modules} />;
   return <div className="av-root"><p className="av-empty">Attendance tools are not available for this account.</p></div>;

@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile, File
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+from cryptography.fernet import InvalidToken
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/attendance-v2", tags=["attendance-v2"])
@@ -29,6 +30,8 @@ TABLES = {
             name TEXT NOT NULL, scope TEXT NOT NULL CHECK (scope IN ('CLASS', 'HOSTEL')),
             owner_id TEXT NOT NULL, uuid TEXT NOT NULL, major INTEGER NOT NULL,
             minor INTEGER NOT NULL, min_rssi INTEGER NOT NULL DEFAULT -78,
+            beacon_code TEXT NOT NULL DEFAULT '', signing_secret_enc TEXT NOT NULL DEFAULT '',
+            hostel_block TEXT NOT NULL DEFAULT '', wing_name TEXT NOT NULL DEFAULT '',
             is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL,
             PRIMARY KEY (college_id, id)
         )
@@ -65,7 +68,7 @@ TABLES = {
             scope TEXT NOT NULL CHECK (scope IN ('CLASS', 'HOSTEL')),
             course_id TEXT, department TEXT NOT NULL DEFAULT '', year TEXT NOT NULL DEFAULT '',
             division TEXT NOT NULL DEFAULT '', wing_name TEXT, hostel_block TEXT NOT NULL DEFAULT '',
-            beacon_id TEXT NOT NULL,
+            beacon_id TEXT NOT NULL, beacon_ids_json TEXT NOT NULL DEFAULT '[]',
             created_by TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('OPEN', 'CLOSED')),
             expires_at TEXT, current_nonce TEXT NOT NULL, nonce_expires_at TEXT NOT NULL,
             created_at TEXT NOT NULL, closed_at TEXT,
@@ -87,6 +90,15 @@ TABLES = {
             method TEXT, measured_rssi INTEGER, override_reason TEXT,
             marked_at TEXT, PRIMARY KEY (college_id, id),
             UNIQUE (session_id, student_id)
+        )
+    """,
+    "attendance_v2_record_audit": """
+        CREATE TABLE IF NOT EXISTS attendance_v2_record_audit (
+            college_id TEXT NOT NULL, tenant_id TEXT NOT NULL, id TEXT NOT NULL,
+            session_id TEXT NOT NULL, student_id TEXT NOT NULL,
+            previous_status TEXT, new_status TEXT NOT NULL,
+            reason TEXT NOT NULL, actor_id TEXT NOT NULL, created_at TEXT NOT NULL,
+            PRIMARY KEY (college_id, id)
         )
     """,
     "attendance_v2_student_devices": """
@@ -128,6 +140,7 @@ TABLES = {
 
 INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_attendance_v2_beacons_owner ON attendance_v2_beacons (college_id, owner_id, scope)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_v2_beacons_code ON attendance_v2_beacons (college_id, beacon_code) WHERE beacon_code != ''",
     "CREATE INDEX IF NOT EXISTS idx_attendance_v2_courses_faculty ON attendance_v2_courses (college_id, faculty_id)",
     "CREATE INDEX IF NOT EXISTS idx_attendance_v2_enrollments_student ON attendance_v2_course_enrollments (college_id, student_id, course_id)",
     "CREATE INDEX IF NOT EXISTS idx_attendance_v2_wing_student ON attendance_v2_hostel_wing_members (college_id, student_id, hostel_block, wing_name)",
@@ -142,11 +155,13 @@ INDEXES = (
 class BeaconInput(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     scope: str
-    uuid: str = Field(min_length=1, max_length=80)
-    major: int = Field(ge=0, le=65535)
-    minor: int = Field(ge=0, le=65535)
+    uuid: Optional[str] = Field(default=None, max_length=80)
+    major: int = Field(default=1, ge=0, le=65535)
+    minor: int = Field(default=1, ge=0, le=65535)
     min_rssi: int = Field(default=-78, ge=-85, le=-65)
     is_active: bool = True
+    hostel_block: str = Field(default="", max_length=160)
+    wing_name: str = Field(default="", max_length=80)
 
 
 class CourseInput(BaseModel):
@@ -163,6 +178,7 @@ class StudentInput(BaseModel):
 class SessionInput(BaseModel):
     scope: str
     beacon_id: str
+    beacon_ids: Optional[list[str]] = None
     course_id: Optional[str] = None
     department: Optional[str] = Field(default=None, max_length=120)
     year: Optional[str] = Field(default=None, max_length=40)
@@ -278,6 +294,53 @@ def _new_id(prefix):
     return f"{prefix}-{uuid.uuid4().hex}"
 
 
+def _new_beacon_credentials(conn, backend):
+    college_id = backend["ACTIVE_COLLEGE_ID"].get()
+    while True:
+        beacon_code = secrets.token_hex(4).upper()
+        exists = backend["db_exec"](
+            conn,
+            "SELECT 1 FROM attendance_v2_beacons WHERE college_id = ? AND beacon_code = ?",
+            (college_id, beacon_code),
+        ).fetchone()
+        if not exists:
+            break
+    secret = secrets.token_hex(32)
+    encrypted = backend["_beacon_signing_cipher"]().encrypt(secret.encode("ascii")).decode("ascii")
+    return beacon_code, encrypted, secret
+
+
+def _validate_rotating_beacon(beacon, presented_uuid, backend, now=None):
+    compact = re.sub(r"[^0-9a-f]", "", str(presented_uuid or "").lower())
+    if (
+        len(compact) != 32
+        or not beacon.get("beacon_code")
+        or not beacon.get("signing_secret_enc")
+        or compact[:8].upper() != beacon["beacon_code"].upper()
+    ):
+        return False
+    try:
+        slot = int(compact[8:16], 16)
+        signature = bytes.fromhex(compact[16:])
+        secret_hex = backend["_beacon_signing_cipher"]().decrypt(
+            beacon["signing_secret_enc"].encode("ascii")
+        ).decode("ascii")
+        secret = bytes.fromhex(secret_hex)
+    except (ValueError, TypeError, UnicodeDecodeError, UnicodeEncodeError, InvalidToken):
+        return False
+    if len(secret) != 32:
+        return False
+    current_slot = int((now or _now()).timestamp() // 30)
+    if slot not in {current_slot - 1, current_slot, current_slot + 1}:
+        return False
+    expected = hmac.new(
+        secret,
+        f'{beacon["beacon_code"].upper()}:{slot}'.encode("ascii"),
+        hashlib.sha256,
+    ).digest()[:8]
+    return hmac.compare_digest(signature, expected)
+
+
 def _validate_scope(scope):
     normalized = str(scope).upper()
     if normalized not in {"CLASS", "HOSTEL"}:
@@ -289,9 +352,15 @@ def _sync_v2_rls(conn, backend):
     db_exec = backend["db_exec"]
     for table_name, statement in TABLES.items():
         db_exec(conn, statement)
-        if table_name == "attendance_v2_hostel_wing_members":
+        if table_name == "attendance_v2_beacons":
+            _ensure_column(conn, backend, table_name, "beacon_code", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, backend, table_name, "signing_secret_enc", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, backend, table_name, "hostel_block", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, backend, table_name, "wing_name", "TEXT NOT NULL DEFAULT ''")
+        elif table_name == "attendance_v2_hostel_wing_members":
             _ensure_column(conn, backend, table_name, "hostel_block", "TEXT NOT NULL DEFAULT ''")
         elif table_name == "attendance_v2_sessions":
+            _ensure_column(conn, backend, table_name, "beacon_ids_json", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, backend, table_name, "hostel_block", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, backend, table_name, "department", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, backend, table_name, "year", "TEXT NOT NULL DEFAULT ''")
@@ -386,12 +455,12 @@ def _session_roster(conn, backend, session):
             conn,
             """
             SELECT student_id, roll_no, student_name FROM attendance_v2_hostel_wing_members
-            WHERE college_id = ? AND LOWER(wing_name) = LOWER(?)
+            WHERE college_id = ? AND (? = 'ALL' OR LOWER(wing_name) = LOWER(?))
                 AND (? = '' OR LOWER(hostel_block) = LOWER(?))
             ORDER BY room_no, roll_no
             """,
             (
-                college_id, session["wing_name"], session.get("hostel_block") or "",
+                college_id, session["wing_name"], session["wing_name"], session.get("hostel_block") or "",
                 session.get("hostel_block") or "",
             ),
         ).fetchall()
@@ -552,8 +621,17 @@ def _email_report_safely(report):
 
 def _report_data(conn, backend, session):
     db_exec = backend["db_exec"]
-    beacon = _beacon(conn, backend, session["beacon_id"])
+    beacon_ids = json.loads(session.get("beacon_ids_json") or "[]") or [session["beacon_id"]]
+    beacon_names = [
+        _beacon(conn, backend, beacon_id)["name"]
+        for beacon_id in beacon_ids
+    ]
     students = _session_roster(conn, backend, session)
+    audit_count = db_exec(
+        conn,
+        "SELECT COUNT(*) AS count FROM attendance_v2_record_audit WHERE college_id = ? AND session_id = ?",
+        (backend["ACTIVE_COLLEGE_ID"].get(), session["id"]),
+    ).fetchone()["count"]
     report_date = _parse_time(session.get("created_at")) or _now()
     tenant = backend["get_tenant_by_id"](backend["ACTIVE_COLLEGE_ID"].get())
     tenant_zone = ZoneInfo((tenant or {}).get("timezone") or "UTC")
@@ -614,9 +692,10 @@ def _report_data(conn, backend, session):
         "report_email": str(owner["attendance_report_email"] or "") if owner else "",
         "report_email_verified": bool(owner["attendance_report_email_verified"]) if owner else False,
         "date": report_date.astimezone(tenant_zone).strftime("%Y-%m-%d %H:%M"),
-        "beacon_name": beacon["name"],
+        "beacon_name": ", ".join(beacon_names),
         "students": students,
         "overrides": sum(item["method"] == "MANUAL_OVERRIDE" for item in students),
+        "audit_entries": int(audit_count or 0),
     }
 
 
@@ -680,41 +759,86 @@ def list_beacons(request: Request, scope: Optional[str] = None):
         if str(actor["role"]).upper() not in {"DEAN", "FOUNDER", "BEACONMANAGER"}:
             query += " AND (owner_id = ? OR scope = 'HOSTEL')"
             params.append(actor["user_id"])
+        if str(actor["role"]).upper() == "WARDEN":
+            query += " AND LOWER(hostel_block) = LOWER(?)"
+            params.append(str(actor.get("hostel_block") or ""))
         rows = db_exec(conn, query + " ORDER BY created_at DESC", tuple(params)).fetchall()
-        return [dict(row) for row in rows]
+        return [
+            {
+                key: value
+                for key, value in dict(row).items()
+                if key != "signing_secret_enc"
+            } | {"is_provisioned": bool(row["beacon_code"] and row["signing_secret_enc"])}
+            for row in rows
+        ]
     finally:
         conn.close()
 
 
+def _validate_beacon_assignment(scope, hostel_block, wing_name, request, backend):
+    hostel_block = str(hostel_block or "").strip()
+    wing_name = str(wing_name or "").strip()
+    if scope == "CLASS":
+        if hostel_block or wing_name:
+            raise HTTPException(status_code=422, detail="Classroom beacons cannot be assigned to a hostel wing.")
+        return "", ""
+    if not hostel_block or not wing_name:
+        raise HTTPException(status_code=422, detail="Choose a hostel and wing for a hostel beacon.")
+    if str(request.state.user["role"]).upper() == "WARDEN":
+        if hostel_block.casefold() != str(request.state.user.get("hostel_block") or "").casefold():
+            raise HTTPException(status_code=403, detail="You can manage only beacons in your assigned hostel.")
+    configured_wings = backend["configured_wings"](hostel_block)
+    if configured_wings and not any(str(item).casefold() == wing_name.casefold() for item in configured_wings):
+        raise HTTPException(status_code=422, detail="Choose a wing configured for this hostel.")
+    if not configured_wings:
+        raise HTTPException(status_code=422, detail="Configure this hostel and its wings before adding a beacon.")
+    return hostel_block, wing_name
+
+
+def _beacon_response(row, provisioning_secret=None):
+    item = {
+        key: value for key, value in dict(row).items()
+        if key != "signing_secret_enc"
+    }
+    item["is_provisioned"] = bool(row["beacon_code"] and row["signing_secret_enc"])
+    if provisioning_secret:
+        item["provisioning_secret"] = provisioning_secret
+    return item
+
+
 @router.post("/beacons")
 def create_beacon(body: BeaconInput, request: Request):
-    actor = _require_roles(request, "Dean", "Faculty", "Warden", "BeaconManager")
+    actor = _require_roles(request, "Dean", "BeaconManager")
     backend = request.app.state.attendance_v2_backend
     scope = _validate_scope(body.scope)
     _require_feature(request, "class_attendance" if scope == "CLASS" else "hostel_attendance")
-    if scope == "CLASS" and str(actor["role"]).upper() not in {"DEAN", "FACULTY", "BEACONMANAGER"}:
-        raise HTTPException(status_code=403, detail="Only Faculty or Dean can create classroom beacons.")
-    if scope == "HOSTEL" and str(actor["role"]).upper() not in {"DEAN", "WARDEN", "BEACONMANAGER"}:
-        raise HTTPException(status_code=403, detail="Only Wardens or Dean can create hostel beacons.")
+    hostel_block, wing_name = _validate_beacon_assignment(
+        scope, body.hostel_block, body.wing_name, request, backend
+    )
     conn = backend["get_conn"]()
     beacon_id = _new_id("BCN")
     try:
+        beacon_code, signing_secret_enc, provisioning_secret = _new_beacon_credentials(conn, backend)
         backend["db_exec"](
             conn,
             """
             INSERT INTO attendance_v2_beacons
-                (college_id, tenant_id, id, name, scope, owner_id, uuid, major, minor, min_rssi, is_active, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (college_id, tenant_id, id, name, scope, owner_id, uuid, major, minor,
+                 min_rssi, beacon_code, signing_secret_enc, hostel_block, wing_name,
+                 is_active, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 backend["ACTIVE_COLLEGE_ID"].get(), _tenant_id(request), beacon_id,
-                body.name.strip(), scope, actor["user_id"], body.uuid.strip().lower(),
-                body.major, body.minor, body.min_rssi, int(body.is_active), _now_text(),
+                body.name.strip(), scope, actor["user_id"],
+                str(body.uuid or uuid.uuid4()), body.major, body.minor,
+                body.min_rssi, beacon_code, signing_secret_enc, hostel_block,
+                wing_name, int(body.is_active), _now_text(),
             ),
         )
         conn.commit()
         row = backend["db_exec"](conn, "SELECT * FROM attendance_v2_beacons WHERE college_id = ? AND id = ?", (backend["ACTIVE_COLLEGE_ID"].get(), beacon_id)).fetchone()
-        return dict(row)
+        return _beacon_response(row, provisioning_secret)
     except Exception:
         conn.rollback()
         raise
@@ -724,7 +848,7 @@ def create_beacon(body: BeaconInput, request: Request):
 
 @router.patch("/beacons/{beacon_id}")
 def update_beacon(beacon_id: str, body: BeaconInput, request: Request):
-    actor = _require_roles(request, "Dean", "Faculty", "Warden", "BeaconManager")
+    actor = _require_roles(request, "Dean", "BeaconManager")
     backend = request.app.state.attendance_v2_backend
     conn = backend["get_conn"]()
     try:
@@ -735,16 +859,19 @@ def update_beacon(beacon_id: str, body: BeaconInput, request: Request):
         scope = _validate_scope(body.scope)
         if scope != current["scope"]:
             raise HTTPException(status_code=400, detail="Beacon scope cannot be changed after creation.")
+        hostel_block, wing_name = _validate_beacon_assignment(
+            scope, body.hostel_block, body.wing_name, request, backend
+        )
         backend["db_exec"](
             conn,
             """
             UPDATE attendance_v2_beacons
-            SET name = ?, uuid = ?, major = ?, minor = ?, min_rssi = ?, is_active = ?
+            SET name = ?, min_rssi = ?, hostel_block = ?, wing_name = ?, is_active = ?
             WHERE college_id = ? AND id = ?
             """,
             (
-                body.name.strip(), body.uuid.strip().lower(), body.major, body.minor,
-                body.min_rssi, int(body.is_active), backend["ACTIVE_COLLEGE_ID"].get(), beacon_id,
+                body.name.strip(), body.min_rssi, hostel_block, wing_name,
+                int(body.is_active), backend["ACTIVE_COLLEGE_ID"].get(), beacon_id,
             ),
         )
         conn.commit()
@@ -758,7 +885,7 @@ def update_beacon(beacon_id: str, body: BeaconInput, request: Request):
 
 @router.post("/beacons/{beacon_id}/toggle")
 def toggle_beacon(beacon_id: str, request: Request):
-    actor = _require_roles(request, "Dean", "Faculty", "Warden", "BeaconManager")
+    actor = _require_roles(request, "Dean", "BeaconManager")
     backend = request.app.state.attendance_v2_backend
     conn = backend["get_conn"]()
     try:
@@ -773,6 +900,44 @@ def toggle_beacon(beacon_id: str, request: Request):
         )
         conn.commit()
         return {"success": True, "is_active": bool(active)}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@router.post("/beacons/{beacon_id}/provision")
+def provision_beacon(beacon_id: str, request: Request):
+    _require_roles(request, "Dean", "BeaconManager")
+    backend = request.app.state.attendance_v2_backend
+    conn = backend["get_conn"]()
+    try:
+        beacon = _beacon(conn, backend, beacon_id)
+        open_sessions = backend["db_exec"](
+            conn,
+            "SELECT beacon_id, beacon_ids_json FROM attendance_v2_sessions WHERE college_id = ? AND status = 'OPEN'",
+            (backend["ACTIVE_COLLEGE_ID"].get(),),
+        ).fetchall()
+        if any(
+            beacon_id == row["beacon_id"]
+            or beacon_id in (json.loads(row["beacon_ids_json"] or "[]"))
+            for row in open_sessions
+        ):
+            raise HTTPException(status_code=409, detail="Close active attendance sessions before rotating this beacon key.")
+        beacon_code, signing_secret_enc, provisioning_secret = _new_beacon_credentials(conn, backend)
+        backend["db_exec"](
+            conn,
+            "UPDATE attendance_v2_beacons SET beacon_code = ?, signing_secret_enc = ? WHERE college_id = ? AND id = ?",
+            (beacon_code, signing_secret_enc, backend["ACTIVE_COLLEGE_ID"].get(), beacon_id),
+        )
+        conn.commit()
+        return {
+            "success": True,
+            "beacon_id": beacon_id,
+            "beacon_code": beacon_code,
+            "provisioning_secret": provisioning_secret,
+        }
     except Exception:
         conn.rollback()
         raise
@@ -1063,27 +1228,24 @@ def get_course_roster(course_id: str, request: Request):
 @router.post("/hostel/members")
 def add_hostel_member(body: dict, request: Request):
     _require_feature(request, "hostel_attendance")
-    actor = _require_roles(request, "Warden", "Dean")
+    _require_roles(request, "StudentOnboarding")
     backend = request.app.state.attendance_v2_backend
     wing = str(body.get("wing_name", "")).strip()
     room = str(body.get("room_no", "")).strip()
     roll = str(body.get("roll_no", "")).strip().upper()
-    name = str(body.get("student_name", "")).strip()
     if not wing or not room or not roll:
         raise HTTPException(status_code=400, detail="Wing, room number, and roll number are required.")
-    if str(actor["role"]).upper() == "WARDEN":
-        hostel_block = str(actor.get("hostel_block") or "").strip()
-        if not hostel_block or hostel_block.casefold() == "all":
-            raise HTTPException(status_code=403, detail="Your account must have a specific hostel assignment.")
-    else:
-        hostel_block = str(body.get("hostel_block") or "").strip()
+    hostel_block = str(body.get("hostel_block") or "").strip()
     if not hostel_block:
         raise HTTPException(status_code=400, detail="Hostel block is required.")
+    configured_wings = backend["configured_wings"](hostel_block)
+    if not any(str(item).casefold() == wing.casefold() for item in configured_wings):
+        raise HTTPException(status_code=422, detail="Choose a wing configured for this hostel.")
     conn = backend["get_conn"]()
     try:
         student = backend["db_exec"](
             conn,
-            "SELECT user_id, full_name, hostel_block FROM users WHERE college_id = ? AND role = 'Student' AND UPPER(user_id) = ?",
+            "SELECT user_id FROM users WHERE college_id = ? AND role = 'Student' AND UPPER(user_id) = ?",
             (backend["ACTIVE_COLLEGE_ID"].get(), roll),
         ).fetchone()
         if not student:
@@ -1091,24 +1253,15 @@ def add_hostel_member(body: dict, request: Request):
                 status_code=404,
                 detail=f"Student account {roll} was not found. Ask Student Onboarding Staff to create it first.",
             )
-        if str(actor["role"]).upper() == "WARDEN" and str(student["hostel_block"] or "").strip().casefold() != hostel_block.casefold():
-            raise HTTPException(status_code=403, detail="This student is not assigned to your hostel block.")
         backend["db_exec"](
             conn,
             """
-            INSERT INTO attendance_v2_hostel_wing_members
-                (college_id, tenant_id, id, wing_name, hostel_block, room_no, student_id, roll_no, student_name, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (tenant_id, wing_name, roll_no) DO UPDATE
-            SET hostel_block = excluded.hostel_block, room_no = excluded.room_no,
-                student_id = excluded.student_id, student_name = excluded.student_name
+            UPDATE users SET hostel_block = ?, wing = ?, room = ?
+            WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'
             """,
-            (
-                backend["ACTIVE_COLLEGE_ID"].get(), _tenant_id(request), _new_id("HWM"),
-                wing, hostel_block, room, student["user_id"], roll,
-                str(student["full_name"] or "").strip(), _now_text(),
-            ),
+            (hostel_block, wing, room, backend["ACTIVE_COLLEGE_ID"].get(), roll),
         )
+        link_student_records(conn, backend, backend["ACTIVE_COLLEGE_ID"].get(), student["user_id"])
         conn.commit()
         return {"success": True}
     except Exception:
@@ -1138,8 +1291,12 @@ def start_session(body: SessionInput, request: Request):
         raise HTTPException(status_code=400, detail="Choose a department, academic year, and division.")
     if scope == "CLASS" and not use_profile_roster and not body.course_id:
         raise HTTPException(status_code=400, detail="Choose a class division or an existing course.")
-    if scope == "HOSTEL" and (not body.wing_name or str(actor["role"]).upper() not in {"WARDEN", "DEAN"}):
+    wing_name = str(body.wing_name or "").strip()
+    if scope == "HOSTEL" and (not wing_name or str(actor["role"]).upper() not in {"WARDEN", "DEAN"}):
         raise HTTPException(status_code=403, detail="A Warden must choose a wing to start a hostel session.")
+    beacon_ids = list(dict.fromkeys(body.beacon_ids or [body.beacon_id]))
+    if not beacon_ids or len(beacon_ids) > 20 or body.beacon_id not in beacon_ids:
+        raise HTTPException(status_code=422, detail="Choose up to 20 attendance beacons, including the primary beacon.")
     hostel_block = ""
     if scope == "HOSTEL":
         hostel_block = (
@@ -1147,14 +1304,29 @@ def start_session(body: SessionInput, request: Request):
             if str(actor["role"]).upper() == "WARDEN"
             else str(body.hostel_block or "").strip()
         )
-        if not hostel_block or hostel_block.casefold() == "all":
+        if not hostel_block:
             raise HTTPException(status_code=400, detail="Choose a specific hostel block for this roll call.")
     backend = request.app.state.attendance_v2_backend
     conn = backend["get_conn"]()
     try:
-        beacon = _beacon(conn, backend, body.beacon_id, scope)
-        if not beacon["is_active"]:
-            raise HTTPException(status_code=400, detail="The selected beacon is inactive.")
+        selected_beacons = []
+        for selected_id in beacon_ids:
+            beacon = _beacon(conn, backend, selected_id, scope)
+            if not beacon["is_active"]:
+                raise HTTPException(status_code=400, detail=f'The selected beacon "{beacon["name"]}" is inactive.')
+            if not beacon["beacon_code"] or not beacon["signing_secret_enc"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f'Provision the selected beacon "{beacon["name"]}" with the Beacon Manager before starting attendance.',
+                )
+            if scope == "HOSTEL":
+                if str(beacon.get("hostel_block") or "").casefold() != hostel_block.casefold():
+                    raise HTTPException(status_code=403, detail="Every selected beacon must belong to this hostel.")
+                beacon_wing = str(beacon.get("wing_name") or "").casefold()
+                if wing_name.casefold() != "all" and beacon_wing not in {wing_name.casefold(), "all"}:
+                    raise HTTPException(status_code=403, detail="Select beacons configured for this wing or its hostel.")
+            selected_beacons.append(beacon)
+        beacon = next(item for item in selected_beacons if item["id"] == body.beacon_id)
         if scope == "CLASS":
             if use_profile_roster:
                 if body.course_id:
@@ -1187,12 +1359,24 @@ def start_session(body: SessionInput, request: Request):
                 conn,
                 """
                 SELECT 1 FROM attendance_v2_hostel_wing_members
-                WHERE college_id = ? AND LOWER(hostel_block) = LOWER(?) AND LOWER(wing_name) = LOWER(?)
+                WHERE college_id = ? AND LOWER(hostel_block) = LOWER(?)
+                  AND (? = 'ALL' OR LOWER(wing_name) = LOWER(?))
                 LIMIT 1
                 """,
-                (backend["ACTIVE_COLLEGE_ID"].get(), hostel_block, body.wing_name),
+                (backend["ACTIVE_COLLEGE_ID"].get(), hostel_block, wing_name, wing_name),
             ).fetchone():
                 raise HTTPException(status_code=403, detail="No roster is configured for this wing in your assigned hostel.")
+            if not backend["db_exec"](
+                conn,
+                """
+                SELECT 1 FROM attendance_v2_hostel_wing_members
+                WHERE college_id = ? AND LOWER(hostel_block) = LOWER(?)
+                  AND (? = 'ALL' OR LOWER(wing_name) = LOWER(?))
+                LIMIT 1
+                """,
+                (backend["ACTIVE_COLLEGE_ID"].get(), hostel_block, wing_name, wing_name),
+            ).fetchone():
+                raise HTTPException(status_code=400, detail="No students are assigned to the selected hostel wing.")
         created_at = _now()
         session_id = _new_id("SES")
         expires_at = (created_at + timedelta(minutes=body.duration_minutes)).isoformat(timespec="seconds") if body.duration_minutes else None
@@ -1201,9 +1385,9 @@ def start_session(body: SessionInput, request: Request):
             """
             INSERT INTO attendance_v2_sessions
                 (college_id, tenant_id, id, scope, course_id, department, year, division,
-                 wing_name, hostel_block, beacon_id, created_by, status,
+                 wing_name, hostel_block, beacon_id, beacon_ids_json, created_by, status,
                  expires_at, current_nonce, nonce_expires_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)
             """,
             (
                 backend["ACTIVE_COLLEGE_ID"].get(), _tenant_id(request), session_id, scope,
@@ -1211,7 +1395,7 @@ def start_session(body: SessionInput, request: Request):
                 class_group["department"] if scope == "CLASS" else "",
                 class_group["year"] if scope == "CLASS" else "",
                 class_group["division"] if scope == "CLASS" else "",
-                body.wing_name, hostel_block, body.beacon_id, actor["user_id"], expires_at,
+                wing_name, hostel_block, body.beacon_id, json.dumps(beacon_ids), actor["user_id"], expires_at,
                 secrets.token_urlsafe(24), (created_at + timedelta(seconds=30)).isoformat(timespec="seconds"),
                 created_at.isoformat(timespec="seconds"),
             ),
@@ -1376,7 +1560,8 @@ def student_open_sessions(request: Request):
                 ON sr.college_id = s.college_id AND sr.session_id = s.id
                 AND UPPER(sr.student_id) = ?
             LEFT JOIN attendance_v2_hostel_wing_members m
-                ON m.college_id = s.college_id AND LOWER(m.wing_name) = LOWER(s.wing_name)
+                ON m.college_id = s.college_id
+                AND (UPPER(s.wing_name) = 'ALL' OR LOWER(m.wing_name) = LOWER(s.wing_name))
                 AND LOWER(m.hostel_block) = LOWER(s.hostel_block) AND UPPER(m.student_id) = ?
             WHERE s.college_id = ? AND s.status = 'OPEN'
                 AND s.scope IN ({})
@@ -1399,6 +1584,11 @@ def student_open_sessions(request: Request):
                 continue
             _require_feature(request, "class_attendance" if session["scope"] == "CLASS" else "hostel_attendance")
             beacon = _beacon(conn, backend, session["beacon_id"], session["scope"])
+            allowed_beacon_ids = json.loads(session.get("beacon_ids_json") or "[]") or [session["beacon_id"]]
+            beacons = [
+                _beacon(conn, backend, beacon_id, session["scope"])
+                for beacon_id in allowed_beacon_ids
+            ]
             course = None
             if session["scope"] == "CLASS":
                 if session.get("course_id"):
@@ -1427,9 +1617,16 @@ def student_open_sessions(request: Request):
                 "class_group": class_group,
                 "beacon": {
                     "name": beacon["name"],
+                    "beacon_code": beacon["beacon_code"],
                     "uuid": beacon["uuid"], "major": beacon["major"],
                     "minor": beacon["minor"], "min_rssi": beacon["min_rssi"],
                 },
+                "beacons": [{
+                    "id": item["id"],
+                    "name": item["name"],
+                    "beacon_code": item["beacon_code"],
+                    "min_rssi": item["min_rssi"],
+                } for item in beacons],
             })
         conn.commit()
         return sessions
@@ -1446,6 +1643,9 @@ def override_attendance(session_id: str, body: OverrideInput, request: Request):
     status = str(body.status).upper()
     if status not in {"PRESENT", "ABSENT"}:
         raise HTTPException(status_code=400, detail="Status must be PRESENT or ABSENT.")
+    reason = body.reason.strip()
+    if len(reason) < 3:
+        raise HTTPException(status_code=422, detail="Enter an audit reason of at least 3 non-space characters.")
     backend = request.app.state.attendance_v2_backend
     conn = backend["get_conn"]()
     try:
@@ -1460,6 +1660,11 @@ def override_attendance(session_id: str, body: OverrideInput, request: Request):
         if not target:
             raise HTTPException(status_code=404, detail="Student is not on this session roster.")
         now = _now_text()
+        previous = backend["db_exec"](
+            conn,
+            "SELECT status FROM attendance_v2_records WHERE college_id = ? AND session_id = ? AND UPPER(student_id) = ?",
+            (backend["ACTIVE_COLLEGE_ID"].get(), session_id, body.student_id.upper()),
+        ).fetchone()
         backend["db_exec"](
             conn,
             """
@@ -1472,11 +1677,59 @@ def override_attendance(session_id: str, body: OverrideInput, request: Request):
             """,
             (
                 backend["ACTIVE_COLLEGE_ID"].get(), _new_id("REC"), session_id,
-                body.student_id, target["roll_no"], status, body.reason.strip(), now,
+                body.student_id, target["roll_no"], status, reason, now,
+            ),
+        )
+        backend["db_exec"](
+            conn,
+            """
+            INSERT INTO attendance_v2_record_audit
+                (college_id, tenant_id, id, session_id, student_id, previous_status,
+                 new_status, reason, actor_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                backend["ACTIVE_COLLEGE_ID"].get(), _tenant_id(request), _new_id("AUD"),
+                session_id, body.student_id, previous["status"] if previous else None,
+                status, reason, actor["user_id"], now,
             ),
         )
         conn.commit()
         return {"success": True, "status": status, "method": "MANUAL_OVERRIDE", "marked_at": now}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@router.get("/sessions/{session_id}/audit")
+def get_session_attendance_audit(session_id: str, request: Request):
+    actor = _require_roles(request, "Faculty", "Warden", "Dean")
+    backend = request.app.state.attendance_v2_backend
+    conn = backend["get_conn"]()
+    try:
+        session = _get_session(conn, backend, session_id)
+        _require_feature(request, "class_attendance" if session["scope"] == "CLASS" else "hostel_attendance")
+        if session["created_by"] != actor["user_id"] and str(actor["role"]).upper() != "DEAN":
+            raise HTTPException(status_code=403, detail="Only the session owner can review its audit log.")
+        rows = backend["db_exec"](
+            conn,
+            """
+            SELECT a.id, a.student_id, r.roll_no, a.previous_status, a.new_status,
+                   a.reason, a.actor_id, a.created_at, u.full_name AS actor_name
+            FROM attendance_v2_record_audit a
+            LEFT JOIN attendance_v2_records r
+              ON r.college_id = a.college_id AND r.session_id = a.session_id
+              AND UPPER(r.student_id) = UPPER(a.student_id)
+            LEFT JOIN users u ON u.college_id = a.college_id AND UPPER(u.user_id) = UPPER(a.actor_id)
+            WHERE a.college_id = ? AND a.session_id = ?
+            ORDER BY a.created_at DESC
+            """,
+            (backend["ACTIVE_COLLEGE_ID"].get(), session_id),
+        ).fetchall()
+        conn.commit()
+        return [dict(row) for row in rows]
     except Exception:
         conn.rollback()
         raise
@@ -1744,6 +1997,8 @@ def list_daily_report_sessions(request: Request, scope: str, date: str):
                 "total": len(report["students"]),
                 "present": present,
                 "absent": len(report["students"]) - present,
+                "manual_overrides": report["overrides"],
+                "audit_entries": report["audit_entries"],
             })
         return result
     finally:
@@ -2060,49 +2315,34 @@ def student_hostel_history(request: Request):
 @router.post("/device/enrollment/open")
 def open_device_enrollment(body: EnrollmentWindowInput, request: Request):
     _require_attendance_enabled(request)
-    actor = _require_roles(request, "Warden", "Dean", "StudentOnboarding")
+    actor = _require_roles(request, "StudentOnboarding")
     backend = request.app.state.attendance_v2_backend
     conn = backend["get_conn"]()
     try:
+        student = backend["db_exec"](
+            conn,
+            """
+            SELECT user_id, biometric_status, biometric_cred_id, device_token_hash
+            FROM users WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'
+            """,
+            (backend["ACTIVE_COLLEGE_ID"].get(), body.student_id.upper()),
+        ).fetchone()
+        if not student:
+            raise HTTPException(status_code=404, detail="Student account not found.")
+        active_device = backend["db_exec"](
+            conn,
+            "SELECT 1 FROM attendance_v2_student_devices WHERE college_id = ? AND UPPER(student_id) = ?",
+            (backend["ACTIVE_COLLEGE_ID"].get(), body.student_id.upper()),
+        ).fetchone()
+        if active_device or student["biometric_cred_id"] or student["device_token_hash"]:
+            raise HTTPException(status_code=409, detail="Reset the existing device lock before opening enrollment for a replacement phone.")
         until = int(_now().timestamp()) + body.duration_seconds
-        if str(actor["role"]).upper() == "STUDENTONBOARDING":
-            student = backend["db_exec"](
-                conn,
-                "SELECT 1 FROM users WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'",
-                (backend["ACTIVE_COLLEGE_ID"].get(), body.student_id.upper()),
-            ).fetchone()
-            if not student:
-                raise HTTPException(status_code=404, detail="Student account not found.")
-        elif request.state.tenant.get("modules", {}).get("hostel_attendance"):
-            member = backend["db_exec"](
-                conn,
-                """
-                SELECT m.hostel_block FROM attendance_v2_hostel_wing_members m
-                JOIN users u ON u.college_id = m.college_id AND UPPER(u.user_id) = UPPER(m.student_id)
-                WHERE m.college_id = ? AND UPPER(m.student_id) = ?
-                """,
-                (backend["ACTIVE_COLLEGE_ID"].get(), body.student_id.upper()),
-            ).fetchone()
-            if not member:
-                raise HTTPException(status_code=404, detail="Student is not assigned to a hostel wing.")
-            if str(actor["role"]).upper() == "WARDEN" and str(actor.get("hostel_block") or "").casefold() != str(member["hostel_block"] or "").casefold():
-                raise HTTPException(status_code=403, detail="You can only approve students in your assigned hostel.")
-        else:
-            enrolled = backend["db_exec"](
-                conn,
-                """
-                SELECT 1 FROM attendance_v2_course_enrollments e
-                JOIN users u ON u.college_id = e.college_id AND UPPER(u.user_id) = UPPER(e.student_id)
-                WHERE e.college_id = ? AND UPPER(e.student_id) = ?
-                LIMIT 1
-                """,
-                (backend["ACTIVE_COLLEGE_ID"].get(), body.student_id.upper()),
-            ).fetchone()
-            if not enrolled:
-                raise HTTPException(status_code=404, detail="Student is not enrolled in an attendance course.")
         updated = backend["db_exec"](
             conn,
-            "UPDATE users SET enroll_window_until = ? WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'",
+            """
+            UPDATE users SET enroll_window_until = ?, biometric_status = 'Enrollment Unlocked'
+            WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'
+            """,
             (until, backend["ACTIVE_COLLEGE_ID"].get(), body.student_id.upper()),
         )
         if updated.rowcount != 1:
@@ -2128,34 +2368,18 @@ def open_device_enrollment(body: EnrollmentWindowInput, request: Request):
 
 @router.post("/device/reset/{student_id}")
 def reset_device_lock(student_id: str, request: Request):
-    actor = _require_roles(request, "Warden", "Dean", "StudentOnboarding")
+    actor = _require_roles(request, "StudentOnboarding")
     _require_attendance_enabled(request)
     backend = request.app.state.attendance_v2_backend
     conn = backend["get_conn"]()
     try:
-        if str(actor["role"]).upper() == "WARDEN" and request.state.tenant.get("modules", {}).get("hostel_attendance"):
-            membership = backend["db_exec"](
-                conn,
-                """
-                SELECT hostel_block FROM attendance_v2_hostel_wing_members
-                WHERE college_id = ? AND UPPER(student_id) = ?
-                """,
-                (backend["ACTIVE_COLLEGE_ID"].get(), student_id.upper()),
-            ).fetchone()
-            if not membership or str(membership["hostel_block"] or "").casefold() != str(actor.get("hostel_block") or "").casefold():
-                raise HTTPException(status_code=403, detail="You can only reset devices for students in your assigned hostel.")
-        elif str(actor["role"]).upper() == "WARDEN":
-            enrolled = backend["db_exec"](
-                conn,
-                """
-                SELECT 1 FROM attendance_v2_course_enrollments
-                WHERE college_id = ? AND UPPER(student_id) = ?
-                LIMIT 1
-                """,
-                (backend["ACTIVE_COLLEGE_ID"].get(), student_id.upper()),
-            ).fetchone()
-            if not enrolled:
-                raise HTTPException(status_code=403, detail="You can reset devices only for students enrolled in attendance.")
+        student = backend["db_exec"](
+            conn,
+            "SELECT 1 FROM users WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'",
+            (backend["ACTIVE_COLLEGE_ID"].get(), student_id.upper()),
+        ).fetchone()
+        if not student:
+            raise HTTPException(status_code=404, detail="Student account not found.")
         backend["db_exec"](
             conn,
             "DELETE FROM attendance_v2_student_devices WHERE college_id = ? AND UPPER(student_id) = ?",
@@ -2168,7 +2392,18 @@ def reset_device_lock(student_id: str, request: Request):
         )
         backend["db_exec"](
             conn,
-            "UPDATE users SET enroll_window_until = 0 WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'",
+            "DELETE FROM webauthn_credentials WHERE college_id = ? AND UPPER(user_id) = ?",
+            (backend["ACTIVE_COLLEGE_ID"].get(), student_id.upper()),
+        )
+        backend["db_exec"](
+            conn,
+            """
+            UPDATE users SET biometric_status = 'Not Enrolled', biometric_cred_id = '',
+                device_hardware_id = '', device_token_hash = '', face_reference_encrypted = '',
+                face_embedding_encrypted = '', face_embedding_model = '', device_public_key = '',
+                face_enrolled_at = '', enroll_window_until = 0
+            WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'
+            """,
             (backend["ACTIVE_COLLEGE_ID"].get(), student_id.upper()),
         )
         conn.commit()
@@ -2197,7 +2432,7 @@ def device_enrollment_options(request: Request):
             (backend["ACTIVE_COLLEGE_ID"].get(), student["user_id"].upper()),
         ).fetchone()
         if not user or (_parse_time(user["expires_at"]) or _now()) <= _now():
-            raise HTTPException(status_code=403, detail="Ask your Warden to open the timed device enrollment window.")
+            raise HTTPException(status_code=403, detail="Ask Student Onboarding Staff to open the timed device enrollment window.")
         options = backend["generate_registration_options"](
             rp_id=rp_id,
             rp_name="Campus Attendance",
@@ -2265,13 +2500,13 @@ def complete_device_enrollment(body: RegistrationInput, request: Request):
             (backend["ACTIVE_COLLEGE_ID"].get(), student["user_id"].upper()),
         ).fetchone()
         if not window or (_parse_time(window["expires_at"]) or _now()) <= _now():
-            raise HTTPException(status_code=403, detail="The Warden-approved enrollment window has expired.")
+            raise HTTPException(status_code=403, detail="The Student Onboarding-approved enrollment window has expired.")
         if backend["db_exec"](
             conn,
             "SELECT 1 FROM attendance_v2_student_devices WHERE college_id = ? AND UPPER(student_id) = ?",
             (backend["ACTIVE_COLLEGE_ID"].get(), student["user_id"].upper()),
         ).fetchone():
-            raise HTTPException(status_code=409, detail="Ask your Warden to reset the existing device lock before enrolling a replacement.")
+            raise HTTPException(status_code=409, detail="Ask Student Onboarding Staff to reset the existing device lock before enrolling a replacement.")
         challenge = _webauthn_challenge(
             conn, backend, body.challenge_id, student["user_id"],
             f"attendance-v2-enroll:{student['user_id'].upper()}",
@@ -2344,13 +2579,25 @@ def check_in(body: CheckInInput, request: Request):
         _require_feature(request, "class_attendance" if session["scope"] == "CLASS" else "hostel_attendance")
         if body.session_nonce != session["current_nonce"] or (_parse_time(session["nonce_expires_at"]) or _now()) <= _now():
             raise HTTPException(status_code=409, detail="The session nonce expired. Refresh and try again.")
-        beacon = _beacon(conn, backend, session["beacon_id"], session["scope"])
+        allowed_beacon_ids = json.loads(session.get("beacon_ids_json") or "[]") or [session["beacon_id"]]
+        presented_code = re.sub(r"[^0-9a-f]", "", body.uuid.lower())[:8].upper()
+        presented_beacon = None
+        for allowed_beacon_id in allowed_beacon_ids:
+            candidate_beacon = _beacon(conn, backend, allowed_beacon_id, session["scope"])
+            if candidate_beacon["beacon_code"].upper() == presented_code:
+                presented_beacon = candidate_beacon
+                break
         if (
-            not beacon["is_active"] or beacon["uuid"].lower() != body.uuid.strip().lower()
-            or int(beacon["major"]) != body.major or int(beacon["minor"]) != body.minor
-            or body.rssi < int(beacon["min_rssi"])
+            not presented_beacon
+            or not presented_beacon["is_active"]
+            or body.rssi < int(presented_beacon["min_rssi"])
         ):
             raise HTTPException(status_code=403, detail="The active room beacon was not verified.")
+        if not _validate_rotating_beacon(presented_beacon, body.uuid, backend):
+            raise HTTPException(
+                status_code=403,
+                detail="The rotating beacon signature is invalid or expired. Wait for the next beacon update and retry.",
+            )
         device = backend["db_exec"](
             conn,
             "SELECT * FROM attendance_v2_student_devices WHERE college_id = ? AND UPPER(student_id) = ?",
@@ -2436,12 +2683,19 @@ def link_student_records(conn, backend, tenant_id, student_id):
     uid = str(student_id).strip().upper()
     row = backend["db_exec"](
         conn,
-        "SELECT user_id, full_name FROM users WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'",
+        """
+        SELECT user_id, full_name, hostel_block, wing, room
+        FROM users WHERE college_id = ? AND UPPER(user_id) = ? AND role = 'Student'
+        """,
         (tenant_id, uid),
     ).fetchone()
     if not row:
         return
     name = str(row["full_name"] or "")
+    hostel_block = str(row["hostel_block"] or "").strip()
+    hostel_category = re.sub(r"[^a-z0-9]+", "", hostel_block.casefold())
+    wing_name = str(row["wing"] or "").strip()
+    room_no = str(row["room"] or "").strip()
     backend["db_exec"](
         conn,
         """
@@ -2451,6 +2705,28 @@ def link_student_records(conn, backend, tenant_id, student_id):
         """,
         (row["user_id"], name, tenant_id, uid),
     )
+    backend["db_exec"](
+        conn,
+        "DELETE FROM attendance_v2_hostel_wing_members WHERE college_id = ? AND UPPER(student_id) = ?",
+        (tenant_id, uid),
+    )
+    if hostel_block and hostel_category not in {"dayscholar", "dayboarding", "nohostel"} and wing_name:
+        backend["db_exec"](
+            conn,
+            """
+            INSERT INTO attendance_v2_hostel_wing_members
+                (college_id, tenant_id, id, wing_name, hostel_block, room_no,
+                 student_id, roll_no, student_name, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (tenant_id, wing_name, roll_no) DO UPDATE
+            SET hostel_block = excluded.hostel_block, room_no = excluded.room_no,
+                student_id = excluded.student_id, student_name = excluded.student_name
+            """,
+            (
+                tenant_id, tenant_id, _new_id("HWM"), wing_name, hostel_block,
+                room_no, row["user_id"], row["user_id"], name, _now_text(),
+            ),
+        )
     backend["db_exec"](
         conn,
         """

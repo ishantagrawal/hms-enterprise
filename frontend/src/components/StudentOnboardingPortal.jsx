@@ -28,6 +28,7 @@ async function readJson(response, fallback) {
 export default function StudentOnboardingPortal({ apiUrl, user, modules = {}, collegeName = 'Vidyut OS' }) {
   const [page, setPage] = useState('students');
   const [students, setStudents] = useState([]);
+  const [hostels, setHostels] = useState([]);
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [directoryFilter, setDirectoryFilter] = useState('all');
   const [resetRequests, setResetRequests] = useState([]);
@@ -45,6 +46,7 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {}, co
   const [yearRolloverSaving, setYearRolloverSaving] = useState(false);
   const [rolloverAcademicYear, setRolloverAcademicYear] = useState('');
   const selectedStudent = students.find((student) => student.user_id === selectedStudentId) || students[0] || null;
+  const selectedHostel = hostels.find((hostel) => hostel.name === form.hostel_block);
 
   const loadStudents = useCallback(async (search = '', nextOffset = 0) => {
     const response = await apiFetch(
@@ -72,6 +74,18 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {}, co
       .catch((loadError) => setError(extractErrorMessage(loadError)))
       .finally(() => setLoading(false));
   }, [loadStudents, loadResetRequests]);
+
+  useEffect(() => {
+    let active = true;
+    apiFetch(`${apiUrl}/api/hostels/config`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => []);
+        if (!response.ok) throw new Error(extractErrorMessage(data, 'Could not load configured hostels.'));
+        if (active) setHostels(data);
+      })
+      .catch((loadError) => { if (active) setError(extractErrorMessage(loadError)); });
+    return () => { active = false; };
+  }, [apiUrl]);
 
   useEffect(() => {
     if (!students.some((student) => student.user_id === selectedStudentId)) {
@@ -514,9 +528,23 @@ export default function StudentOnboardingPortal({ apiUrl, user, modules = {}, co
               <label>Department<input required value={form.department} onChange={(event) => setForm({ ...form, department: event.target.value })} /></label>
               <label>Academic year<input value={form.year} onChange={(event) => setForm({ ...form, year: event.target.value })} /></label>
               <label>Division / section<input maxLength="80" value={form.division} onChange={(event) => setForm({ ...form, division: event.target.value })} /></label>
-              <label>Hostel block or Day Scholar<input value={form.hostel_block} onChange={(event) => setForm({ ...form, hostel_block: event.target.value })} /></label>
-              <label>Wing<input value={form.wing} onChange={(event) => setForm({ ...form, wing: event.target.value })} /></label>
-              <label>Room<input value={form.room} onChange={(event) => setForm({ ...form, room: event.target.value })} /></label>
+              <label>Hostel or day scholar
+                <select value={form.hostel_block} onChange={(event) => setForm({ ...form, hostel_block: event.target.value, wing: '' })}>
+                  <option value="">Not assigned</option>
+                  {form.hostel_block && form.hostel_block !== 'Day Scholar' && !hostels.some((hostel) => hostel.name === form.hostel_block) && <option value={form.hostel_block}>{form.hostel_block} (not in current configuration)</option>}
+                  {hostels.map((hostel) => <option key={hostel.hostel_id} value={hostel.name}>{hostel.name}</option>)}
+                  <option value="Day Scholar">Day Scholar</option>
+                </select>
+              </label>
+              {form.hostel_block && form.hostel_block !== 'Day Scholar' && <>
+                <label>Wing
+                  <select required value={form.wing} onChange={(event) => setForm({ ...form, wing: event.target.value })}>
+                    <option value="">Choose a wing</option>
+                    {(selectedHostel?.wings || (form.wing ? [form.wing] : [])).map((wing) => <option key={wing} value={wing}>{wing}</option>)}
+                  </select>
+                </label>
+                <label>Room<input value={form.room} onChange={(event) => setForm({ ...form, room: event.target.value })} /></label>
+              </>}
               <label>Student email<input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label>
               <label>Student phone<input type="tel" value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label>
               <label>Guardian phone<input type="tel" value={form.guardian_phone} onChange={(event) => setForm({ ...form, guardian_phone: event.target.value })} /></label>

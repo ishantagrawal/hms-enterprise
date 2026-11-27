@@ -5,6 +5,8 @@ import { Capacitor } from '@capacitor/core';
 type BeaconOptions = {
   enabled?: boolean;
   uuid?: string;
+  beaconCode?: string;
+  beacons?: Array<{ beacon_code: string; min_rssi?: number }>;
   major?: number;
   minor?: number;
   minRssi?: number;
@@ -40,10 +42,11 @@ function parseIBeacon(result: ScanResult) {
 }
 
 export function useBeaconScanner(options: BeaconOptions = {}) {
-  const { enabled = true, uuid, major, minor, minRssi = -78 } = options;
+  const { enabled = true, uuid, beaconCode, beacons = [], major, minor, minRssi = -78 } = options;
   const [rssi, setRssi] = useState<number | null>(null);
   const [inRange, setInRange] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [rotatingUuid, setRotatingUuid] = useState('');
   const [simulation, setSimulation] = useState(false);
   const [error, setError] = useState('');
   const native = Capacitor.isNativePlatform();
@@ -54,6 +57,7 @@ export function useBeaconScanner(options: BeaconOptions = {}) {
     setRssi(-72);
     setInRange(-72 >= minRssi);
     setScanning(true);
+    setRotatingUuid('');
   }, [minRssi]);
 
   const stopSimulation = useCallback(() => {
@@ -61,6 +65,7 @@ export function useBeaconScanner(options: BeaconOptions = {}) {
     setScanning(false);
     setRssi(null);
     setInRange(false);
+    setRotatingUuid('');
   }, []);
 
   useEffect(() => {
@@ -75,12 +80,19 @@ export function useBeaconScanner(options: BeaconOptions = {}) {
           if (!active) return;
           const beacon = parseIBeacon(result);
           if (!beacon) return;
-          const matches = (!uuid || beacon.uuid.toLowerCase() === uuid.toLowerCase())
+          const beaconHex = beacon.uuid.replace(/-/g, '').toLowerCase();
+          const configured = beacons.find((item) => item.beacon_code.toLowerCase() === beaconHex.slice(0, 8))
+            || (beaconCode && beaconHex.slice(0, 8) === beaconCode.replace(/[^0-9a-f]/gi, '').toLowerCase()
+              ? { beacon_code: beaconCode, min_rssi: minRssi }
+              : null);
+          const matches = configured
+            || (!beaconCode && !beacons.length && (!uuid || beacon.uuid.toLowerCase() === uuid.toLowerCase()))
             && (major === undefined || beacon.major === major)
             && (minor === undefined || beacon.minor === minor);
           if (!matches) return;
           setRssi(beacon.rssi);
-          setInRange(beacon.rssi >= minRssi);
+          setRotatingUuid(beacon.uuid);
+          setInRange(beacon.rssi >= Number(configured?.min_rssi ?? minRssi));
         });
         scanStarted = true;
         if (active) setScanning(true);
@@ -97,12 +109,13 @@ export function useBeaconScanner(options: BeaconOptions = {}) {
       active = false;
       if (scanStarted) void BleClient.stopLEScan().catch((scanError) => console.error('Could not stop BLE scan:', scanError));
     };
-  }, [enabled, major, minRssi, minor, native, simulation, uuid]);
+  }, [beaconCode, beacons, enabled, major, minRssi, minor, native, simulation, uuid]);
 
   return {
     rssi,
     inRange,
     scanning,
+    rotatingUuid,
     error,
     simulation,
     simulationAvailable: !native,

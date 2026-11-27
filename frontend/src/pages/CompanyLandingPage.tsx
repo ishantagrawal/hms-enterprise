@@ -4,7 +4,7 @@ import './CompanyLandingPage.css';
 const tracks = [
   {
     name: 'Student Onboarding',
-    steps: ['Report to Warden', 'Open 120s Window', 'WebAuthn Passkey + Reference Frame', 'Single-Device Lock Active']
+    steps: ['Report to Student Onboarding', 'Open 120s Window', 'WebAuthn Passkey + Reference Frame', 'Single-Device Lock Active']
   },
   {
     name: '150-Student Lecture Check-In',

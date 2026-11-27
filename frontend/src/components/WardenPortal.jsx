@@ -14,10 +14,6 @@ async function readResponse(response, fallback = 'Request failed') {
   return data;
 }
 
-function currentEpochSeconds() {
-  return Math.floor(Date.now() / 1000);
-}
-
 function WardenAttendanceWorkspace({ apiUrl, user, modules }) {
   const showNightly = modules?.attendance === true;
   const showLiveWing = modules?.hostel_attendance === true;
@@ -40,7 +36,7 @@ function WardenAttendanceWorkspace({ apiUrl, user, modules }) {
         </nav>
       )}
       {activeMode === 'nightly' && showNightly && <WardenAttendancePanel apiUrl={apiUrl} user={user} />}
-      {activeMode === 'live' && showLiveWing && <WardenAttendanceV2 apiUrl={apiUrl} modules={modules} />}
+      {activeMode === 'live' && showLiveWing && <WardenAttendanceV2 apiUrl={apiUrl} modules={modules} user={user} />}
     </div>
   );
 }
@@ -72,7 +68,6 @@ export default function WardenPortal({ user, apiUrl, modules }) {
   const [hostelConfig, setHostelConfig] = useState([]);
   const [profileRequests, setProfileRequests] = useState([]);
   const [reviewingRequestId, setReviewingRequestId] = useState(null);
-  const [unlockingStudentId, setUnlockingStudentId] = useState('');
   const [attendanceWingFilter, setAttendanceWingFilter] = useState('All');
   const [msg, setMsg] = useState(null);
 
@@ -189,40 +184,6 @@ export default function WardenPortal({ user, apiUrl, modules }) {
       guardian_phone: st.guardian_phone || ''
     });
     setPage('edit_student');
-  };
-
-  const handleUnlockBiometric = async (student) => {
-    if (unlockingStudentId) return;
-    const previousStudents = students;
-    const until = currentEpochSeconds() + 120;
-    const optimisticStudents = students.map((item) => item.user_id === student.user_id
-      ? { ...item, biometric_status: 'Enrollment Unlocked', biometric_cred_id: '', device_hardware_id: '', enroll_window_until: until }
-      : item);
-    setUnlockingStudentId(student.user_id);
-    setStudents(optimisticStudents);
-    setCached(sKey, optimisticStudents);
-    setMsg(`Two-minute enrollment window opened for ${student.full_name || student.user_id}.`);
-    try {
-      const response = await apiFetch(`${apiUrl}/api/warden/unlock-biometric`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: student.user_id })
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.success) throw new Error(data.detail || 'Could not unlock biometric enrollment.');
-      const updatedStudents = optimisticStudents.map((item) => item.user_id === student.user_id
-        ? { ...item, biometric_status: data.biometric_status, enroll_window_until: data.enroll_window_until }
-        : item);
-      setStudents(updatedStudents);
-      setCached(sKey, updatedStudents);
-      setMsg(`Enrollment unlocked for ${student.full_name || student.user_id} for 2 minutes.`);
-    } catch (error) {
-      setStudents(previousStudents);
-      setCached(sKey, previousStudents);
-      setMsg(error.message || 'Could not unlock biometric enrollment.');
-    } finally {
-      setUnlockingStudentId('');
-    }
   };
 
   const handleSaveStudentEdit = async (e) => {
@@ -498,36 +459,10 @@ export default function WardenPortal({ user, apiUrl, modules }) {
                   </div>
                   <p className="ptm-list-sub">This tenant-scoped summary refreshes every 30 seconds while this page is open.</p>
                 </div>
-                <div className="ptm-card">
-                  <div className="ptm-section-title">Resident device enrollment</div>
-                  <p className="ptm-list-sub">Unlocks a two-minute setup window for the student's app-stored device token. Student face checks run locally; no photo or face template is uploaded. The token is not hardware-backed.</p>
-                  <div className="ptm-list">
-                    {attendanceRoster.map((student) => {
-                      const status = student.biometric_status || 'Unenrolled';
-                      const isLocked = status === 'Locked';
-                      return (
-                        <div className="ptm-list-row" key={student.user_id}>
-                          <div className="ptm-list-main">
-                            <div className="ptm-list-title">{student.full_name || student.user_id} · {student.user_id}</div>
-                            <div className="ptm-list-sub">{student.wing || 'Wing not assigned'} · Room {student.room || '-'} · {isLocked ? '🔒 Locked' : `⚠️ ${status}`}</div>
-                          </div>
-                          <button
-                            type="button"
-                            className="ptm-btn-secondary"
-                            disabled={Boolean(unlockingStudentId)}
-                            onClick={() => handleUnlockBiometric(student)}
-                          >
-                            {unlockingStudentId === student.user_id ? 'Unlocking…' : '🔓 Unlock 2-Min Device Setup'}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
               </div>
             )}
             {showAttendance && page === 'attendance' && <WardenAttendancePanel apiUrl={apiUrl} user={safeUser} />}
-            {showAttendanceV2 && page === 'attendance_v2' && <WardenAttendanceV2 apiUrl={apiUrl} modules={modules} />}
+            {showAttendanceV2 && page === 'attendance_v2' && <WardenAttendanceV2 apiUrl={apiUrl} modules={modules} user={safeUser} />}
             {(showAttendance || showHostelAttendance) && page === 'attendance_workspace' && (
               <WardenAttendanceWorkspace apiUrl={apiUrl} user={safeUser} modules={modules} />
             )}
@@ -689,9 +624,6 @@ export default function WardenPortal({ user, apiUrl, modules }) {
                             <div className="ptm-list-sub">{st.biometric_status === 'Locked' ? '🔒 Device token enrolled' : `⚠️ ${st.biometric_status || 'Unenrolled'}`}</div>
                           </div>
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', justifyContent: 'flex-end', maxWidth: '100%' }}>
-                            <button type="button" className="ptm-btn-secondary" style={{ width: 'auto', padding: '7px 14px', fontSize: '12px' }} disabled={Boolean(unlockingStudentId)} onClick={() => handleUnlockBiometric(st)}>
-                              {unlockingStudentId === st.user_id ? 'Unlocking…' : '🔓 Unlock 2-Min Device Setup'}
-                            </button>
                             <button type="button" className="ptm-btn-secondary" style={{ width: 'auto', padding: '7px 14px', fontSize: '12px' }} onClick={() => handleOpenEditStudent(st)}>✏️ Edit</button>
                           </div>
                         </div>
