@@ -521,8 +521,7 @@ export function StudentBiometricAttendancePanel({
   onLogsChange,
   onUserUpdate
 }) {
-  const cacheKey = `attendance_logs_${user?.college_id || 'college'}_${user?.user_id || 'student'}`;
-  const [logs, setLogs] = useState(() => getCached(cacheKey) || initialLogs);
+  const [logs, setLogs] = useState(initialLogs);
   const [biometricStatus, setBiometricStatus] = useState(user?.biometric_status || 'Unenrolled');
   const [enrollmentUntil, setEnrollmentUntil] = useState(Number(user?.enroll_window_until || 0));
   const [faceEnrolled, setFaceEnrolled] = useState(Boolean(user?.face_enrolled));
@@ -530,7 +529,6 @@ export function StudentBiometricAttendancePanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const [usingTestBeacon, setUsingTestBeacon] = useState(false);
   const [pendingAttendance, setPendingAttendance] = useState(null);
   const [pendingEnrollment, setPendingEnrollment] = useState(false);
   const [nowSeconds, setNowSeconds] = useState(currentEpochSeconds);
@@ -549,8 +547,7 @@ export function StudentBiometricAttendancePanel({
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect
     setLogs(initialLogs);
-    setCached(cacheKey, initialLogs);
-  }, [cacheKey, initialLogs]);
+  }, [initialLogs]);
 
   // Student Onboarding Staff can unlock enrollment while the student portal remains open.
   useEffect(() => {
@@ -593,9 +590,8 @@ export function StudentBiometricAttendancePanel({
 
   const saveLogs = useCallback((next) => {
     setLogs(next);
-    setCached(cacheKey, next);
     onLogsChange?.(next);
-  }, [cacheKey, onLogsChange]);
+  }, [onLogsChange]);
 
   const registerAndLock = async (disclosureAlreadyAccepted = false) => {
     if (!enrollmentOpen) {
@@ -679,7 +675,6 @@ export function StudentBiometricAttendancePanel({
     setBusy(true);
     setError('');
     setMessage('');
-    setUsingTestBeacon(false);
     try {
       const deviceBindingToken = await getDeviceBindingToken(user);
       if (!deviceBindingToken) {
@@ -700,7 +695,6 @@ export function StudentBiometricAttendancePanel({
     } catch (markError) {
       setError(errorText(markError, 'Could not record attendance.'));
       setBusy(false);
-      setUsingTestBeacon(false);
     }
   };
 
@@ -710,7 +704,6 @@ export function StudentBiometricAttendancePanel({
       setError(result.error || 'Face verification was not completed.');
       setPendingAttendance(null);
       setBusy(false);
-      setUsingTestBeacon(false);
       return;
     }
     let requestBody = '';
@@ -754,7 +747,6 @@ export function StudentBiometricAttendancePanel({
       requestBody = '';
       setPendingAttendance(null);
       setBusy(false);
-      setUsingTestBeacon(false);
       setChallenge(null);
     }
   }, [apiUrl, logs, pendingAttendance, saveLogs, user?.user_id]);
@@ -819,7 +811,7 @@ export function StudentBiometricAttendancePanel({
             onClick={markWithBeacon}
             disabled={busy || !expectedBeacon}
           >
-            {busy && !usingTestBeacon ? 'Scanning beacon…' : '📡 Scan Wing Beacon & Verify Face'}
+            {busy ? 'Scanning beacon…' : '📡 Scan Wing Beacon & Verify Face'}
           </button>
         </div>
       )}

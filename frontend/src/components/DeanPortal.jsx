@@ -1662,16 +1662,19 @@ export default function DeanPortal({ apiUrl, user, modules = {}, tenantName = 'V
                       const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
                       const dayEvents = events.filter((e) => e.date === dateStr);
                       return (
-                        <div
+                        <button
                           key={dateStr}
+                          type="button"
                           className={`ptm-cal-cell ${selectedDateStr === dateStr ? 'selected' : ''}`}
+                          aria-label={`${dateStr}${dayEvents.length ? `, ${dayEvents.length} event${dayEvents.length === 1 ? '' : 's'}` : ''}`}
+                          aria-pressed={selectedDateStr === dateStr}
                           onClick={() => setSelectedDateStr(dateStr)}
                         >
                           <span className="ptm-cal-daynum">{dayNum}</span>
                           {dayEvents.length > 0 && (
                             <div className="ptm-cal-event-chip">{dayEvents[0].title}</div>
                           )}
-                        </div>
+                        </button>
                       );
                     })}
                   </div>

@@ -9,16 +9,11 @@ import android.bluetooth.le.AdvertiseSettings;
 import android.bluetooth.le.BluetoothLeAdvertiser;
 import android.content.Context;
 import android.content.pm.PackageManager;
-import android.net.ConnectivityManager;
-import android.net.Network;
-import android.net.NetworkRequest;
 import android.os.ParcelUuid;
-import android.os.Build;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProtection;
 import android.security.keystore.KeyProperties;
 import android.util.Base64;
-import android.net.wifi.WifiNetworkSpecifier;
 
 import androidx.core.content.ContextCompat;
 
@@ -34,12 +29,6 @@ import com.getcapacitor.annotation.PermissionCallback;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
-import java.io.BufferedReader;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.security.Key;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -50,11 +39,6 @@ import java.security.Signature;
 import java.security.spec.X509EncodedKeySpec;
 import java.security.spec.ECGenParameterSpec;
 import java.util.Arrays;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
-import org.json.JSONObject;
 
 import javax.crypto.Cipher;
 import javax.crypto.KeyAgreement;
@@ -64,25 +48,20 @@ import javax.crypto.spec.SecretKeySpec;
 
 @CapacitorPlugin(name = "HardwareAuth")
 @Permission(alias = "bleAdvertise", strings = {
-        Manifest.permission.BLUETOOTH_ADVERTISE,
-        Manifest.permission.NEARBY_WIFI_DEVICES
+        Manifest.permission.BLUETOOTH_ADVERTISE
 })
 public class HardwareAuthPlugin extends Plugin {
     private static final String KEY_ALIAS = "hms-attendance-signing-key-v1";
-    private static final String FACULTY_OFFLINE_ALIAS = "vidyut-faculty-offline-signing-v1";
     private static final String BLE_AGREEMENT_ALIAS = "vidyut-attendance-ble-agreement-v1";
     private static final String BLE_HMAC_ALIAS = "vidyut-attendance-ble-hmac-v1";
     private static final byte[] BLE_KEY_INFO = "vidyut-attendance-ble-key-v1".getBytes(StandardCharsets.UTF_8);
     private BluetoothLeAdvertiser bleAdvertiser;
     private AdvertiseCallback advertiseCallback;
-    private ConnectivityManager.NetworkCallback nodeNetworkCallback;
-    private Network nodeNetwork;
-    private final ExecutorService nodeIoExecutor = Executors.newSingleThreadExecutor();
 
     @PluginMethod
     public void generateKeyPair(PluginCall call) {
         try {
-            KeyPair pair = getOrCreateSigningKeyPair(KEY_ALIAS);
+            KeyPair pair = getOrCreateSigningKeyPair();
             JSObject result = new JSObject();
             result.put("public_key", Base64.encodeToString(pair.getPublic().getEncoded(), Base64.NO_WRAP));
             call.resolve(result);
@@ -91,51 +70,14 @@ public class HardwareAuthPlugin extends Plugin {
         }
     }
 
-    @PluginMethod
-    public void getOfflineFacultySigningPublicKey(PluginCall call) {
-        try {
-            KeyPair pair = getOrCreateSigningKeyPair(FACULTY_OFFLINE_ALIAS);
-            JSObject result = new JSObject();
-            result.put("public_key", Base64.encodeToString(pair.getPublic().getEncoded(), Base64.NO_WRAP));
-            call.resolve(result);
-        } catch (Exception error) {
-            call.reject("The faculty offline signing key could not be created.", error);
-        }
-    }
-
-    @PluginMethod
-    public void signOfflineSessionPayload(PluginCall call) {
-        String payload = call.getString("payload", "");
-        if (payload.isEmpty()) {
-            call.reject("A signed offline session payload is required.");
-            return;
-        }
-        try {
-            KeyStore store = loadKeyStore();
-            PrivateKey key = (PrivateKey) store.getKey(FACULTY_OFFLINE_ALIAS, null);
-            if (key == null) {
-                call.reject("The faculty offline signing key is not enrolled.");
-                return;
-            }
-            Signature signer = Signature.getInstance("SHA256withECDSA");
-            signer.initSign(key);
-            signer.update(payload.getBytes(StandardCharsets.UTF_8));
-            JSObject result = new JSObject();
-            result.put("signature", Base64.encodeToString(signer.sign(), Base64.NO_WRAP));
-            call.resolve(result);
-        } catch (Exception error) {
-            call.reject("The signed offline session could not be generated.", error);
-        }
-    }
-
-    private KeyPair getOrCreateSigningKeyPair(String alias) throws Exception {
+    private KeyPair getOrCreateSigningKeyPair() throws Exception {
         KeyStore store = loadKeyStore();
-        if (!store.containsAlias(alias)) {
+        if (!store.containsAlias(KEY_ALIAS)) {
             KeyPairGenerator generator = KeyPairGenerator.getInstance(
                     KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore");
             try {
                 generator.initialize(new KeyGenParameterSpec.Builder(
-                        alias, KeyProperties.PURPOSE_SIGN)
+                        KEY_ALIAS, KeyProperties.PURPOSE_SIGN)
                         .setAlgorithmParameterSpec(new ECGenParameterSpec("secp256r1"))
                         .setDigests(KeyProperties.DIGEST_SHA256)
                         .setIsStrongBoxBacked(true)
@@ -143,9 +85,9 @@ public class HardwareAuthPlugin extends Plugin {
                 generator.generateKeyPair();
             } catch (Exception strongBoxUnavailable) {
                 store = loadKeyStore();
-                if (store.containsAlias(alias)) store.deleteEntry(alias);
+                if (store.containsAlias(KEY_ALIAS)) store.deleteEntry(KEY_ALIAS);
                 generator.initialize(new KeyGenParameterSpec.Builder(
-                        alias, KeyProperties.PURPOSE_SIGN)
+                        KEY_ALIAS, KeyProperties.PURPOSE_SIGN)
                         .setAlgorithmParameterSpec(new ECGenParameterSpec("secp256r1"))
                         .setDigests(KeyProperties.DIGEST_SHA256)
                         .build());
@@ -153,8 +95,8 @@ public class HardwareAuthPlugin extends Plugin {
             }
         }
         store = loadKeyStore();
-        return new KeyPair(store.getCertificate(alias).getPublicKey(),
-                (PrivateKey) store.getKey(alias, null));
+        return new KeyPair(store.getCertificate(KEY_ALIAS).getPublicKey(),
+                (PrivateKey) store.getKey(KEY_ALIAS, null));
     }
 
     @PluginMethod
@@ -371,152 +313,6 @@ public class HardwareAuthPlugin extends Plugin {
         }
     }
 
-    @PluginMethod
-    public void connectToNodeWifi(PluginCall call) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            call.reject("Automatic ESP32 Wi-Fi pairing requires Android 10 or later. Join the node network in Wi-Fi settings.");
-            return;
-        }
-        if (getPermissionState("bleAdvertise") != PermissionState.GRANTED) {
-            requestPermissionForAlias("bleAdvertise", call, "nodeWifiPermissionCallback");
-            return;
-        }
-        connectToNodeWifiNow(call);
-    }
-
-    @PermissionCallback
-    private void nodeWifiPermissionCallback(PluginCall call) {
-        if (getPermissionState("bleAdvertise") != PermissionState.GRANTED) {
-            call.reject("Nearby device permission is required to connect to the ESP32 Wi-Fi network.");
-            return;
-        }
-        connectToNodeWifiNow(call);
-    }
-
-    private void connectToNodeWifiNow(PluginCall call) {
-        String ssid = call.getString("ssid", "").trim();
-        String password = call.getString("password", "");
-        if (ssid.isEmpty() || password.length() < 8 || password.length() > 63) {
-            call.reject("Enter the ESP32 Wi-Fi name and its 8 to 63 character password.");
-            return;
-        }
-        try {
-            disconnectNodeNetwork();
-            ConnectivityManager manager = (ConnectivityManager) getContext()
-                    .getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (manager == null) {
-                call.reject("Android Wi-Fi network services are unavailable.");
-                return;
-            }
-            WifiNetworkSpecifier specifier = new WifiNetworkSpecifier.Builder()
-                    .setSsid(ssid)
-                    .setWpa2Passphrase(password)
-                    .build();
-            NetworkRequest request = new NetworkRequest.Builder()
-                    .addTransportType(android.net.NetworkCapabilities.TRANSPORT_WIFI)
-                    .removeCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                    .setNetworkSpecifier(specifier)
-                    .build();
-            nodeNetworkCallback = new ConnectivityManager.NetworkCallback() {
-                @Override
-                public void onAvailable(Network network) {
-                    nodeNetwork = network;
-                    JSObject result = new JSObject();
-                    result.put("connected", true);
-                    call.resolve(result);
-                }
-
-                @Override
-                public void onUnavailable() {
-                    call.reject("Android could not connect to the ESP32 Wi-Fi network.");
-                    disconnectNodeNetwork();
-                }
-
-                @Override
-                public void onLost(Network network) {
-                    if (network.equals(nodeNetwork)) nodeNetwork = null;
-                }
-            };
-            manager.requestNetwork(request, nodeNetworkCallback);
-        } catch (Exception error) {
-            disconnectNodeNetwork();
-            call.reject("Could not request the ESP32 Wi-Fi connection.", error);
-        }
-    }
-
-    @PluginMethod
-    public void requestNode(PluginCall call) {
-        Network network = nodeNetwork;
-        if (network == null) {
-            call.reject("Connect to the ESP32 Wi-Fi network first.");
-            return;
-        }
-        String url = call.getString("url", "");
-        String method = call.getString("method", "GET").toUpperCase(java.util.Locale.ROOT);
-        JSONObject body = call.getObject("body");
-        nodeIoExecutor.execute(() -> {
-            HttpURLConnection connection = null;
-            try {
-                connection = (HttpURLConnection) network.openConnection(new URL(url));
-                connection.setRequestMethod(method);
-                connection.setConnectTimeout((int) TimeUnit.SECONDS.toMillis(10));
-                connection.setReadTimeout((int) TimeUnit.SECONDS.toMillis(20));
-                connection.setRequestProperty("Accept", "application/json");
-                if (body != null) {
-                    connection.setDoOutput(true);
-                    connection.setRequestProperty("Content-Type", "application/json");
-                    byte[] data = body.toString().getBytes(StandardCharsets.UTF_8);
-                    try (OutputStream output = connection.getOutputStream()) {
-                        output.write(data);
-                    }
-                }
-                int status = connection.getResponseCode();
-                InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
-                StringBuilder responseBody = new StringBuilder();
-                if (stream != null) {
-                    try (BufferedReader reader = new BufferedReader(
-                            new InputStreamReader(stream, StandardCharsets.UTF_8))) {
-                        String line;
-                        while ((line = reader.readLine()) != null) responseBody.append(line);
-                    }
-                }
-                JSObject result = new JSObject();
-                result.put("status", status);
-                String responseText = responseBody.toString();
-                try {
-                    result.put("data", new JSONObject(responseText));
-                } catch (Exception invalidJson) {
-                    result.put("data", responseText);
-                }
-                call.resolve(result);
-            } catch (Exception error) {
-                call.reject("Could not communicate with the ESP32 attendance node.", error);
-            } finally {
-                if (connection != null) connection.disconnect();
-            }
-        });
-    }
-
-    @PluginMethod
-    public void disconnectFromNodeWifi(PluginCall call) {
-        disconnectNodeNetwork();
-        call.resolve();
-    }
-
-    private void disconnectNodeNetwork() {
-        ConnectivityManager manager = (ConnectivityManager) getContext()
-                .getSystemService(Context.CONNECTIVITY_SERVICE);
-        if (manager != null && nodeNetworkCallback != null) {
-            try {
-                manager.unregisterNetworkCallback(nodeNetworkCallback);
-            } catch (IllegalArgumentException ignored) {
-                // The system can remove a callback after an unavailable network.
-            }
-        }
-        nodeNetworkCallback = null;
-        nodeNetwork = null;
-    }
-
     private void stopBleAdvertisingNow() {
         if (bleAdvertiser != null && advertiseCallback != null) {
             bleAdvertiser.stopAdvertising(advertiseCallback);
@@ -568,8 +364,6 @@ public class HardwareAuthPlugin extends Plugin {
     @Override
     protected void handleOnDestroy() {
         stopBleAdvertisingNow();
-        disconnectNodeNetwork();
-        nodeIoExecutor.shutdownNow();
         super.handleOnDestroy();
     }
 }

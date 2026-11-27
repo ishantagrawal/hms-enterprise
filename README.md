@@ -234,7 +234,8 @@ Warden.
 
 The Face Landmarker model, MobileFaceNet ONNX graph and external weights, and
 required WebAssembly runtimes are bundled under `frontend/public/models/` for
-offline use in native builds.
+on-device liveness and face verification. Attendance check-ins still require
+an active network connection to the backend.
 
 Digital leave requests support Day Outpass and Home Leave (up to 30 calendar
 days). Wardens review requests, can call the listed parent/guardian number, and

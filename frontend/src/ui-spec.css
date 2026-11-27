@@ -6,6 +6,8 @@
   --vidyut-border: #e4e7ec;
   --vidyut-primary: #1f4fe0;
   min-height: 100vh;
+  min-width: 0;
+  overflow-x: clip;
   color: var(--vidyut-ink) !important;
   background: var(--vidyut-canvas) !important;
 }
@@ -49,6 +51,9 @@
 .ptm-root .ptm-header-title { color: var(--vidyut-ink); }
 .ptm-root .ptm-header-inner { max-width: 1440px; min-height: 64px; padding: 8px 24px; }
 .ptm-root .ptm-main-container { max-width: 1440px; padding: 24px 24px calc(96px + env(safe-area-inset-bottom)); }
+.ptm-sync-progress { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 12px; margin-bottom: 12px; padding: 12px; border: 1px solid var(--vidyut-border); border-radius: 12px; background: var(--vidyut-surface); color: var(--vidyut-muted); font-size: 13px; }
+.ptm-sync-progress strong { color: var(--vidyut-ink); font-variant-numeric: tabular-nums; }
+.ptm-sync-progress .v-progress { grid-column: 1 / -1; }
 .ptm-root .ptm-shell-layout { grid-template-columns: 248px minmax(0, 1fr); gap: 28px; }
 .ptm-root .ptm-sidebar-desktop {
   top: 88px;
@@ -91,6 +96,7 @@
   color: var(--vidyut-ink);
 }
 .ptm-root .ptm-input:focus { border-color: var(--vidyut-primary); }
+.ptm-root .ptm-modal-card { max-height: min(90dvh, 760px); padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
 .ptm-root .ptm-btn-primary {
   min-height: 48px;
   border-radius: 14px;
@@ -524,11 +530,18 @@
   .av-directory-layout { grid-template-columns: minmax(0, 1fr); }
   .av-rollover-grid { grid-template-columns: minmax(0, 1fr); }
   .av-student-detail { position: static; }
+  .ptm-root table { display: block; width: 100%; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
+  .ptm-root table th:first-child,
+  .ptm-root table td:first-child { position: sticky; left: 0; z-index: 1; background: var(--vidyut-surface); }
 }
 @media (min-width: 1025px) {
   .ptm-root .v-tab-bar { display: none; }
 }
 @media (max-width: 760px) {
+  .ptm-root input:not([type="range"]),
+  .ptm-root select,
+  .ptm-root textarea { font-size: 16px; }
+  .ptm-root button { min-height: 44px; }
   .ptm-root .ptm-login-screen { grid-template-columns: minmax(0, 1fr); gap: 18px; padding: 18px 14px 28px; }
   .ptm-login-hero { min-height: 0; max-width: 540px; }
   .ptm-login-hero-copy { margin: 0; padding: 34px 0 24px; }
@@ -541,6 +554,7 @@
   .ptm-root .ptm-page-title { font-size: 22px; }
   .ptm-root .ptm-card { padding: 16px; }
   .av-root { padding: 20px 14px calc(96px + env(safe-area-inset-bottom)); }
+  .av-home-button { white-space: nowrap; }
   .av-panel { padding: 16px; }
   .av-onboarding-header { flex-direction: column; }
   .av-onboarding-header .v-button { width: 100%; }
@@ -564,6 +578,8 @@
   .ptm-student-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ptm-root .ptm-student-stats .v-stat-tile:last-child { grid-column: 1 / -1; }
   .ptm-root .ptm-student-action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ptm-root .ptm-cal-grid { gap: 3px; }
+  .ptm-root .ptm-cal-cell { width: 100%; min-width: 0; padding: 4px; font: inherit; text-align: left; }
   .ptm-dean-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ptm-approval-row { grid-template-columns: 38px minmax(0, 1fr); }
   .ptm-approval-actions { grid-column: 2; justify-content: flex-end; }
@@ -903,7 +919,6 @@
 .av-checkin-manual { display: flex; align-items: center; gap: 10px; margin: 0; padding-top: 14px; border-top: 1px solid var(--vidyut-border); color: var(--vidyut-muted); font-size: 12px; line-height: 1.4; }
 .av-checkin-panel .av-primary { min-height: 52px; }
 .av-checkin-panel .av-footnote { margin: 0; text-align: center; }
-.av-checkin-panel .av-sim-toggle { font-size: 11px; }
 
 @media (max-width: 760px) {
   .ptm-root .ptm-header--student { display: none; }

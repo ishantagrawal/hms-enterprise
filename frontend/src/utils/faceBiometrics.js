@@ -2,25 +2,10 @@ import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 
 let landmarkerPromise;
 
-async function loadCachedModel() {
+async function loadFaceModel() {
   const modelUrl = new URL('/models/face_landmarker.task', window.location.origin).toString();
-  if (!('caches' in globalThis)) {
-    const response = await fetch(modelUrl);
-    if (!response.ok) throw new Error('The on-device face model could not be loaded.');
-    return new Uint8Array(await response.arrayBuffer());
-  }
-
-  const cache = await caches.open('vidyut-face-model-v1');
-  let response = await cache.match(modelUrl);
-  if (!response) {
-    response = await fetch(modelUrl);
-    if (!response.ok) throw new Error('The on-device face model could not be loaded.');
-    try {
-      await cache.put(modelUrl, response.clone());
-    } catch (cacheError) {
-      console.warn('The face model loaded, but could not be retained in Cache Storage:', cacheError);
-    }
-  }
+  const response = await fetch(modelUrl);
+  if (!response.ok) throw new Error('The on-device face model could not be loaded.');
   return new Uint8Array(await response.arrayBuffer());
 }
 
@@ -28,7 +13,7 @@ async function getFaceLandmarker() {
   if (!landmarkerPromise) {
     landmarkerPromise = (async () => {
       const vision = await FilesetResolver.forVisionTasks('/models/wasm');
-      const modelAssetBuffer = await loadCachedModel();
+      const modelAssetBuffer = await loadFaceModel();
       try {
         return await FaceLandmarker.createFromOptions(vision, {
           baseOptions: {
@@ -54,10 +39,6 @@ async function getFaceLandmarker() {
     })();
   }
   return landmarkerPromise;
-}
-
-export async function prepareOfflineLiveness() {
-  await getFaceLandmarker();
 }
 
 export async function verifyLocalBlinkGesture(video, onStatus, signal) {

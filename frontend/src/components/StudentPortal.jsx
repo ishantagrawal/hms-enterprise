@@ -3,10 +3,10 @@ import { apiFetch } from '../api';
 import { getCached, setCached } from '../cache';
 import { getHostelOptions, inferHostelWing } from '../hostelOptions';
 import { isEventCompleted } from '../eventUtils';
-import { ListRowSkeleton, Skeleton } from './SkeletonLoader';
+import { ListRowSkeleton } from './SkeletonLoader';
 import { StudentAttendance as StudentAttendanceV2 } from './AttendanceOnlyPortals';
 import usePortalBackNavigation from '../hooks/usePortalBackNavigation';
-import { Button, Icon, Sidebar, StatTile, TabBar } from './ui/DesignSystem';
+import { Button, Icon, ProgressBar, Sidebar, StatTile, TabBar } from './ui/DesignSystem';
 
 const StudentBiometricAttendancePanel = lazy(() =>
   import('./StudentSecurityServices').then((module) => ({ default: module.StudentBiometricAttendancePanel }))
@@ -20,7 +20,6 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, onLogout, mo
   const cKey = `complaints_${safeUser.user_id}`;
   const dKey = `departments_${safeUser.hostel_block}`;
   const leavePassKey = `digital_leave_passes_${safeUser.college_id || 'college'}_${safeUser.user_id || 'student'}`;
-  const attendanceLogKey = `attendance_logs_${safeUser.college_id || 'college'}_${safeUser.user_id || 'student'}`;
 
   const [page, setPage] = useState(() => (
     modules?.attendance === true && new URLSearchParams(window.location.search).has('attendance')
@@ -29,6 +28,7 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, onLogout, mo
   ));
   usePortalBackNavigation(page, setPage);
   const [dataLoading, setDataLoading] = useState(false);
+  const [syncProgress, setSyncProgress] = useState(0);
   const leavePassVersionRef = useRef(0);
   const attendanceLogVersionRef = useRef(0);
   const [complaints, setComplaints] = useState(() => getCached(cKey) || []);
@@ -45,7 +45,7 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, onLogout, mo
   const [homeHostelHistory, setHomeHostelHistory] = useState(null);
   const [homeOpenSessions, setHomeOpenSessions] = useState([]);
   const [leavePasses, setLeavePasses] = useState(() => getCached(leavePassKey) || []);
-  const [attendanceLogs, setAttendanceLogs] = useState(() => getCached(attendanceLogKey) || []);
+  const [attendanceLogs, setAttendanceLogs] = useState([]);
   const [msg, setMsg] = useState(null);
 
   const [selectedTicket, setSelectedTicket] = useState(null);
@@ -74,6 +74,15 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, onLogout, mo
     wing: safeUser.wing || '',
     phone: safeUser.phone || ''
   });
+
+  useEffect(() => {
+    if (!dataLoading || syncProgress >= 90) return undefined;
+    const timer = window.setTimeout(() => {
+      setSyncProgress((current) => Math.min(current + 10, 90));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [dataLoading, syncProgress]);
+
   const openProfile = () => {
     if (page === 'profile') return;
     setProfileLoading(true);
@@ -118,8 +127,7 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, onLogout, mo
   const updateAttendanceLogs = useCallback((next, isMutation = false) => {
     if (isMutation) attendanceLogVersionRef.current += 1;
     setAttendanceLogs(next);
-    setCached(attendanceLogKey, next);
-  }, [attendanceLogKey]);
+  }, []);
 
   const isDayScholar = (safeUser.hostel_block || '').toLowerCase() === 'day scholar';
   const showGrievances = modules?.grievances === true;
@@ -192,6 +200,7 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, onLogout, mo
     const attendanceLogVersion = attendanceLogVersionRef.current;
     const hasCache = Boolean(getCached(cKey) || getCached('events'));
     if (!hasCache) {
+      setSyncProgress(0);
       setDataLoading(true);
     }
     setSyncError('');
@@ -616,8 +625,10 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, onLogout, mo
       <div className="ptm-page-wrap">
         {msg && <div className="ptm-toast" onClick={() => setMsg(null)}>{msg}</div>}
         {dataLoading && (
-          <div className="ptm-sync-note" role="status" aria-label="Syncing campus updates">
-            <Skeleton height={26} radius={8} />
+          <div className="ptm-sync-progress" role="status" aria-label="Syncing campus updates">
+            <span>Syncing campus updates</span>
+            <strong>{syncProgress}%</strong>
+            <ProgressBar value={syncProgress} label="Campus sync progress" />
           </div>
         )}
         {syncError && (
@@ -751,18 +762,18 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, onLogout, mo
                 <div className="ptm-card">
                   <form onSubmit={handleCreateComplaint} className="ptm-form-stack">
                     <div>
-                      <label className="ptm-label">Select Maintenance Department</label>
-                      <select className="ptm-input" value={category} onChange={(e) => setCategory(e.target.value)}>
+                      <label className="ptm-label" htmlFor="student-complaint-category">Select Maintenance Department</label>
+                      <select id="student-complaint-category" className="ptm-input" value={category} onChange={(e) => setCategory(e.target.value)}>
                         {departments.map((d) => <option key={d.id} value={d.id}>{d.icon} {d.title}</option>)}
                       </select>
                     </div>
                     <div>
-                      <label className="ptm-label">Short Issue Title</label>
-                      <input type="text" className="ptm-input" placeholder="e.g. Ceiling fan regulator not working" value={summary} onChange={(e) => setSummary(e.target.value)} required />
+                      <label className="ptm-label" htmlFor="student-complaint-summary">Short Issue Title</label>
+                      <input id="student-complaint-summary" type="text" className="ptm-input" placeholder="e.g. Ceiling fan regulator not working" value={summary} onChange={(e) => setSummary(e.target.value)} required />
                     </div>
                     <div>
-                      <label className="ptm-label">Detailed Description</label>
-                      <textarea rows="3" className="ptm-input" placeholder="Describe the issue and preferred time..." value={description} onChange={(e) => setDescription(e.target.value)} required />
+                      <label className="ptm-label" htmlFor="student-complaint-description">Detailed Description</label>
+                      <textarea id="student-complaint-description" rows="3" className="ptm-input" placeholder="Describe the issue and preferred time..." value={description} onChange={(e) => setDescription(e.target.value)} required />
                     </div>
                     <button type="submit" className="ptm-btn-primary" disabled={submitting}>
                       {submitting ? 'Submitting Grievance...' : 'Submit Grievance'}
@@ -1141,10 +1152,17 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, onLogout, mo
                       const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
                       const dayEvents = eventsByDate.get(dateStr) || [];
                       return (
-                        <div key={dateStr} className={`ptm-cal-cell ${selectedDateStr === dateStr ? 'selected' : ''}`} onClick={() => setSelectedDateStr(dateStr)}>
+                        <button
+                          key={dateStr}
+                          type="button"
+                          className={`ptm-cal-cell ${selectedDateStr === dateStr ? 'selected' : ''}`}
+                          aria-label={`${dateStr}${dayEvents.length ? `, ${dayEvents.length} event${dayEvents.length === 1 ? '' : 's'}` : ''}`}
+                          aria-pressed={selectedDateStr === dateStr}
+                          onClick={() => setSelectedDateStr(dateStr)}
+                        >
                           <span className="ptm-cal-daynum">{dayNum}</span>
                           {dayEvents.length > 0 && <div className="ptm-cal-event-chip">{dayEvents[0].title}</div>}
-                        </div>
+                        </button>
                       );
                     })}
                   </div>
@@ -1179,7 +1197,7 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, onLogout, mo
               </Suspense>
             )}
             {showAttendanceV2 && page === 'attendance_v2' && (
-              <StudentAttendanceV2 apiUrl={apiUrl} modules={modules} user={user} />
+              <StudentAttendanceV2 apiUrl={apiUrl} modules={modules} user={user} onHome={() => setPage('home')} />
             )}
             {showOutpass && page === 'leave_pass' && !isDayScholar && (
               <Suspense fallback={<ListRowSkeleton count={3} />}>

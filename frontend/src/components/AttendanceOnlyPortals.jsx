@@ -1,24 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../api';
 import { Capacitor } from '@capacitor/core';
-import { BleClient } from '@capacitor-community/bluetooth-le';
-import { QRCodeSVG } from 'qrcode.react';
-import { useBeaconScanner } from '../hooks/useBeaconScanner.ts';
 import { compressCameraFrame } from '../utils/cameraFrame.js';
 import { extractErrorMessage } from '../utils/errorParser.ts';
 import {
   broadcastIosAttendanceForFiveSeconds,
   broadcastAttendanceForFiveSeconds,
-  connectToAttendanceNodeWifi,
-  disconnectFromAttendanceNodeWifi,
   getBleKeyAgreementPublicKey,
-  getOfflineFacultySigningPublicKey,
-  installBleHmacKey,
-  requestAttendanceNode,
-  signOfflineSessionPayload
+  installBleHmacKey
 } from '../utils/hardwareAuth.js';
-import { canonicalJson, createOfflineSessionQr, parseOfflineSessionQr, parseSessionAdvertisement } from '../utils/reverseBle.ts';
-import LocalFaceCheckModal from './LocalFaceCheckModal.jsx';
 import DeanStaffManager from './DeanStaffManager';
 import StaffAccountAccess from './StaffAccountAccess';
 import { impactSuccess } from '../utils/nativeFeedback';
@@ -130,13 +120,6 @@ function AttendanceCheckIn({ apiUrl, session, user, onDone, onClose }) {
   const [error, setError] = useState('');
   const dismissProps = useDismissSheet(onClose);
   const isIos = Capacitor.getPlatform() === 'ios';
-  const scanner = useBeaconScanner({
-    enabled: !isIos,
-    beacons: session.beacons?.length
-      ? session.beacons
-      : [{ beacon_code: session.beacon.beacon_code, min_rssi: session.beacon.min_rssi }],
-    minRssi: session.beacon.min_rssi
-  });
 
   useEffect(() => {
     let active = true;
@@ -159,14 +142,6 @@ function AttendanceCheckIn({ apiUrl, session, user, onDone, onClose }) {
   }, []);
 
   const checkIn = async () => {
-    if (!isIos && scanner.simulation) {
-      setError('Beacon simulation is for preview only. Real attendance requires a native device to detect the physical beacon.');
-      return;
-    }
-    if (!isIos && (!scanner.inRange || scanner.rssi === null)) {
-      setError('Move closer to the active room beacon before checking in.');
-      return;
-    }
     if (!cameraReady || !videoRef.current) {
       setError('Wait for the camera preview before checking in.');
       return;
@@ -178,6 +153,10 @@ function AttendanceCheckIn({ apiUrl, session, user, onDone, onClose }) {
       const currentSession = (await requestJson(apiUrl, '/student/open-sessions'))
         .find((item) => item.id === session.id);
       if (!currentSession) throw new Error('This attendance session is no longer open.');
+      const rollId = Number(user?.user_id);
+      if (!Number.isInteger(rollId) || rollId < 0 || rollId > 0xffffffff) {
+        throw new Error('This student account does not have a numeric 32-bit roll ID for BLE attendance.');
+      }
       const credential = await navigator.credentials.get({
         publicKey: {
           challenge: bytesFromBase64Url(currentSession.current_nonce),
@@ -187,47 +166,29 @@ function AttendanceCheckIn({ apiUrl, session, user, onDone, onClose }) {
         }
       });
       if (!credential) throw new Error('The hardware passkey assertion was cancelled.');
-      if (isIos) {
-        const rollId = Number(user?.user_id);
-        if (!Number.isInteger(rollId) || rollId < 0 || rollId > 0xffffffff) {
-          throw new Error('This student account does not have a numeric 32-bit roll ID for BLE attendance.');
+      const token = await requestAttendanceApi(
+        apiUrl,
+        `/sessions/${encodeURIComponent(session.id)}/${isIos ? 'ios-ble-token' : 'android-ble-nonce'}`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            session_nonce: currentSession.current_nonce,
+            credential: encodeCredential(credential),
+            live_image_base64: liveImage
+          })
         }
-        const token = await requestAttendanceApi(
-          apiUrl,
-          `/sessions/${encodeURIComponent(session.id)}/ios-ble-token`,
-          {
-            method: 'POST',
-            body: JSON.stringify({
-              session_nonce: currentSession.current_nonce,
-              credential: encodeCredential(credential),
-              live_image_base64: liveImage
-            })
-          }
-        );
+      );
+      if (isIos) {
         await broadcastIosAttendanceForFiveSeconds(
           token.session_nonce,
           rollId,
           token.attendance_token
         );
-        await impactSuccess().catch((hapticError) => console.error('Could not trigger check-in haptic feedback:', hapticError));
-        onDone({ iosBleAdvertised: true });
-        return;
+      } else {
+        await broadcastAttendanceForFiveSeconds(token.session_nonce, rollId);
       }
-      await requestJson(apiUrl, '/check-in', {
-        method: 'POST',
-        body: JSON.stringify({
-          session_id: session.id,
-          session_nonce: currentSession.current_nonce,
-          credential: encodeCredential(credential),
-          uuid: scanner.rotatingUuid,
-          major: session.beacon.major,
-          minor: session.beacon.minor,
-          rssi: scanner.rssi,
-          live_image_base64: liveImage
-        })
-      });
       await impactSuccess().catch((hapticError) => console.error('Could not trigger check-in haptic feedback:', hapticError));
-      onDone();
+      onDone({ iosBleAdvertised: isIos });
     } catch (checkInError) {
       setError(extractErrorMessage(checkInError, 'Could not verify this check-in.'));
     } finally {
@@ -263,28 +224,16 @@ function AttendanceCheckIn({ apiUrl, session, user, onDone, onClose }) {
         <div className="av-checkin-status">
           {isIos
             ? <><span className="av-checkin-status-icon is-good"><Icon name="check" size={16} /></span><div><strong>Online iPhone check-in</strong><small>The server issues a short-lived token after passkey and face verification.</small></div></>
-            : <><span className={`av-checkin-status-icon${scanner.inRange ? ' is-good' : ''}`}>{scanner.inRange ? <Icon name="check" size={16} /> : null}</span>
-              <div><strong>{scanner.inRange ? 'Rotating beacon detected' : 'Finding the room beacon'}</strong><small>{scanner.inRange ? 'Signed beacon token will be checked by the server' : 'Move closer to an assigned active beacon'}</small></div>
-              <span className="av-checkin-signal">{scanner.rssi === null ? '' : `${scanner.rssi} dBm`}</span></>}
+            : <><span className="av-checkin-status-icon is-good"><Icon name="check" size={16} /></span><div><strong>Online Android check-in</strong><small>The server verifies your passkey and face before BLE proof broadcasting.</small></div></>}
         </div>
         <div className="av-checkin-status">
           <span className={`av-checkin-status-icon${busy ? ' is-checking' : ''}`} />
           <div><strong>Face check</strong><small>{busy ? 'Checking your face…' : cameraReady ? 'Ready to verify your presence' : 'Waiting for camera'}</small></div>
         </div>
-        {scanner.simulationAvailable && (
-          <>
-            <label className="av-sim-toggle">
-              <input type="checkbox" checked={scanner.simulation} onChange={(event) => event.target.checked ? scanner.startSimulation() : scanner.stopSimulation()} />
-              Simulate Beacon in Browser
-            </label>
-            <p className="av-footnote">Simulation only previews this screen. Attendance can be recorded only from a supported native device near the physical beacon.</p>
-          </>
-        )}
-        {!isIos && scanner.error && <p className="av-error">{scanner.error}</p>}
         {error && <p className="av-error">{error}</p>}
         <p className="av-checkin-manual"><Icon name="file" size={17} /> Phone issue? Ask your faculty or Warden to mark you manually.</p>
-        <button className="av-primary" disabled={busy || !cameraReady || (!isIos && (!scanner.inRange || scanner.simulation))} onClick={checkIn}>
-          {busy ? 'Verifying…' : isIos ? 'Verify and broadcast attendance' : 'Verify and mark present'}
+        <button className="av-primary" disabled={busy || !cameraReady} onClick={checkIn}>
+          {busy ? 'Verifying…' : 'Verify and broadcast attendance'}
         </button>
         <p className="av-footnote">{isIos
           ? 'The compressed live frame is sent for server-side 1:1 verification; the server then issues a one-time BLE token.'
@@ -363,328 +312,13 @@ function DeviceEnrollment({ apiUrl, onComplete, onClose }) {
   );
 }
 
-function OfflineStudentAttendance({ apiUrl, user, onSessionAvailable }) {
-  const [sessionInfo, setSessionInfo] = useState(null);
-  const [scanBusy, setScanBusy] = useState(false);
-  const [faceCheck, setFaceCheck] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [qrText, setQrText] = useState('');
-  const [qrScanner, setQrScanner] = useState(false);
-  const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
-  const [modelReady, setModelReady] = useState(false);
-  const videoRef = useRef(null);
-  const scanTimeoutRef = useRef(null);
-  const streamRef = useRef(null);
-  const isAndroid = Capacitor.getPlatform() === 'android';
-  const rollId = Number(user?.user_id);
-
-  const loadQr = useCallback((value) => {
-    setError('');
-    try {
-      const parsed = parseOfflineSessionQr(value);
-      if (parsed.expiresAt + (parsed.passkeyChallenge ? 7 * 86400 : 0) <= Math.floor(Date.now() / 1000)) {
-        throw new Error('This attendance session has expired.');
-      }
-      const next = {
-        sessionId: parsed.sessionId,
-        nonceHex: Array.from(parsed.nonce, (byte) => byte.toString(16).padStart(2, '0')).join(''),
-        expiresAt: parsed.expiresAt,
-        passkeyChallenge: parsed.passkeyChallenge || '',
-        source: 'qr'
-      };
-      setSessionInfo(next);
-      localStorage.setItem(`vidyut-offline-session:${user?.user_id || ''}`, JSON.stringify(next));
-      setMessage('Session QR saved on this device. Android can broadcast offline; iOS can queue its session-bound passkey assertion and sync it after reconnecting.');
-    } catch (parseError) {
-      setError(extractErrorMessage(parseError, 'Could not read the session QR.'));
-    }
-  }, [user]);
-
-  useEffect(() => {
-    const saved = localStorage.getItem(`vidyut-offline-session:${user?.user_id || ''}`);
-    if (saved) {
-      try {
-        setSessionInfo(JSON.parse(saved));
-      } catch {
-        localStorage.removeItem(`vidyut-offline-session:${user?.user_id || ''}`);
-      }
-    }
-    return () => {
-      if (scanTimeoutRef.current) window.clearTimeout(scanTimeoutRef.current);
-      void BleClient.stopLEScan().catch(() => {});
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-    };
-  }, [user?.user_id]);
-
-  useEffect(() => {
-    if (!qrScanner) return undefined;
-    let active = true;
-    let frameId;
-    let cameraStream;
-    const videoElement = videoRef.current;
-    const setup = async () => {
-      const Detector = window.BarcodeDetector;
-      if (!Detector) {
-        setError('QR scanning is not supported here. Paste the session QR text below instead.');
-        setQrScanner(false);
-        return;
-      }
-      cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
-      streamRef.current = cameraStream;
-      if (!active || !videoElement) return;
-      videoElement.srcObject = cameraStream;
-      await videoElement.play();
-      const detector = new Detector({ formats: ['qr_code'] });
-      const detect = async () => {
-        if (!active || !videoElement) return;
-        try {
-          const results = await detector.detect(videoElement);
-          if (results[0]?.rawValue) {
-            setQrText(results[0].rawValue);
-            loadQr(results[0].rawValue);
-            setQrScanner(false);
-            return;
-          }
-        } catch (scanError) {
-          setError(extractErrorMessage(scanError, 'Could not read the session QR code.'));
-          setQrScanner(false);
-          return;
-        }
-        frameId = requestAnimationFrame(() => { void detect(); });
-      };
-      frameId = requestAnimationFrame(() => { void detect(); });
-    };
-    setup().catch((cameraError) => {
-      if (active) {
-        setError(extractErrorMessage(cameraError, 'Camera access is required to scan the session QR.'));
-        setQrScanner(false);
-      }
-    });
-    return () => {
-      active = false;
-      if (frameId) cancelAnimationFrame(frameId);
-      cameraStream?.getTracks().forEach((track) => track.stop());
-      if (videoElement) videoElement.srcObject = null;
-    };
-  }, [loadQr, qrScanner]);
-
-  const scanNode = async () => {
-    if (!isAndroid) {
-      setError('This iOS build uses the session QR and existing passkey check-in flow.');
-      return;
-    }
-    setError('');
-    setMessage('');
-    setScanBusy(true);
-    try {
-      await BleClient.initialize();
-      await BleClient.requestLEScan({ allowDuplicates: false }, (result) => {
-        if (!result || (typeof result.rssi === 'number' && result.rssi < -78)) return;
-        const serviceUuids = [
-          ...(result.uuids || []),
-          ...Object.keys(result.serviceData || {})
-        ];
-        for (const uuid of serviceUuids) {
-          try {
-            const packet = parseSessionAdvertisement(uuid);
-            if (!packet || packet.expiresAt <= Math.floor(Date.now() / 1000)) continue;
-            const next = {
-              sessionId: '',
-              nonceHex: Array.from(packet.nonce, (byte) => byte.toString(16).padStart(2, '0')).join(''),
-              expiresAt: packet.expiresAt,
-              locationId: packet.locationId,
-              source: 'ble'
-            };
-            setSessionInfo(next);
-            localStorage.setItem(`vidyut-offline-session:${user?.user_id || ''}`, JSON.stringify(next));
-            setMessage(`Room node found (${result.rssi ?? 'unknown'} dBm). Complete the local face check to broadcast attendance.`);
-            setScanBusy(false);
-            if (scanTimeoutRef.current) window.clearTimeout(scanTimeoutRef.current);
-            void BleClient.stopLEScan().catch((scanError) => console.error('Could not stop room-node scan:', scanError));
-            return;
-          } catch {
-            continue;
-          }
-        }
-      });
-      scanTimeoutRef.current = window.setTimeout(() => {
-        setScanBusy(false);
-        void BleClient.stopLEScan().catch((scanError) => console.error('Could not stop room-node scan:', scanError));
-        setError('No active room-node session was found nearby. Move closer and try again, or scan the faculty QR.');
-      }, 30000);
-    } catch (scanError) {
-      setScanBusy(false);
-      setError(extractErrorMessage(scanError, 'BLE session scanning could not start.'));
-    }
-  };
-
-  const prepareFaceModel = async () => {
-    setError('');
-    try {
-      await prepareOfflineLiveness();
-      setModelReady(true);
-      setMessage('Offline face-liveness model is ready on this device.');
-    } catch (modelError) {
-      setError(extractErrorMessage(modelError, 'Could not prepare the offline face-liveness model.'));
-    }
-  };
-
-  const onFaceResult = async (result) => {
-    setFaceCheck(false);
-    if (!result?.success) {
-      if (result?.error) setError(result.error);
-      return;
-    }
-    if (!isAndroid) {
-      if (!sessionInfo?.passkeyChallenge) {
-        setError('This iOS session QR has no offline passkey challenge. Scan a Faculty QR for the offline session.');
-        return;
-      }
-      setBusy(true);
-      setError('');
-      try {
-        const queueKey = `vidyut-offline-passkey:${user?.user_id || ''}:${sessionInfo.sessionId}`;
-        let queuedAssertion = null;
-        const savedAssertion = localStorage.getItem(queueKey);
-        if (savedAssertion) {
-          try {
-            queuedAssertion = JSON.parse(savedAssertion);
-          } catch {
-            localStorage.removeItem(queueKey);
-          }
-        }
-        if (!queuedAssertion) {
-          const credential = await navigator.credentials.get({
-            publicKey: {
-              challenge: bytesFromBase64Url(sessionInfo.passkeyChallenge),
-              rpId: window.location.hostname,
-              userVerification: 'required',
-              timeout: 30000
-            }
-          });
-          if (!credential) throw new Error('The hardware passkey assertion was cancelled.');
-          queuedAssertion = encodeCredential(credential);
-          localStorage.setItem(queueKey, JSON.stringify(queuedAssertion));
-        }
-        if (!navigator.onLine) {
-          setMessage('Face liveness and passkey are verified locally. The signed passkey assertion is queued; reconnect, repeat face liveness, and sync after Faculty uploads the session. No face embedding is saved on this device.');
-          return;
-        }
-        const syncResult = await requestAttendanceApi(apiUrl, '/student-offline-sync', {
-          method: 'POST',
-          body: JSON.stringify({
-            session_id: sessionInfo.sessionId,
-            credential: queuedAssertion,
-            face_embedding: result.embedding
-          })
-        });
-        localStorage.removeItem(queueKey);
-        setMessage(syncResult.duplicate ? 'This offline session check-in was already synced.' : 'Offline passkey and face check synced successfully.');
-      } catch (syncError) {
-        setError(extractErrorMessage(syncError, 'Could not verify or sync the iOS offline check-in.'));
-      } finally {
-        setBusy(false);
-      }
-      return;
-    }
-    if (sessionInfo.expiresAt <= Math.floor(Date.now() / 1000)) {
-      setError('This attendance session has expired. Scan the current Faculty QR or room-node broadcast.');
-      return;
-    }
-    if (!Number.isInteger(rollId) || rollId < 0 || rollId > 0xffffffff) {
-      setError('This student account does not have a numeric 32-bit roll ID for BLE attendance.');
-      return;
-    }
-    setBusy(true);
-    setError('');
-    try {
-      await broadcastAttendanceForFiveSeconds(sessionInfo.nonceHex, rollId);
-      setMessage('Attendance proof broadcast for 5 seconds. The ESP32 records it locally and uploads it when connectivity returns.');
-    } catch (advertiseError) {
-      setError(extractErrorMessage(advertiseError, 'The phone could not broadcast the attendance proof.'));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const completeIosCheckIn = async () => {
-    const latestCheckInTime = sessionInfo.expiresAt + (sessionInfo.passkeyChallenge ? 7 * 86400 : 0);
-    if (latestCheckInTime <= Math.floor(Date.now() / 1000)) {
-      setError('This attendance session has expired. Scan the current Faculty QR.');
-      return;
-    }
-    if (sessionInfo?.passkeyChallenge) {
-      setFaceCheck(true);
-      return;
-    }
-    if (!sessionInfo?.sessionId) {
-      setError('This node broadcast does not include a session ID. Scan the Faculty QR to link it to a session.');
-      return;
-    }
-    if (!navigator.onLine) {
-      setError('iOS passkey attendance needs a connection. The session QR is saved and can be used after the backend syncs it.');
-      return;
-    }
-    try {
-      const sessions = await requestJson(apiUrl, '/student/open-sessions');
-      const session = sessions.find((item) => item.id === sessionInfo.sessionId);
-      if (!session) throw new Error('The Faculty must sync this offline session before iOS passkey check-in.');
-      onSessionAvailable(session);
-    } catch (onlineError) {
-      setError(extractErrorMessage(onlineError, 'Could not load the passkey check-in session.'));
-    }
-  };
-
-  return (
-    <section className="av-panel av-offline-attendance">
-      <div className="av-row-between">
-        <div><h2>Offline room check-in</h2><p className="av-subtitle">Scan the room-node broadcast or Faculty QR. Android broadcasts locally; iOS queues a passkey assertion and repeats face liveness when syncing after reconnect.</p></div>
-        <StatusPill tone={sessionInfo ? 'success' : 'neutral'}>
-          {sessionInfo ? (sessionInfo.source === 'ble' ? 'NODE FOUND' : 'QR SAVED') : 'NO SESSION'}
-        </StatusPill>
-      </div>
-      <div className="av-offline-actions">
-        {isAndroid && <button className="av-secondary" type="button" disabled={scanBusy || busy} onClick={() => void scanNode()}>{scanBusy ? 'Scanning nearby nodes…' : 'Scan nearby ESP32'}</button>}
-        <button className="av-secondary" type="button" disabled={busy} onClick={() => setQrScanner((value) => !value)}>{qrScanner ? 'Close QR scanner' : 'Scan Faculty QR'}</button>
-        <button className="av-secondary" type="button" disabled={busy || modelReady} onClick={() => void prepareFaceModel()}>{modelReady ? 'Face model ready' : 'Prepare offline face check'}</button>
-      </div>
-      {qrScanner && <video ref={videoRef} className="av-qr-camera" muted playsInline autoPlay aria-label="Scan Faculty session QR code" />}
-      <label className="av-qr-input">Session QR text
-        <textarea rows={2} value={qrText} onChange={(event) => setQrText(event.target.value)} placeholder="Paste the session QR JSON when camera scanning is unavailable" />
-      </label>
-      <div className="av-offline-actions"><button className="av-secondary" type="button" onClick={() => loadQr(qrText)}>Use session QR</button></div>
-      {sessionInfo && <div className="av-offline-session">
-        <strong>{sessionInfo.sessionId || 'Room node session'}</strong>
-        <small>Expires {new Date(sessionInfo.expiresAt * 1000).toLocaleString()} · nonce stored on this device</small>
-        {isAndroid
-          ? <button className="av-primary" type="button" disabled={busy} onClick={() => setFaceCheck(true)}>{busy ? 'Broadcasting proof…' : 'Verify face and broadcast'}</button>
-          : <button
-              className="av-primary"
-              type="button"
-              disabled={busy}
-              onClick={() => void completeIosCheckIn()}
-            >{busy ? 'Verifying passkey…' : 'Verify face and queue/sync passkey'}</button>}
-      </div>}
-      {error && <p className="av-error" role="alert">{error}</p>}
-      {message && <p className="av-success" role="status">{message}</p>}
-      {faceCheck && <LocalFaceCheckModal
-        purpose="attendance"
-        offline
-        offlinePasskey={!isAndroid && Boolean(sessionInfo?.passkeyChallenge)}
-        challenge={{ gesture: 'TILT_LEFT', colors: ['#38bdf8', '#f472b6'] }}
-        onResult={(result) => { void onFaceResult(result); }}
-      />}
-    </section>
-  );
-}
-
-export function StudentAttendance({ apiUrl, modules, user }) {
+export function StudentAttendance({ apiUrl, modules, user, onHome }) {
   const [tab, setTab] = useState(modules?.class_attendance ? 'class' : 'hostel');
   const [summary, setSummary] = useState([]);
   const [hostel, setHostel] = useState(null);
   const [openSessions, setOpenSessions] = useState([]);
   const [deviceStatus, setDeviceStatus] = useState(null);
+  const [now, setNow] = useState(() => Date.now());
   const [selected, setSelected] = useState(null);
   const [checkIn, setCheckIn] = useState(null);
   const [enrolling, setEnrolling] = useState(false);
@@ -717,11 +351,19 @@ export function StudentAttendance({ apiUrl, modules, user }) {
     const timer = window.setInterval(() => { void refresh(); }, 10000);
     return () => window.clearInterval(timer);
   }, [refresh]);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const availableTabs = [
     ...(modules?.class_attendance ? [{ id: 'class', label: 'Class Attendance' }] : []),
     ...(modules?.hostel_attendance ? [{ id: 'hostel', label: 'Hostel Attendance' }] : [])
   ];
+  const enrollmentSeconds = deviceStatus?.enrollment_window_expires_at
+    ? Math.max(0, Math.ceil((new Date(deviceStatus.enrollment_window_expires_at).getTime() - now) / 1000))
+    : 0;
+  const enrollmentCountdown = `${Math.floor(enrollmentSeconds / 60)}:${String(enrollmentSeconds % 60).padStart(2, '0')}`;
   const activeSessions = openSessions.filter((session) => session.scope === (tab === 'class' ? 'CLASS' : 'HOSTEL'));
   const downloadPersonalReport = async (event) => {
     event.preventDefault();
@@ -738,7 +380,7 @@ export function StudentAttendance({ apiUrl, modules, user }) {
   };
 
   return (
-    <AttendanceShell title="Your attendance" tabs={availableTabs} tab={tab} setTab={setTab} error={error} message={message} setMessage={setMessage} bottomTabs>
+    <AttendanceShell title="Your attendance" tabs={availableTabs} tab={tab} setTab={setTab} error={error} message={message} setMessage={setMessage} onHome={onHome}>
       <section className="av-panel">
         <div className="av-row-between">
           <div><h2>Daily personal report</h2><p className="av-subtitle">Download only your own attendance for a selected day.</p></div>
@@ -750,16 +392,13 @@ export function StudentAttendance({ apiUrl, modules, user }) {
       </section>
       {tab === 'class' ? (
         <>
-          <OfflineStudentAttendance
-            apiUrl={apiUrl}
-            user={user}
-            onSessionAvailable={(session) => setCheckIn(session)}
-          />
           {deviceStatus && !deviceStatus.device_locked && (
             <div className="av-panel av-device-enrollment">
               <strong>Secure your attendance device</strong>
-              <p>{deviceStatus.enrollment_window_expires_at ? 'Your Student Onboarding-approved enrollment window is open.' : 'Ask Student Onboarding Staff to open a timed device enrollment window.'}</p>
-              {deviceStatus.enrollment_window_expires_at && <button className="av-primary" onClick={() => setEnrolling(true)}>Enroll this device</button>}
+              <p>{enrollmentSeconds > 0
+                ? `Your Student Onboarding-approved enrollment window is open for ${enrollmentCountdown}.`
+                : 'Ask Student Onboarding Staff to open a timed device enrollment window.'}</p>
+              {enrollmentSeconds > 0 && <button className="av-primary" onClick={() => setEnrolling(true)}>Enroll this device</button>}
             </div>
           )}
           {activeSessions.map((session) => (
@@ -783,11 +422,6 @@ export function StudentAttendance({ apiUrl, modules, user }) {
         </>
       ) : (
         <>
-          <OfflineStudentAttendance
-            apiUrl={apiUrl}
-            user={user}
-            onSessionAvailable={(session) => setCheckIn(session)}
-          />
           {activeSessions.map((session) => (
             <div className="av-live-banner" key={session.id}>
               <span><i /> Live wing check-in · {session.wing_name}</span>
@@ -802,7 +436,7 @@ export function StudentAttendance({ apiUrl, modules, user }) {
               ? <span className="av-device-state is-good">Device approved</span>
               : <span className="av-device-state">Device not enrolled</span>}
           </div>
-          {!deviceStatus?.device_locked && deviceStatus?.enrollment_window_expires_at && (
+          {!deviceStatus?.device_locked && enrollmentSeconds > 0 && (
             <button className="av-primary av-enroll-button" onClick={() => setEnrolling(true)}>Complete approved device enrollment</button>
           )}
           <section className="av-panel">
@@ -818,7 +452,7 @@ export function StudentAttendance({ apiUrl, modules, user }) {
         setCheckIn(null);
         setMessage(result?.iosBleAdvertised
           ? 'iPhone BLE proof broadcast for 5 seconds; attendance is recorded when the ESP32 uploads its batch.'
-          : 'Attendance marked present.');
+          : 'Android BLE proof broadcast for 5 seconds; attendance is recorded when the ESP32 uploads its batch.');
         void refresh();
       }} />}
       {enrolling && <DeviceEnrollment apiUrl={apiUrl} onClose={() => setEnrolling(false)} onComplete={() => { setEnrolling(false); setMessage('This device is now approved.'); void refresh(); }} />}
@@ -855,10 +489,14 @@ function AttendanceHistorySheet({ course, onClose }) {
   );
 }
 
-function AttendanceShell({ title, tabs, tab, setTab, children, error, message, setMessage, bottomTabs = false }) {
+function AttendanceShell({ title, tabs, tab, setTab, children, error, message, setMessage, bottomTabs = false, onHome }) {
   return (
     <div className="av-root">
-      <header className="av-heading"><span className="av-brand-mark">VO</span><div><p className="av-kicker">VIDYUT OS</p><h1>{title}</h1></div></header>
+      <header className="av-heading">
+        <span className="av-brand-mark">VO</span>
+        <div><p className="av-kicker">VIDYUT OS</p><h1>{title}</h1></div>
+        {onHome && <button type="button" className="av-home-button" onClick={onHome}>← Home</button>}
+      </header>
       {tabs.length > 1 && <nav className={`av-tabs ${bottomTabs ? 'av-bottom-tabs' : ''}`} aria-label="Attendance sections">{tabs.map((item) => <button key={item.id} className={tab === item.id ? 'is-active' : ''} onClick={() => setTab(item.id)}>{item.label}</button>)}</nav>}
       {error && <p className="av-error">{error}</p>}
       {message && <button className="av-message" onClick={() => setMessage('')}>{message} ×</button>}
@@ -1023,7 +661,7 @@ function classGroupKey(group) {
   return JSON.stringify([group.department, group.year, group.division]);
 }
 
-function FacultyAttendance({ apiUrl, user }) {
+function FacultyAttendance({ apiUrl }) {
   const [tab, setTab] = useState('session');
   const [courses, setCourses] = useState([]);
   const [beacons, setBeacons] = useState([]);
@@ -1034,38 +672,8 @@ function FacultyAttendance({ apiUrl, user }) {
   const [activeGroup, setActiveGroup] = useState('');
   const [selectedBeaconIds, setSelectedBeaconIds] = useState([]);
   const [duration, setDuration] = useState('manual');
-  const [offlineKeyId, setOfflineKeyId] = useState(() => localStorage.getItem(`vidyut-offline-key:${user?.user_id || ''}`) || '');
-  const [offlineRosterCount, setOfflineRosterCount] = useState(0);
-  const [nodeUrl, setNodeUrl] = useState(() => localStorage.getItem('vidyut-attendance-node-url') || 'http://192.168.4.1');
-  const [nodeSsid, setNodeSsid] = useState(() => localStorage.getItem('vidyut-attendance-node-ssid') || 'Vidyut-Node-node-01');
-  const [nodePassword, setNodePassword] = useState('');
-  const [nodeConnected, setNodeConnected] = useState(false);
-  const [qrPayload, setQrPayload] = useState(null);
-  const [offlineBusy, setOfflineBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const facultyCacheKey = `vidyut-faculty-attendance-cache:${user?.user_id || ''}`;
-  const rosterCacheKey = `vidyut-faculty-roster:${user?.user_id || ''}:${activeGroup}`;
-  const groupForOffline = classGroups.find((group) => classGroupKey(group) === activeGroup);
-  const cachedRoster = (() => {
-    try { return JSON.parse(localStorage.getItem(rosterCacheKey) || 'null'); }
-    catch { return null; }
-  })();
-
-  useEffect(() => {
-    try {
-      const cached = JSON.parse(localStorage.getItem(facultyCacheKey) || 'null');
-      if (!cached) return;
-      setCourses(cached.courses || []);
-      setBeacons(cached.beacons || []);
-      setSessions(cached.sessions || []);
-      setClassGroups(cached.classGroups || []);
-      setActiveGroup(cached.classGroups?.[0] ? classGroupKey(cached.classGroups[0]) : '');
-      setSelectedBeaconIds(cached.beacons?.filter((item) => item.is_active && item.is_provisioned).map((item) => item.id).slice(0, 1) || []);
-    } catch (cacheError) {
-      console.error('Could not restore the cached faculty attendance setup:', cacheError);
-    }
-  }, [facultyCacheKey]);
 
   const reload = useCallback(async () => {
     const [courseList, beaconList, liveSessions, groupList] = await Promise.all([
@@ -1078,12 +686,6 @@ function FacultyAttendance({ apiUrl, user }) {
     setBeacons(beaconList);
     setSessions(liveSessions);
     setClassGroups(groupList);
-    localStorage.setItem(facultyCacheKey, JSON.stringify({
-      courses: courseList,
-      beacons: beaconList,
-      sessions: liveSessions,
-      classGroups: groupList
-    }));
     setActiveCourse((current) => current && courseList.some((course) => course.id === current) ? current : '');
     setActiveGroup((current) => current && groupList.some((group) => classGroupKey(group) === current)
       ? current
@@ -1093,7 +695,7 @@ function FacultyAttendance({ apiUrl, user }) {
       const retained = current.filter((id) => activeIds.includes(id));
       return retained.length ? retained : activeIds.slice(0, 1);
     });
-  }, [apiUrl, facultyCacheKey]);
+  }, [apiUrl]);
   useEffect(() => { void reload().catch((loadError) => setError(extractErrorMessage(loadError))); }, [reload]);
   useEffect(() => {
     const timer = window.setInterval(() => { void reload().catch((loadError) => setError(extractErrorMessage(loadError))); }, 5000);
@@ -1128,241 +730,6 @@ function FacultyAttendance({ apiUrl, user }) {
         duration_minutes: duration === 'manual' ? null : Number(duration)
       })
     }), 'Class session started for the selected division.');
-  };
-  const registerOfflineKey = async () => {
-    setOfflineBusy(true);
-    setError('');
-    setMessage('');
-    try {
-      if (Capacitor.getPlatform() !== 'android') {
-        throw new Error('Offline session signing is currently available on the Android app only.');
-      }
-      const publicKey = await getOfflineFacultySigningPublicKey();
-      const result = await requestAttendanceApi(apiUrl, '/offline/faculty-key', {
-        method: 'POST',
-        body: JSON.stringify({ public_key: publicKey })
-      });
-      localStorage.setItem(`vidyut-offline-key:${user?.user_id || ''}`, result.key_id);
-      setOfflineKeyId(result.key_id);
-      setMessage('This device can now authorize offline sessions. Keep the roster cache up to date before losing internet.');
-    } catch (keyError) {
-      setError(extractErrorMessage(keyError, 'Could not register the faculty signing key.'));
-    } finally {
-      setOfflineBusy(false);
-    }
-  };
-  const connectNode = async () => {
-    setOfflineBusy(true);
-    setError('');
-    try {
-      await connectToAttendanceNodeWifi(nodeSsid, nodePassword);
-      setNodeConnected(true);
-      localStorage.setItem('vidyut-attendance-node-ssid', nodeSsid);
-      localStorage.setItem('vidyut-attendance-node-url', nodeUrl);
-      setMessage('Android connected to the room node. The phone keeps its internet connection available for batch upload.');
-    } catch (wifiError) {
-      setError(extractErrorMessage(wifiError, 'Could not connect to the ESP32 Wi-Fi network.'));
-    } finally {
-      setOfflineBusy(false);
-    }
-  };
-  const disconnectNode = async () => {
-    setError('');
-    try {
-      await disconnectFromAttendanceNodeWifi();
-      setNodeConnected(false);
-      setMessage('Disconnected from the ESP32 Wi-Fi network.');
-    } catch (wifiError) {
-      setError(extractErrorMessage(wifiError, 'Could not disconnect from the ESP32 Wi-Fi network.'));
-    }
-  };
-  const cacheOfflineRoster = async () => {
-    if (!groupForOffline) {
-      setError('Choose a class division before caching its roster.');
-      return;
-    }
-    setOfflineBusy(true);
-    setError('');
-    try {
-      const query = new URLSearchParams({
-        scope: 'CLASS',
-        department: groupForOffline.department,
-        year: groupForOffline.year,
-        division: groupForOffline.division
-      });
-      const result = await requestJson(apiUrl, `/offline/roster?${query}`);
-      if (!result.roster?.length || result.roster.length > 150) {
-        throw new Error('The offline ESP32 flow requires a roster of 1 to 150 students.');
-      }
-      if (result.roster.some((student) => !/^\d+$/.test(String(student.roll_no)) || Number(student.roll_no) > 0xffffffff)) {
-        throw new Error('Offline BLE requires every student roll number to be a numeric 32-bit value.');
-      }
-      localStorage.setItem(rosterCacheKey, JSON.stringify(result));
-      setOfflineRosterCount(result.roster.length);
-      setMessage(`Cached ${result.roster.length} authorized students for this division.`);
-    } catch (rosterError) {
-      setError(extractErrorMessage(rosterError, 'Could not cache the offline roster.'));
-    } finally {
-      setOfflineBusy(false);
-    }
-  };
-  const startOfflineSession = async () => {
-    setOfflineBusy(true);
-    setError('');
-    setMessage('');
-    try {
-      if (Capacitor.getPlatform() !== 'android') {
-        throw new Error('Offline session signing is currently available on the Android app only.');
-      }
-      if (!offlineKeyId) throw new Error('Register this faculty device for offline signing while online first.');
-      if (!cachedRoster?.roster?.length) throw new Error('Cache the selected class roster while online before starting offline.');
-      if (!selectedBeaconIds.length) throw new Error('Choose an active room beacon.');
-      const selectedGroup = classGroups.find((group) => classGroupKey(group) === activeGroup);
-      if (!selectedGroup) throw new Error('Choose the class division to start.');
-      const beacon = activeBeacons.find((item) => item.id === selectedBeaconIds[0]);
-      if (!beacon) throw new Error('The selected beacon is not active and provisioned in the offline cache.');
-      const durationSeconds = duration === 'manual' ? 3600 : Number(duration) * 60;
-      const started = new Date();
-      const expires = new Date(started.getTime() + durationSeconds * 1000);
-      const nonceBytes = crypto.getRandomValues(new Uint8Array(4));
-      const sessionNonce = Array.from(nonceBytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-      const passkeyChallenge = crypto.getRandomValues(new Uint8Array(32));
-      const payload = {
-        version: 1,
-        session_id: `OFF-${crypto.randomUUID()}`,
-        actor_id: user.user_id,
-        scope: 'CLASS',
-        created_at: started.toISOString(),
-        expires_at: expires.toISOString(),
-        expires_at_epoch: Math.floor(expires.getTime() / 1000),
-        duration_seconds: durationSeconds,
-        session_nonce: sessionNonce,
-        offline_passkey_challenge: base64UrlFromBuffer(passkeyChallenge.buffer),
-        location_id: Number(beacon.minor),
-        beacon_id: beacon.id,
-        beacon_ids: selectedBeaconIds,
-        course_id: activeCourse || null,
-        department: selectedGroup.department,
-        year: selectedGroup.year,
-        division: selectedGroup.division,
-        hostel_block: '',
-        wing_name: '',
-        roster: cachedRoster.roster
-      };
-      const offlineSessionJson = canonicalJson(payload);
-      const facultySignature = await signOfflineSessionPayload(offlineSessionJson);
-      const startPayload = {
-        session_id: payload.session_id,
-        session_nonce: payload.session_nonce,
-        expires_at: payload.expires_at_epoch,
-        location_id: payload.location_id,
-        duration_seconds: payload.duration_seconds,
-        offline_session_json: offlineSessionJson,
-        faculty_key_id: offlineKeyId,
-        faculty_signature: facultySignature
-      };
-      localStorage.setItem(`vidyut-pending-offline-session:${user.user_id}`, JSON.stringify(startPayload));
-      const response = await requestAttendanceNode(nodeUrl, '/offline/start-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: startPayload
-      });
-      setQrPayload(createOfflineSessionQr({
-        session_id: payload.session_id,
-        session_nonce: payload.session_nonce,
-        expires_at: payload.expires_at_epoch,
-        location_id: payload.location_id,
-        passkey_challenge: payload.offline_passkey_challenge
-      }));
-      setNodeConnected(true);
-      localStorage.setItem('vidyut-attendance-node-url', nodeUrl);
-      setMessage(`Offline class session started on the room node (${response.service_uuid || 'BLE nonce active'}). Keep the ESP32 powered until capture ends.`);
-    } catch (startError) {
-      setError(extractErrorMessage(startError, 'Could not start the signed offline session.'));
-    } finally {
-      setOfflineBusy(false);
-    }
-  };
-  const syncNodeBatch = async () => {
-    setOfflineBusy(true);
-    setError('');
-    setMessage('');
-    try {
-      const cachedBatchKey = `vidyut-pending-node-batch:${user?.user_id || ''}`;
-      const cachedBatch = localStorage.getItem(cachedBatchKey);
-      const batch = nodeConnected
-        ? await requestAttendanceNode(nodeUrl, '/offline/export-batch')
-        : cachedBatch ? JSON.parse(cachedBatch) : null;
-      if (!batch) throw new Error('Connect to the ESP32 first, or there is no batch saved on this device.');
-      if (!batch?.session_id || !batch?.batch_id || !batch?.raw_records_json) {
-        throw new Error('The ESP32 returned an incomplete attendance batch.');
-      }
-      const records = JSON.parse(batch.raw_records_json);
-      if (!Array.isArray(records) || !records.length) throw new Error('The ESP32 batch has no captured attendance records.');
-      localStorage.setItem(cachedBatchKey, JSON.stringify(batch));
-      const result = await requestAttendanceApi(apiUrl, '/faculty-offline-sync', {
-        method: 'POST',
-        body: JSON.stringify(batch)
-      });
-      if (nodeConnected) {
-        await requestAttendanceNode(nodeUrl, '/offline/ack-batch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: { batch_id: batch.batch_id }
-        });
-      }
-      localStorage.removeItem(cachedBatchKey);
-      setMessage(`ESP32 batch synced: ${result.accepted} accepted, ${result.rejected?.length || 0} rejected.`);
-      await reload();
-    } catch (syncError) {
-      setError(extractErrorMessage(syncError, 'Could not export and sync the ESP32 batch.'));
-    } finally {
-      setOfflineBusy(false);
-    }
-  };
-  const showSessionQr = async (session) => {
-    setError('');
-    try {
-      const packageData = await requestAttendanceApi(
-        apiUrl,
-        `/sessions/${encodeURIComponent(session.id)}/ble`
-      );
-      setQrPayload(createOfflineSessionQr({
-        session_id: packageData.session_id,
-        session_nonce: packageData.session_nonce,
-        expires_at: packageData.expires_at,
-        location_id: packageData.location_id
-      }));
-    } catch (qrError) {
-      setError(extractErrorMessage(qrError, 'Could not prepare the offline session QR.'));
-    }
-  };
-  const pushSessionToNode = async (session) => {
-    setOfflineBusy(true);
-    setError('');
-    try {
-      if (!nodeConnected) throw new Error('Connect to the ESP32 SoftAP before pushing the signed session.');
-      const sessionPackage = await requestAttendanceApi(
-        apiUrl,
-        `/sessions/${encodeURIComponent(session.id)}/ble`
-      );
-      const result = await requestAttendanceNode(nodeUrl, '/offline/start-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: sessionPackage
-      });
-      setQrPayload(createOfflineSessionQr({
-        session_id: sessionPackage.session_id,
-        session_nonce: sessionPackage.session_nonce,
-        expires_at: sessionPackage.expires_at,
-        location_id: sessionPackage.location_id
-      }));
-      setMessage(`Signed session delivered to the room node (${result.service_uuid}).`);
-    } catch (pushError) {
-      setError(extractErrorMessage(pushError, 'Could not start the signed session on the ESP32.'));
-    } finally {
-      setOfflineBusy(false);
-    }
   };
   const close = async (session) => {
     setError('');
@@ -1403,30 +770,6 @@ function FacultyAttendance({ apiUrl, user }) {
       { id: 'courses', label: 'Subject Labels' },
       { id: 'reports', label: 'Reports' }
     ]} tab={tab} setTab={setTab} error={error} message={message} setMessage={setMessage}>
-      {tab === 'session' && <section className="av-panel av-offline-tools">
-        <div className="av-row-between">
-          <div><h2>Offline room-node tools</h2><p className="av-subtitle">Register this phone while online, cache the class roster, then pair with the ESP32 SoftAP when campus internet is unavailable.</p></div>
-          <StatusPill tone={offlineKeyId ? 'success' : 'warning'}>{offlineKeyId ? 'SIGNING KEY READY' : 'KEY NOT REGISTERED'}</StatusPill>
-        </div>
-        <div className="av-form-grid">
-          <label>ESP32 Wi-Fi name<input value={nodeSsid} onChange={(event) => setNodeSsid(event.target.value)} autoComplete="off" /></label>
-          <label>ESP32 Wi-Fi password<input type="password" value={nodePassword} onChange={(event) => setNodePassword(event.target.value)} autoComplete="new-password" /></label>
-          <label>Node address<input value={nodeUrl} onChange={(event) => setNodeUrl(event.target.value)} inputMode="url" /></label>
-          <div className="av-offline-actions">
-            <button type="button" className="av-secondary" disabled={offlineBusy} onClick={() => void registerOfflineKey()}>
-              {offlineKeyId ? 'Refresh device registration' : 'Register offline signing key'}
-            </button>
-            <button type="button" className="av-secondary" disabled={offlineBusy || !nodeSsid || !nodePassword} onClick={() => void connectNode()}>
-              {nodeConnected ? 'Reconnect to room node' : 'Connect to room node'}
-            </button>
-            {nodeConnected && <button type="button" className="av-secondary" onClick={() => void disconnectNode()}>Disconnect</button>}
-            <button type="button" className="av-primary" disabled={offlineBusy} onClick={() => void syncNodeBatch()}>
-              {offlineBusy ? 'Syncing…' : 'Export and sync ESP32 batch'}
-            </button>
-          </div>
-        </div>
-        <p className="av-footnote">The Android system asks you to approve the Wi-Fi connection. Keep the node password private; it is not saved by this screen.</p>
-      </section>}
       {tab === 'courses' && <section className="av-panel">
         <h2>Subject labels</h2>
         <p className="av-subtitle">Optional labels are shared within your college. Class rosters come from student profile divisions.</p>
@@ -1444,20 +787,11 @@ function FacultyAttendance({ apiUrl, user }) {
               <div><h2>Attendance is live</h2><p className="av-subtitle">Monitor check-ins and record attendance manually when needed.</p></div>
               <StatusPill tone="live"><span className="av-live-dot" /> LIVE</StatusPill>
             </div>
-            <SessionCards apiUrl={apiUrl} sessions={sessions} onClose={close} onOverride={override} onShowQr={showSessionQr} onPushToNode={pushSessionToNode} />
+            <SessionCards apiUrl={apiUrl} sessions={sessions} onClose={close} onOverride={override} />
           </div>
         ) : (
           <>
         <h2>Start classroom attendance</h2>
-        <div className="av-offline-cache-row">
-          <div>
-            <strong>Offline roster</strong>
-            <small>{cachedRoster?.roster?.length || offlineRosterCount || 0} students cached for the selected division</small>
-          </div>
-          <button type="button" className="av-secondary" disabled={!activeGroup || offlineBusy} onClick={() => void cacheOfflineRoster()}>
-            {offlineBusy ? 'Preparing…' : 'Cache roster'}
-          </button>
-        </div>
         <form className="av-form-grid" onSubmit={start}>
           <fieldset className="av-choice-field av-class-choice">
             <legend>Choose a class or division</legend>
@@ -1520,9 +854,6 @@ function FacultyAttendance({ apiUrl, user }) {
           <Button className="av-start-button" type="submit" disabled={!activeGroup || !selectedBeaconIds.length}>
             <Icon name="attendance" /> Start attendance
           </Button>
-          <button className="av-secondary av-offline-start" type="button" disabled={!activeGroup || !selectedBeaconIds.length || offlineBusy} onClick={() => void startOfflineSession()}>
-            {offlineBusy ? 'Starting…' : 'Start signed offline session'}
-          </button>
         </form>
         {!classGroups.length && <p className="av-empty">Assign department, academic year, and division to student profiles in Student Onboarding before starting attendance.</p>}
         {!activeBeacons.length && <p className="av-empty">Register, provision, and activate a classroom beacon before starting attendance.</p>}
@@ -1530,12 +861,11 @@ function FacultyAttendance({ apiUrl, user }) {
         )}
       </section>}
       {tab === 'reports' && <DailyReportsPanel apiUrl={apiUrl} scope="CLASS" />}
-      {qrPayload && <OfflineSessionQrSheet value={qrPayload} onClose={() => setQrPayload(null)} />}
     </AttendanceShell>
   );
 }
 
-function SessionCards({ apiUrl, sessions, onClose, onOverride, onShowQr, onPushToNode }) {
+function SessionCards({ apiUrl, sessions, onClose, onOverride }) {
   const [auditRows, setAuditRows] = useState({});
   const [auditOpen, setAuditOpen] = useState({});
   const [auditLoading, setAuditLoading] = useState({});
@@ -1610,12 +940,6 @@ function SessionCards({ apiUrl, sessions, onClose, onOverride, onShowQr, onPushT
           )}
         </div>
         <div className="av-live-session-actions">
-          {onShowQr && <Button variant="outline" type="button" onClick={() => void onShowQr(session)}>
-            <Icon name="file" /> Show offline session QR
-          </Button>}
-          {onPushToNode && <Button variant="outline" type="button" onClick={() => void onPushToNode(session)}>
-            <Icon name="attendance" /> Start on room node
-          </Button>}
           <Button variant="outline" type="button" onClick={() => onClose(session)}>
             <Icon name="file" /> End session & download PDF
           </Button>
@@ -1623,25 +947,6 @@ function SessionCards({ apiUrl, sessions, onClose, onOverride, onShowQr, onPushT
       </article>
     );
   })}{!sessions.length && <p className="av-empty">No active session.</p>}</div>;
-}
-
-function OfflineSessionQrSheet({ value, onClose }) {
-  const dismissProps = useDismissSheet(onClose);
-  let session = null;
-  try { session = JSON.parse(value); } catch { session = null; }
-  return (
-    <div className="av-overlay" onClick={onClose}>
-      <section className="av-sheet av-qr-sheet" role="dialog" aria-modal="true" aria-labelledby="av-qr-title" onClick={(event) => event.stopPropagation()} {...dismissProps}>
-        <button type="button" className="av-close" onClick={onClose} aria-label="Close session QR">×</button>
-        <p className="av-kicker">SESSION BACKUP</p>
-        <h2 id="av-qr-title">Scan for offline attendance</h2>
-        <p className="av-subtitle">Students can scan this on-device session nonce if their phone cannot read the ESP32 broadcast.</p>
-        <div className="av-qr-code"><QRCodeSVG value={value} size={232} level="M" includeMargin /></div>
-        {session && <p className="av-qr-caption">{session.session_id}<br />Expires {new Date(session.expires_at * 1000).toLocaleString()}</p>}
-        <button type="button" className="av-secondary" onClick={() => navigator.clipboard?.writeText(value).catch((copyError) => console.error('Could not copy session QR payload:', copyError))}>Copy QR data</button>
-      </section>
-    </div>
-  );
 }
 
 function ReportEmailSettings({ apiUrl }) {
@@ -1980,7 +1285,7 @@ function DeanAttendance({ apiUrl, user }) {
 
 export default function AttendanceOnlyPortals({ apiUrl, user, modules = {} }) {
   if (user?.role === 'Student') return <StudentAttendance apiUrl={apiUrl} modules={modules} />;
-  if (user?.role === 'Faculty') return <FacultyAttendance apiUrl={apiUrl} user={user} />;
+  if (user?.role === 'Faculty') return <FacultyAttendance apiUrl={apiUrl} />;
   if (user?.role === 'Warden') return <WardenAttendance apiUrl={apiUrl} modules={modules} user={user} />;
   if (user?.role === 'Dean') return <DeanAttendance apiUrl={apiUrl} user={user} />;
   if (user?.role === 'BeaconManager') return <BeaconManagerPortal apiUrl={apiUrl} modules={modules} />;

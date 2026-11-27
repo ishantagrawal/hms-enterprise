@@ -2042,6 +2042,7 @@ async def require_authentication(request: Request, call_next):
         "/api/hostels/config",
         "/api/tenant",
         "/api/attendance/esp32-batch",
+        "/api/attendance/esp32-active-session",
     }
     if not request.url.path.startswith("/api/") or request.method == "OPTIONS":
         return await call_next(request)

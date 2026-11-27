@@ -107,6 +107,14 @@ function AuthenticatedApp() {
   const [showInstallHelp, setShowInstallHelp] = useState(false);
 
   useEffect(() => {
+    if (!staffLoginLoading || loginProgress >= 90) return undefined;
+    const timer = window.setTimeout(() => {
+      setLoginProgress((current) => Math.min(current + 10, 90));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [staffLoginLoading, loginProgress]);
+
+  useEffect(() => {
     if (!window.Capacitor?.isNativePlatform?.()) return undefined;
     CapacitorUpdater.notifyAppReady().catch((error) => {
       console.error('Capgo could not confirm the native app boot:', error);
@@ -166,7 +174,7 @@ function AuthenticatedApp() {
     event.preventDefault();
     if (staffLoginLoading) return;
     setStaffLoginLoading(true);
-    setLoginProgress(12);
+    setLoginProgress(10);
     setLoginStage('Verifying your credentials');
     setLoginError(null);
     setLoginDisplayName('');
@@ -184,7 +192,6 @@ function AuthenticatedApp() {
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(extractErrorMessage(data, 'Sign-in failed.'));
 
-      setLoginProgress(24);
       setLoginStage('Loading your account');
       const selectedDomain = localStorage.getItem('vidyut_tenant_domain');
       const sessionHeaders = new Headers({ Authorization: `Bearer ${data.token}` });
@@ -203,7 +210,6 @@ function AuthenticatedApp() {
       setLoginNeedsDeviceCheck(Boolean(needsDeviceCheck));
 
       if (needsDeviceCheck) {
-        setLoginProgress(38);
         setLoginStage('Checking this device');
         try {
           const deviceResponse = await fetch(`${API_URL}/api/attendance-v2/device/status`, { headers: sessionHeaders });
@@ -214,14 +220,11 @@ function AuthenticatedApp() {
         } catch (deviceError) {
           console.warn('Student device status will be checked again in the attendance portal:', deviceError);
         }
-        setLoginProgress(78);
         setLoginStage('Loading your dashboard');
       } else {
-        setLoginProgress(62);
         setLoginStage('Loading your dashboard');
       }
 
-      setLoginProgress(92);
       setLoginStage('Opening your dashboard');
       localStorage.removeItem('vidyut_session_token');
       localStorage.removeItem('vidyut_user');

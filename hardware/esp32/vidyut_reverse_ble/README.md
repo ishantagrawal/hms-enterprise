@@ -1,25 +1,21 @@
-# Reverse BLE attendance node
+# Online Reverse BLE attendance node
 
-This PlatformIO target is an ESP32-S3 Arduino firmware for the reverse-BLE attendance flow. It broadcasts the signed 16-byte session value as a 128-bit service UUID, passively scans for student UUIDs, retains the peak RSSI for up to 150 numeric roll IDs, and appends every capture to LittleFS before upload/export.
+This PlatformIO target runs on an ESP32-S3 with campus Wi-Fi and NimBLE-Arduino. Faculty or Wardens create sessions online. The node polls the backend for the active session assigned to its beacon, passively scans student `0x564F` service UUIDs, and submits signed attendance batches over HTTPS.
 
 ## Provisioning and build
 
-1. Copy `include/secrets.h.example` to `include/secrets.h` and set the node ID, attendance beacon ID, tenant domain, campus Wi-Fi credentials, SoftAP password, and the beacon signing secret provisioned for this node. Keep `secrets.h` out of source control.
-2. Set `VIDYUT_API_ROOT_CA` to the campus API trust root. Cloud uploads fail closed if this is empty; do not replace certificate validation with `setInsecure()`.
-3. Build and flash with PlatformIO from this directory. NimBLE-Arduino 2.3.x and ArduinoJson 7 are declared in `platformio.ini`.
-4. While online, Faculty registers its hardware-backed offline signing key and caches the authorized roster. For an existing online session, the app fetches `GET /api/attendance/sessions/{id}/ble`; for a new offline session, it signs the session and roster package with the registered key. The app POSTs the appropriate start payload to `http://192.168.4.1/offline/start-session` while connected to `Vidyut-Node-<ID>`.
-5. Session capture stops at the supplied duration. `GET /offline/export-batch` returns `raw_records_json`, `batch_id`, and the ESP32 HMAC signature for delayed `POST /api/attendance/faculty-offline-sync`. The backend verifies the Faculty signature and reconciles the offline session and captured records.
+1. Copy `include/secrets.h.example` to `include/secrets.h`. Set a unique node ID, the attendance beacon ID from Beacon Manager, tenant domain, campus Wi-Fi credentials, API base URL, the beacon signing secret, and the trusted API root CA.
+2. Keep `secrets.h` out of source control. The signing secret must match the one-time secret provisioned for that beacon. Store it securely and enable ESP32 secure boot and flash encryption in production.
+3. Configure the API root CA as a PEM string. The firmware fails closed if TLS trust or required online configuration is missing; do not use `setInsecure()`.
+4. Build and flash with PlatformIO from this directory. NimBLE-Arduino 2.3.x and ArduinoJson 7 are declared in `platformio.ini`.
 
-The node retries campus Wi-Fi and uses a password-protected SoftAP for Faculty setup/export. During a capture session the SoftAP is disabled; when the node has no STA connection it disables Wi-Fi and uses the radio for BLE. Fully offline session creation requires the Faculty signing key and roster to have been cached before the outage. The backend checks that the signing key remains authorized and that roster members are still eligible when the batch is synced. On reboot, persisted records and session metadata are recovered for export or upload, but an interrupted capture is not resumed.
+## Online operation
 
-## Security and operational limits
+- The node uses STA Wi-Fi only. It synchronizes its clock with NTP, then requests `GET /api/attendance/esp32-active-session?beacon_id=<id>` over HTTPS every five seconds.
+- Poll requests include `X-Campus-Domain`, a Unix timestamp, and an HMAC-SHA256 signature of `beacon_id|timestamp` using the provisioned beacon secret. The backend accepts only timestamps within 60 seconds and returns only a session assigned to this beacon. Multiple matching sessions are reported as a conflict; the firmware stops capture rather than choosing one.
+- While a session is active, the node passively scans with a 50 ms window and 100 ms interval. It accepts student `0x564F` packets with the active nonce prefix and server-configured RSSI threshold, retaining each student's strongest RSSI in RAM (up to 150 students).
+- The node signs and uploads captured records to `POST /api/attendance/esp32-batch` every three seconds. Successful uploads remove those records from RAM. A Wi-Fi or API outage stops scanning and clears unsubmitted records; no queue, SoftAP, local HTTP server, or flash persistence is provided.
 
-The Student app can read the active nonce from BLE or the Faculty QR. Android performs local face liveness and advertises a five-second HMAC proof using the key wrapped to Android Keystore during passkey/face enrollment; the raw HMAC key is not returned to JavaScript. Online, iOS verifies the passkey and face with the backend, receives a one-time eight-byte token, and advertises the 128-bit service UUID through CoreBluetooth while the app remains in the foreground. Offline, iOS saves the Faculty QR and queues a session-bound passkey assertion; after reconnecting it repeats face liveness and submits the assertion and fresh embedding to `POST /api/attendance/student-offline-sync`. The face embedding is not persisted on the phone. The firmware does not know individual student secrets; the backend validates each proof before recording attendance.
+## Limitations
 
-The online iOS token is issued by `POST /api/attendance/sessions/{session_id}/ios-ble-token` only after the backend validates the student passkey and face. It is valid for at most 90 seconds (or the remaining session lifetime) and is consumed by the first accepted ESP32 batch record.
-
-The 4-byte session signature and 8-byte student MAC are compact protocol fields, not strong anti-relay proofs. The iOS token is a short-lived, single-use proximity credential, not an anti-relay proof. RSSI is a proximity heuristic, and a live BLE relay can forward the packets. Protect the node signing secret with ESP32 secure boot and flash encryption in production, provision each node uniquely, and rotate a key after device loss. iOS advertising stops when the app leaves the foreground; its QR/passkey fallback is used when offline.
-
-Offline sessions are reconciled on the server when Faculty uploads the signed ESP32 batch. Students can complete the iOS passkey/face fallback for up to seven days after the session expires, once that reconciliation has completed.
-
-The Faculty key enrollment and ESP32 SoftAP transport use the Android native bridge in this build. iOS supports the Student QR/passkey fallback, but does not yet act as the Faculty gateway for starting or exporting ESP32 sessions.
+The backend verifies each student's hardware-backed BLE HMAC against their enrolled device secret, checks the session nonce and configured RSSI threshold, preserves manual overrides, and deduplicates records across beacons. RSSI is a proximity heuristic, not relay protection. Keep beacon signing keys unique, restrict physical access to devices, and rotate credentials if a node is lost or compromised.

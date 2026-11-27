@@ -1,27 +1,24 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
-#include <LittleFS.h>
 #include <NimBLEDevice.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
-#include <WebServer.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <mbedtls/md.h>
 #include <map>
-#include <string>
+#include <time.h>
 
 #include "../include/secrets.h"
 
 namespace {
-constexpr char kBatchPath[] = "/active_batch.jsonl";
-constexpr char kSessionPath[] = "/active_session.json";
 constexpr uint32_t kScanInterval = 160;
 constexpr uint32_t kScanWindow = 80;
-constexpr uint32_t kAdvertiseInterval = 320;
+constexpr uint32_t kSessionPollIntervalMs = 5000;
 constexpr uint32_t kUploadIntervalMs = 3000;
-constexpr uint8_t kMaxStudents = 150;
+constexpr uint32_t kReconnectIntervalMs = 15000;
+constexpr size_t kMaxStudents = 150;
 constexpr int8_t kDefaultRssiThreshold = -78;
 
 struct AttendanceRecord {
@@ -34,41 +31,31 @@ struct AttendanceRecord {
 struct ActiveSession {
   String id;
   String nonce;
-  String serviceUuid;
-  String batchId;
-  String offlineSessionJson;
-  String facultyKeyId;
-  String facultySignature;
-  uint32_t expiresAt = 0;
-  uint32_t durationSeconds = 0;
-  uint16_t locationId = 0;
   uint8_t nonceBytes[4] = {0, 0, 0, 0};
+  int8_t minRssi = kDefaultRssiThreshold;
   bool active = false;
 };
 
 ActiveSession session;
 std::map<uint32_t, AttendanceRecord> records;
-NimBLEAdvertising *advertising = nullptr;
 NimBLEScan *scanner = nullptr;
-WebServer localServer(80);
-unsigned long sessionStartedAt = 0;
+unsigned long lastPollAt = 0;
 unsigned long lastUploadAt = 0;
 unsigned long lastReconnectAt = 0;
-uint8_t wifiFailures = 0;
-bool apEnabled = false;
+unsigned long lastTimeSyncAt = 0;
+bool scanning = false;
 bool initialized = false;
-bool persistenceHealthy = true;
 SemaphoreHandle_t recordsMutex = nullptr;
 
 bool decodeHex(const String &value, uint8_t *output, size_t outputLength) {
   if (value.length() != outputLength * 2) return false;
   for (size_t i = 0; i < outputLength; ++i) {
-    char highChar = value[i * 2];
-    char lowChar = value[i * 2 + 1];
-    int high = highChar >= '0' && highChar <= '9' ? highChar - '0'
+    const char highChar = value[i * 2];
+    const char lowChar = value[i * 2 + 1];
+    const int high = highChar >= '0' && highChar <= '9' ? highChar - '0'
         : highChar >= 'a' && highChar <= 'f' ? highChar - 'a' + 10
         : highChar >= 'A' && highChar <= 'F' ? highChar - 'A' + 10 : -1;
-    int low = lowChar >= '0' && lowChar <= '9' ? lowChar - '0'
+    const int low = lowChar >= '0' && lowChar <= '9' ? lowChar - '0'
         : lowChar >= 'a' && lowChar <= 'f' ? lowChar - 'a' + 10
         : lowChar >= 'A' && lowChar <= 'F' ? lowChar - 'A' + 10 : -1;
     if (high < 0 || low < 0) return false;
@@ -88,17 +75,11 @@ String toHex(const uint8_t *value, size_t length) {
   return output;
 }
 
-String formatUuid(const uint8_t value[16]) {
-  const String compact = toHex(value, 16);
-  return compact.substring(0, 8) + "-" + compact.substring(8, 12) + "-"
-      + compact.substring(12, 16) + "-" + compact.substring(16, 20) + "-"
-      + compact.substring(20, 32);
-}
-
-bool constantTimeEqual(const uint8_t *left, const uint8_t *right, size_t length) {
-  uint8_t difference = 0;
-  for (size_t i = 0; i < length; ++i) difference |= left[i] ^ right[i];
-  return difference == 0;
+String compactUuid(const String &uuid) {
+  String compact = uuid;
+  compact.replace("-", "");
+  compact.toLowerCase();
+  return compact;
 }
 
 bool hmacSha256(const uint8_t *key, size_t keyLength, const uint8_t *message,
@@ -112,12 +93,17 @@ bool signingKey(uint8_t key[32]) {
 }
 
 bool safeConfig() {
-  if (String(VIDYUT_NODE_ID).isEmpty() || String(VIDYUT_BEACON_ID).isEmpty()
-      || String(VIDYUT_AP_PASSWORD).length() < 12
-      || String(VIDYUT_AP_PASSWORD).startsWith("replace-")
+  if (String(VIDYUT_NODE_ID).isEmpty()
+      || String(VIDYUT_BEACON_ID).length() < 4
       || String(VIDYUT_BEACON_ID).startsWith("replace-")
+      || String(VIDYUT_TENANT_DOMAIN).isEmpty()
+      || String(VIDYUT_WIFI_SSID).isEmpty()
+      || String(VIDYUT_WIFI_SSID).startsWith("replace-")
+      || String(VIDYUT_WIFI_PASSWORD).startsWith("replace-")
+      || String(VIDYUT_API_BASE_URL).indexOf("https://") != 0
+      || String(VIDYUT_API_ROOT_CA).isEmpty()
       || String(VIDYUT_SIGNING_SECRET_HEX).length() != 64) {
-    Serial.println("Required device configuration is missing; BLE attendance is disabled.");
+    Serial.println("Required online device configuration is missing; attendance is disabled.");
     return false;
   }
   uint8_t key[32];
@@ -129,11 +115,18 @@ bool safeConfig() {
   return true;
 }
 
-String serializeRecords() {
+std::map<uint32_t, AttendanceRecord> recordSnapshot() {
+  std::map<uint32_t, AttendanceRecord> snapshot;
   if (recordsMutex) xSemaphoreTake(recordsMutex, portMAX_DELAY);
+  snapshot = records;
+  if (recordsMutex) xSemaphoreGive(recordsMutex);
+  return snapshot;
+}
+
+String serializeRecords(const std::map<uint32_t, AttendanceRecord> &snapshot) {
   JsonDocument document;
   JsonArray array = document.to<JsonArray>();
-  for (const auto &entry : records) {
+  for (const auto &entry : snapshot) {
     JsonObject item = array.add<JsonObject>();
     item["student_roll_id"] = entry.second.rollId;
     item["rssi"] = entry.second.rssi;
@@ -142,497 +135,307 @@ String serializeRecords() {
   }
   String output;
   serializeJson(document, output);
-  if (recordsMutex) xSemaphoreGive(recordsMutex);
   return output;
 }
 
-bool persistRecord(const AttendanceRecord &record) {
-  File file = LittleFS.open(kBatchPath, FILE_APPEND);
-  if (!file) {
-    Serial.println("Could not open LittleFS attendance batch for append.");
+void clearRecords() {
+  if (recordsMutex) xSemaphoreTake(recordsMutex, portMAX_DELAY);
+  records.clear();
+  if (recordsMutex) xSemaphoreGive(recordsMutex);
+}
+
+void clearUploadedRecords(const std::map<uint32_t, AttendanceRecord> &uploaded) {
+  if (recordsMutex) xSemaphoreTake(recordsMutex, portMAX_DELAY);
+  for (const auto &entry : uploaded) {
+    const auto current = records.find(entry.first);
+    if (current != records.end()
+        && current->second.rssi == entry.second.rssi
+        && current->second.proof == entry.second.proof
+        && current->second.nonce == entry.second.nonce) {
+      records.erase(current);
+    }
+  }
+  if (recordsMutex) xSemaphoreGive(recordsMutex);
+}
+
+void stopScanner() {
+  if (scanner && scanning) scanner->stop();
+  scanning = false;
+}
+
+void resetSession() {
+  stopScanner();
+  session = ActiveSession();
+  clearRecords();
+}
+
+String apiUrl(const char *path) {
+  String base = VIDYUT_API_BASE_URL;
+  while (base.endsWith("/")) base.remove(base.length() - 1);
+  return base + path;
+}
+
+String encodeQueryValue(const String &value) {
+  static const char hex[] = "0123456789ABCDEF";
+  String result;
+  for (size_t i = 0; i < value.length(); ++i) {
+    const unsigned char ch = static_cast<unsigned char>(value[i]);
+    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+        || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.') {
+      result += static_cast<char>(ch);
+    } else {
+      result += '%';
+      result += hex[ch >> 4];
+      result += hex[ch & 0x0f];
+    }
+  }
+  return result;
+}
+
+bool syncClock() {
+  lastTimeSyncAt = millis();
+  configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
+  const unsigned long deadline = millis() + 15000;
+  while (time(nullptr) < 1700000000 && millis() < deadline) delay(250);
+  if (time(nullptr) < 1700000000) {
+    Serial.println("NTP time sync is unavailable; authenticated session polling is paused.");
     return false;
   }
-  JsonDocument document;
-  document["student_roll_id"] = record.rollId;
-  document["rssi"] = record.rssi;
-  document["proof"] = record.proof;
-  document["session_nonce"] = record.nonce;
-  document["session_id"] = session.id;
-  const size_t written = serializeJson(document, file);
-  const size_t newlineWritten = file.print('\n');
-  file.flush();
-  const bool persisted = written > 0 && newlineWritten == 1 && !file.getWriteError();
-  file.close();
-  if (!persisted) Serial.println("LittleFS attendance record write failed.");
-  return persisted;
+  lastTimeSyncAt = millis();
+  return true;
 }
 
-void loadPendingRecords() {
-  if (!LittleFS.exists(kBatchPath)) return;
-  File file = LittleFS.open(kBatchPath, FILE_READ);
-  if (!file) {
-    Serial.println("Could not open persisted attendance batch.");
-    return;
+void startScanner() {
+  if (!session.active || !scanner || scanning) return;
+  scanner->setActiveScan(false);
+  scanner->setInterval(kScanInterval);
+  scanner->setWindow(kScanWindow);
+  scanner->setDuplicateFilter(false);
+  if (scanner->start(0, false, false)) {
+    scanning = true;
+    Serial.printf("Scanning for session %s.\n", session.id.c_str());
+  } else {
+    Serial.println("Could not start passive BLE scanning.");
   }
-  while (file.available()) {
-    String line = file.readStringUntil('\n');
-    JsonDocument document;
-    if (deserializeJson(document, line)) {
-      Serial.println("Skipping a malformed persisted attendance record.");
-      continue;
-    }
-    AttendanceRecord record;
-    record.rollId = document["student_roll_id"] | 0U;
-    record.rssi = document["rssi"] | -127;
-    record.proof = String(document["proof"] | "");
-    record.nonce = String(document["session_nonce"] | "");
-    if (record.rollId && record.rssi >= kDefaultRssiThreshold) {
-      auto current = records.find(record.rollId);
-      if (current == records.end() || record.rssi > current->second.rssi) {
-        records[record.rollId] = record;
-      }
-    }
-  }
-  file.close();
-}
-
-bool hasPendingRecords() {
-  xSemaphoreTake(recordsMutex, portMAX_DELAY);
-  const bool pending = !records.empty();
-  xSemaphoreGive(recordsMutex);
-  return pending;
-}
-
-void loadPendingSession() {
-  if (!LittleFS.exists(kSessionPath)) return;
-  File file = LittleFS.open(kSessionPath, FILE_READ);
-  if (!file) {
-    Serial.println("Could not read the persisted session metadata.");
-    return;
-  }
-  JsonDocument document;
-  if (deserializeJson(document, file)) {
-    file.close();
-    Serial.println("Persisted session metadata is invalid.");
-    return;
-  }
-  session.id = String(document["session_id"] | "");
-  session.nonce = String(document["session_nonce"] | "");
-  session.serviceUuid = String(document["service_uuid"] | "");
-  session.batchId = String(document["batch_id"] | "");
-  session.offlineSessionJson = String(document["offline_session_json"] | "");
-  session.facultyKeyId = String(document["faculty_key_id"] | "");
-  session.facultySignature = String(document["faculty_signature"] | "");
-  session.expiresAt = document["expires_at"] | 0U;
-  session.locationId = document["location_id"] | 0U;
-  session.durationSeconds = document["duration_seconds"] | 0U;
-  decodeHex(session.nonce, session.nonceBytes, sizeof(session.nonceBytes));
-  file.close();
-}
-
-bool buildSessionAdvertisement() {
-  if (!session.active) return false;
-  uint8_t key[32];
-  if (!signingKey(key)) return false;
-  uint8_t packet[16] = {
-      0x56, 0x4e,
-      static_cast<uint8_t>(session.locationId >> 8),
-      static_cast<uint8_t>(session.locationId),
-      session.nonceBytes[0], session.nonceBytes[1],
-      session.nonceBytes[2], session.nonceBytes[3],
-      static_cast<uint8_t>(session.expiresAt >> 24),
-      static_cast<uint8_t>(session.expiresAt >> 16),
-      static_cast<uint8_t>(session.expiresAt >> 8),
-      static_cast<uint8_t>(session.expiresAt),
-      0, 0, 0, 0};
-  uint8_t digest[32];
-  if (!hmacSha256(key, sizeof(key), packet, 12, digest)) return false;
-  memcpy(packet + 12, digest, 4);
-  const String expectedServiceUuid = formatUuid(packet);
-  NimBLEAdvertisementData data;
-  data.setFlags(0x06);
-  data.addServiceUUID(NimBLEUUID(expectedServiceUuid.c_str()));
-  advertising->stop();
-  advertising->setAdvertisementData(data);
-  advertising->setMinInterval(kAdvertiseInterval);
-  advertising->setMaxInterval(kAdvertiseInterval);
-  const bool started = advertising->start();
-  if (started) session.serviceUuid = expectedServiceUuid;
-  memset(key, 0, sizeof(key));
-  memset(digest, 0, sizeof(digest));
-  return started;
 }
 
 class AttendanceScanCallbacks final : public NimBLEScanCallbacks {
   void onResult(const NimBLEAdvertisedDevice *device) override {
     if (!session.active || device == nullptr || !device->haveServiceUUID()) return;
-    const String uuid = String(device->getServiceUUID().toString().c_str());
-    String compact = uuid;
-    compact.replace("-", "");
-    compact.toLowerCase();
+    const String compact = compactUuid(String(device->getServiceUUID().toString().c_str()));
     if (compact.length() != 32 || compact.substring(0, 4) != "564f") return;
     uint8_t bytes[16];
     if (!decodeHex(compact, bytes, sizeof(bytes))) return;
     if (bytes[2] != session.nonceBytes[0] || bytes[3] != session.nonceBytes[1]) return;
+
     const uint32_t rollId = (static_cast<uint32_t>(bytes[4]) << 24)
         | (static_cast<uint32_t>(bytes[5]) << 16)
         | (static_cast<uint32_t>(bytes[6]) << 8)
         | static_cast<uint32_t>(bytes[7]);
     const int rssi = device->getRSSI();
-    if (rssi < kDefaultRssiThreshold) return;
-    if (!rollId) return;
-    xSemaphoreTake(recordsMutex, portMAX_DELAY);
+    if (!rollId || rssi < session.minRssi) return;
+
+    if (recordsMutex) xSemaphoreTake(recordsMutex, portMAX_DELAY);
     if (records.size() >= kMaxStudents && records.find(rollId) == records.end()) {
-      xSemaphoreGive(recordsMutex);
+      if (recordsMutex) xSemaphoreGive(recordsMutex);
       return;
     }
-    auto found = records.find(rollId);
+    const auto found = records.find(rollId);
     if (found != records.end() && found->second.rssi >= rssi) {
-      xSemaphoreGive(recordsMutex);
+      if (recordsMutex) xSemaphoreGive(recordsMutex);
       return;
     }
+
     AttendanceRecord record;
     record.rollId = rollId;
     record.rssi = rssi;
     record.proof = toHex(bytes + 8, 8);
     record.nonce = session.nonce;
-    if (!persistRecord(record)) {
-      persistenceHealthy = false;
-      xSemaphoreGive(recordsMutex);
-      return;
-    }
     records[rollId] = record;
-    xSemaphoreGive(recordsMutex);
+    if (recordsMutex) xSemaphoreGive(recordsMutex);
   }
 };
 
 AttendanceScanCallbacks scanCallbacks;
 
-void startBleSession() {
-  if (!session.active || !buildSessionAdvertisement()) {
-    Serial.println("Could not start the signed session advertisement.");
-    return;
+bool refreshActiveSession() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  const time_t now = time(nullptr);
+  if (now < 1700000000) return false;
+
+  uint8_t key[32], digest[32];
+  if (!signingKey(key)) {
+    Serial.println("The ESP32 signing secret could not be decoded.");
+    return false;
   }
-  scanner->setScanCallbacks(&scanCallbacks, false);
-  scanner->setActiveScan(false);
-  scanner->setInterval(kScanInterval);
-  scanner->setWindow(kScanWindow);
-  scanner->setDuplicateFilter(false);
-  if (!scanner->start(0, false, false)) {
-    Serial.println("Could not start passive BLE scanning.");
-  }
-}
-
-void stopBleSession() {
-  if (scanner) scanner->stop();
-  if (advertising) advertising->stop();
-  session.active = false;
-  if (!hasPendingRecords()) LittleFS.remove(kSessionPath);
-  Serial.println("Attendance capture stopped.");
-}
-
-void startSoftAp() {
-  if (apEnabled) return;
-  WiFi.mode(WIFI_AP_STA);
-  const String ssid = String("Vidyut-Node-") + VIDYUT_NODE_ID;
-  if (!WiFi.softAP(ssid.c_str(), VIDYUT_AP_PASSWORD)) {
-    Serial.println("Could not start the faculty SoftAP.");
-    return;
-  }
-  apEnabled = true;
-  localServer.begin();
-  Serial.print("Faculty SoftAP available: ");
-  Serial.println(ssid);
-}
-
-void stopSoftAp() {
-  localServer.stop();
-  WiFi.softAPdisconnect(true);
-  apEnabled = false;
-  if (WiFi.status() == WL_CONNECTED) WiFi.mode(WIFI_STA);
-  else WiFi.mode(WIFI_OFF);
-}
-
-bool verifyStartPayload(const JsonDocument &document) {
-  String sessionId = String(document["session_id"] | "");
-  String nonce = String(document["session_nonce"] | "");
-  String uuid = String(document["service_uuid"] | "");
-  uint32_t expiry = document["expires_at"] | 0U;
-  uint16_t locationId = document["location_id"] | 0U;
-  String signature = String(document["start_signature"] | "");
-  uint32_t durationSeconds = document["duration_seconds"] | 0U;
-  if (sessionId.isEmpty() || nonce.length() != 8 || uuid.length() != 36 || !expiry
-      || durationSeconds == 0 || durationSeconds > 86400) return false;
-  String message = sessionId + "|" + nonce + "|" + String(expiry) + "|"
-      + String(locationId) + "|" + String(durationSeconds) + "|" + uuid;
-  uint8_t key[32], digest[32], supplied[32];
-  if (!signingKey(key) || !decodeHex(signature, supplied, sizeof(supplied))) return false;
-  if (!hmacSha256(key, sizeof(key), reinterpret_cast<const uint8_t *>(message.c_str()),
-                  message.length(), digest)) return false;
-  const bool valid = constantTimeEqual(digest, supplied, sizeof(digest));
+  const String timestamp = String(static_cast<uint32_t>(now));
+  const String signedMessage = String(VIDYUT_BEACON_ID) + "|" + timestamp;
+  const bool signedOk = hmacSha256(
+      key, sizeof(key),
+      reinterpret_cast<const uint8_t *>(signedMessage.c_str()),
+      signedMessage.length(), digest);
   memset(key, 0, sizeof(key));
+  if (!signedOk) return false;
+
+  WiFiClientSecure tls;
+  tls.setCACert(VIDYUT_API_ROOT_CA);
+  HTTPClient http;
+  const String url = apiUrl("/api/attendance/esp32-active-session?beacon_id=")
+      + encodeQueryValue(VIDYUT_BEACON_ID);
+  if (!http.begin(tls, url)) {
+    memset(digest, 0, sizeof(digest));
+    Serial.println("Could not initialize the active-session API request.");
+    return false;
+  }
+  http.addHeader("Accept", "application/json");
+  http.addHeader("X-Campus-Domain", VIDYUT_TENANT_DOMAIN);
+  http.addHeader("X-Vidyut-Timestamp", timestamp);
+  http.addHeader("X-Vidyut-Signature", toHex(digest, sizeof(digest)));
   memset(digest, 0, sizeof(digest));
-  memset(supplied, 0, sizeof(supplied));
-  return valid;
-}
 
-void handleStartSession() {
-  if (!localServer.hasArg("plain")) {
-    localServer.send(400, "application/json", "{\"error\":\"missing body\"}");
-    return;
+  const int status = http.GET();
+  if (status != HTTP_CODE_OK) {
+    if (status < 0) Serial.printf("Active-session poll failed: %s\n", http.errorToString(status).c_str());
+    else Serial.printf("Active-session API returned HTTP %d.\n", status);
+    http.end();
+    resetSession();
+    return false;
   }
-  JsonDocument document;
-  if (deserializeJson(document, localServer.arg("plain"))) {
-    localServer.send(400, "application/json", "{\"error\":\"invalid session JSON\"}");
-    return;
+  JsonDocument payload;
+  const DeserializationError parseError = deserializeJson(payload, http.getString());
+  http.end();
+  if (parseError) {
+    Serial.println("The active-session response was not valid JSON.");
+    resetSession();
+    return false;
   }
-  session.offlineSessionJson = String(document["offline_session_json"] | "");
-  session.facultyKeyId = String(document["faculty_key_id"] | "");
-  session.facultySignature = String(document["faculty_signature"] | "");
-  const bool offlineSigned = !session.offlineSessionJson.isEmpty();
-  JsonDocument signedSession;
-  if (offlineSigned) {
-    if (session.facultyKeyId.isEmpty() || session.facultySignature.isEmpty()
-        || deserializeJson(signedSession, session.offlineSessionJson)) {
-      localServer.send(403, "application/json", "{\"error\":\"offline session signature package is incomplete\"}");
-      return;
+  if (!(payload["active"] | false)) {
+    if (session.active) {
+      Serial.println("The attendance session is no longer active.");
+      resetSession();
     }
-    if (String(signedSession["beacon_id"] | "") != VIDYUT_BEACON_ID) {
-      localServer.send(403, "application/json", "{\"error\":\"signed session targets another attendance beacon\"}");
-      return;
-    }
-    session.id = String(signedSession["session_id"] | "");
-    session.nonce = String(signedSession["session_nonce"] | "");
-    session.expiresAt = signedSession["expires_at_epoch"] | 0U;
-    session.locationId = signedSession["location_id"] | 0U;
-    session.durationSeconds = signedSession["duration_seconds"] | 0U;
-    if (String(document["session_id"] | "") != session.id
-        || String(document["session_nonce"] | "") != session.nonce
-        || (document["expires_at"] | 0U) != session.expiresAt
-        || (document["location_id"] | 0U) != session.locationId
-        || (document["duration_seconds"] | 0U) != session.durationSeconds) {
-      localServer.send(403, "application/json", "{\"error\":\"offline session fields do not match the signed package\"}");
-      return;
-    }
-  } else {
-    if (!verifyStartPayload(document)) {
-      localServer.send(403, "application/json", "{\"error\":\"invalid signed session payload\"}");
-      return;
-    }
-    session.id = String(document["session_id"].as<const char *>());
-    session.nonce = String(document["session_nonce"].as<const char *>());
-    session.serviceUuid = String(document["service_uuid"].as<const char *>());
-    session.expiresAt = document["expires_at"] | 0U;
-    session.locationId = document["location_id"] | 0U;
-    session.durationSeconds = document["duration_seconds"] | 0U;
+    return true;
   }
-  if (!decodeHex(session.nonce, session.nonceBytes, sizeof(session.nonceBytes))
-      || session.durationSeconds == 0 || session.durationSeconds > 86400) {
-    localServer.send(422, "application/json", "{\"error\":\"invalid session duration or nonce\"}");
-    return;
+
+  const String sessionId = String(payload["session_id"] | "");
+  const String nonce = String(payload["session_nonce"] | "");
+  const int minRssi = payload["min_rssi"] | static_cast<int>(kDefaultRssiThreshold);
+  const uint32_t expiresAt = payload["expires_at"] | 0U;
+  uint8_t nonceBytes[4];
+  if (sessionId.isEmpty() || !decodeHex(nonce, nonceBytes, sizeof(nonceBytes))
+      || minRssi < -100 || minRssi > 0 || expiresAt <= static_cast<uint32_t>(now)) {
+    Serial.println("The active-session response contains invalid fields.");
+    resetSession();
+    return false;
   }
-  if (hasPendingRecords()) {
-    localServer.send(409, "application/json", "{\"error\":\"export pending attendance before starting another session\"}");
-    return;
+
+  if (session.active && session.id == sessionId && session.nonce == nonce) {
+    session.minRssi = static_cast<int8_t>(minRssi);
+    return true;
   }
+
+  stopScanner();
+  clearRecords();
+  session.id = sessionId;
+  session.nonce = nonce;
+  memcpy(session.nonceBytes, nonceBytes, sizeof(session.nonceBytes));
+  session.minRssi = static_cast<int8_t>(minRssi);
   session.active = true;
-  const String signedUuid = offlineSigned ? String("") : String(document["service_uuid"] | "");
-  if (!buildSessionAdvertisement() || (!offlineSigned && session.serviceUuid != signedUuid)) {
-    session.active = false;
-    advertising->stop();
-    localServer.send(403, "application/json", "{\"error\":\"session advertisement signature mismatch\"}");
-    return;
-  }
-  sessionStartedAt = millis();
-  char randomSuffix[9];
-  snprintf(randomSuffix, sizeof(randomSuffix), "%08lx",
-           static_cast<unsigned long>(esp_random()));
-  session.batchId = String("VNODE-") + VIDYUT_NODE_ID + "-" + randomSuffix;
-  document["batch_id"] = session.batchId;
-  File sessionFile = LittleFS.open(kSessionPath, FILE_WRITE);
-  if (!sessionFile) {
-    session.active = false;
-    advertising->stop();
-    localServer.send(500, "application/json", "{\"error\":\"could not persist session metadata\"}");
-    return;
-  }
-  const size_t written = serializeJson(document, sessionFile);
-  sessionFile.flush();
-  const bool saved = written > 0 && !sessionFile.getWriteError();
-  sessionFile.close();
-  if (!saved) {
-    session.active = false;
-    advertising->stop();
-    LittleFS.remove(kSessionPath);
-    localServer.send(500, "application/json", "{\"error\":\"could not persist session metadata\"}");
-    return;
-  }
-  JsonDocument started;
-  started["success"] = true;
-  started["service_uuid"] = session.serviceUuid;
-  localServer.send(200, "application/json", started.as<String>());
-  stopSoftAp();
-  startBleSession();
+  startScanner();
+  Serial.printf("Online attendance session started: %s.\n", session.id.c_str());
+  return true;
 }
 
-void handleExportBatch() {
-  const String rawRecords = serializeRecords();
+String newBatchId() {
+  uint8_t randomBytes[8];
+  const uint32_t first = esp_random();
+  const uint32_t second = esp_random();
+  memcpy(randomBytes, &first, sizeof(first));
+  memcpy(randomBytes + sizeof(first), &second, sizeof(second));
+  const String suffix = toHex(randomBytes, sizeof(randomBytes));
+  memset(randomBytes, 0, sizeof(randomBytes));
+  return String("VNODE-") + VIDYUT_NODE_ID + "-" + suffix;
+}
+
+bool uploadBatch() {
+  if (WiFi.status() != WL_CONNECTED || !session.active) return false;
+  const auto snapshot = recordSnapshot();
+  if (snapshot.empty()) return false;
+
+  const String rawRecords = serializeRecords(snapshot);
   uint8_t key[32], digest[32];
   if (!signingKey(key) || !hmacSha256(
           key, sizeof(key), reinterpret_cast<const uint8_t *>(rawRecords.c_str()),
           rawRecords.length(), digest)) {
-    localServer.send(500, "application/json", "{\"error\":\"could not sign attendance batch\"}");
-    return;
+    memset(key, 0, sizeof(key));
+    Serial.println("Could not sign the attendance batch.");
+    resetSession();
+    return false;
   }
-  JsonDocument response;
-  response["session_id"] = session.id;
-  response["batch_id"] = session.batchId;
-  response["beacon_id"] = VIDYUT_BEACON_ID;
-  response["offline_session_json"] = session.offlineSessionJson;
-  response["faculty_key_id"] = session.facultyKeyId;
-  response["faculty_signature"] = session.facultySignature;
-  response["raw_records_json"] = rawRecords;
-  response["esp32_batch_signature"] = toHex(digest, sizeof(digest));
-  String output;
-  serializeJson(response, output);
-  localServer.send(200, "application/json", output);
-  memset(key, 0, sizeof(key));
-  memset(digest, 0, sizeof(digest));
-}
-
-void handleAckBatch() {
-  if (session.active) {
-    localServer.send(409, "application/json", "{\"error\":\"stop attendance capture before acknowledging the batch\"}");
-    return;
-  }
-  if (!localServer.hasArg("plain")) {
-    localServer.send(400, "application/json", "{\"error\":\"missing batch acknowledgement\"}");
-    return;
-  }
-  JsonDocument body;
-  if (deserializeJson(body, localServer.arg("plain"))
-      || String(body["batch_id"] | "") != session.batchId) {
-    localServer.send(409, "application/json", "{\"error\":\"batch acknowledgement does not match\"}");
-    return;
-  }
-  xSemaphoreTake(recordsMutex, portMAX_DELAY);
-  records.clear();
-  const bool batchRemoved = !LittleFS.exists(kBatchPath) || LittleFS.remove(kBatchPath);
-  xSemaphoreGive(recordsMutex);
-  if (!batchRemoved) {
-    localServer.send(500, "application/json", "{\"error\":\"could not clear the imported batch\"}");
-    return;
-  }
-  LittleFS.remove(kSessionPath);
-  session.id.clear();
-  session.nonce.clear();
-  session.serviceUuid.clear();
-  session.batchId.clear();
-  session.offlineSessionJson.clear();
-  session.facultyKeyId.clear();
-  session.facultySignature.clear();
-  localServer.send(200, "application/json", "{\"success\":true}");
-}
-
-void setupLocalRoutes() {
-  localServer.on("/offline/start-session", HTTP_POST, handleStartSession);
-  localServer.on("/offline/export-batch", HTTP_GET, handleExportBatch);
-  localServer.on("/offline/ack-batch", HTTP_POST, handleAckBatch);
-  localServer.on("/offline/stop-session", HTTP_POST, []() {
-    stopBleSession();
-    startSoftAp();
-    localServer.send(200, "application/json", "{\"success\":true}");
-  });
-  localServer.onNotFound([]() {
-    localServer.send(404, "application/json", "{\"error\":\"not found\"}");
-  });
-}
-
-bool uploadBatch() {
-  if (WiFi.status() != WL_CONNECTED || !hasPendingRecords()
-      || session.id.isEmpty() || session.batchId.isEmpty()
-      || !session.offlineSessionJson.isEmpty()
-      || String(VIDYUT_API_ROOT_CA).isEmpty()) return false;
-  const String rawRecords = serializeRecords();
-  uint8_t key[32], digest[32];
-  if (!signingKey(key) || !hmacSha256(
-          key, sizeof(key), reinterpret_cast<const uint8_t *>(rawRecords.c_str()),
-          rawRecords.length(), digest)) return false;
   JsonDocument payload;
-  payload["batch_id"] = session.batchId;
+  payload["batch_id"] = newBatchId();
   payload["session_id"] = session.id;
   payload["beacon_id"] = VIDYUT_BEACON_ID;
   payload["raw_records_json"] = rawRecords;
   payload["esp32_batch_signature"] = toHex(digest, sizeof(digest));
   String body;
   serializeJson(payload, body);
+  memset(key, 0, sizeof(key));
+  memset(digest, 0, sizeof(digest));
 
   WiFiClientSecure tls;
   tls.setCACert(VIDYUT_API_ROOT_CA);
   HTTPClient http;
-  const String url = String(VIDYUT_API_BASE_URL) + "/api/attendance/esp32-batch";
-  if (!http.begin(tls, url)) {
-    Serial.println("Could not initialize the attendance API connection.");
+  if (!http.begin(tls, apiUrl("/api/attendance/esp32-batch"))) {
+    Serial.println("Could not initialize the attendance batch upload.");
+    resetSession();
     return false;
   }
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Campus-Domain", VIDYUT_TENANT_DOMAIN);
   const int status = http.POST(body);
   const bool uploaded = status >= 200 && status < 300;
-  if (status < 0) Serial.printf("Attendance API upload failed: %s\n", http.errorToString(status).c_str());
+  if (status < 0) Serial.printf("Attendance batch upload failed: %s\n", http.errorToString(status).c_str());
   else if (!uploaded) Serial.printf("Attendance API returned HTTP %d.\n", status);
   http.end();
-  memset(key, 0, sizeof(key));
-  memset(digest, 0, sizeof(digest));
-  if (uploaded) {
-    xSemaphoreTake(recordsMutex, portMAX_DELAY);
-    records.clear();
-    LittleFS.remove(kBatchPath);
-    xSemaphoreGive(recordsMutex);
-    if (!session.active) LittleFS.remove(kSessionPath);
-  }
+  if (uploaded) clearUploadedRecords(snapshot);
+  else resetSession();
   return uploaded;
 }
 
 void connectCampusWifi() {
-  if (String(VIDYUT_WIFI_SSID).isEmpty() || String(VIDYUT_WIFI_SSID) == "replace-me") return;
-  WiFi.mode(WIFI_AP_STA);
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.setSleep(false);
   WiFi.begin(VIDYUT_WIFI_SSID, VIDYUT_WIFI_PASSWORD);
   for (uint8_t attempt = 0; attempt < 3; ++attempt) {
     const unsigned long deadline = millis() + 10000;
     while (WiFi.status() != WL_CONNECTED && millis() < deadline) delay(100);
     if (WiFi.status() == WL_CONNECTED) {
-      wifiFailures = 0;
+      Serial.println("Connected to campus Wi-Fi.");
+      syncClock();
       return;
     }
-    ++wifiFailures;
     WiFi.disconnect();
     delay(500);
     WiFi.begin(VIDYUT_WIFI_SSID, VIDYUT_WIFI_PASSWORD);
   }
+  Serial.println("Campus Wi-Fi is unavailable; attendance scanning remains disabled.");
 }
 }  // namespace
 
 void setup() {
   Serial.begin(115200);
   if (!safeConfig()) return;
-  if (!LittleFS.begin(true)) {
-    Serial.println("LittleFS mount failed; attendance is disabled.");
-    return;
-  }
-  loadPendingRecords();
-  loadPendingSession();
   recordsMutex = xSemaphoreCreateMutex();
   if (recordsMutex == nullptr) {
     Serial.println("Could not initialize the attendance data lock.");
     return;
   }
   NimBLEDevice::init(String(VIDYUT_NODE_ID).c_str());
-  advertising = NimBLEDevice::getAdvertising();
   scanner = NimBLEDevice::getScan();
+  scanner->setScanCallbacks(&scanCallbacks, false);
   connectCampusWifi();
-  setupLocalRoutes();
-  startSoftAp();
   initialized = true;
 }
 
@@ -641,31 +444,34 @@ void loop() {
     delay(1000);
     return;
   }
-  if (!persistenceHealthy && session.active) {
-    stopBleSession();
-    startSoftAp();
+
+  const unsigned long now = millis();
+  if (WiFi.status() != WL_CONNECTED) {
+    if (session.active || scanning) resetSession();
+    if (now - lastReconnectAt >= kReconnectIntervalMs) {
+      lastReconnectAt = now;
+      WiFi.reconnect();
+    }
+    delay(25);
+    return;
   }
-  if (apEnabled) localServer.handleClient();
-  if (session.active && session.durationSeconds
-      && millis() - sessionStartedAt >= session.durationSeconds * 1000UL) {
-    stopBleSession();
-    startSoftAp();
+
+  if (now - lastTimeSyncAt >= 3600000UL || time(nullptr) < 1700000000) {
+    syncClock();
   }
-  if (hasPendingRecords() && millis() - lastUploadAt >= kUploadIntervalMs) {
-    lastUploadAt = millis();
+  if (time(nullptr) < 1700000000) {
+    resetSession();
+    delay(25);
+    return;
+  }
+  if (now - lastPollAt >= kSessionPollIntervalMs) {
+    lastPollAt = now;
+    refreshActiveSession();
+  }
+  if (session.active && !scanning) startScanner();
+  if (session.active && now - lastUploadAt >= kUploadIntervalMs) {
+    lastUploadAt = now;
     uploadBatch();
   }
-  if (WiFi.status() != WL_CONNECTED && String(VIDYUT_WIFI_SSID) != "replace-me") {
-    const unsigned long now = millis();
-    if (wifiFailures >= 3 && now - lastReconnectAt >= 60000) {
-      wifiFailures = 0;
-      lastReconnectAt = now;
-    } else if (wifiFailures < 3 && now - lastReconnectAt >= 15000) {
-      lastReconnectAt = now;
-      WiFi.begin(VIDYUT_WIFI_SSID, VIDYUT_WIFI_PASSWORD);
-      if (WiFi.waitForConnectResult() == WL_CONNECTED) wifiFailures = 0;
-      else ++wifiFailures;
-    }
-  }
-  delay(5);
+  delay(10);
 }

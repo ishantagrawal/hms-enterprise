@@ -10,19 +10,18 @@
   min-width: 0;
   box-sizing: border-box;
   overflow-x: clip;
-  min-height: calc(100vh - 74px);
+  min-height: calc(100dvh - 74px);
   margin: 0 auto;
   padding: 26px 18px calc(88px + env(safe-area-inset-bottom));
   color: var(--av-ink);
   background: #fafafb;
 }
-.av-back-attendance { display: block; margin: 10px 0 0 18px; }
-.av-legacy-wrap { min-height: calc(100vh - 74px); padding-top: 1px; background: #fafafb; }
 .av-header { min-width: 0; margin-bottom: 22px; }
 .av-header h1 { margin: 3px 0; font-size: 27px; letter-spacing: -.05em; overflow-wrap: anywhere; }
 .av-header p:not(.av-kicker) { color: var(--av-muted); font-size: 12px; overflow-wrap: anywhere; }
 .av-heading { display: flex; min-width: 0; align-items: center; gap: 12px; margin-bottom: 22px; }
 .av-heading > div { min-width: 0; }
+.av-home-button { min-height: 44px; flex: 0 0 auto; margin-left: auto; padding: 0 12px; border: 1px solid var(--av-line); border-radius: 9px; background: #fff; color: var(--av-ink); font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
 .av-brand-mark { display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid var(--av-line); border-radius: 12px; background: #fff; color: var(--av-blue); font-size: 13px; font-weight: 800; }
 .av-heading h1 { margin: 3px 0 0; font-size: 27px; letter-spacing: -.05em; overflow-wrap: anywhere; }
 .av-kicker { margin: 0; color: var(--av-muted); font-size: 10px; font-weight: 750; letter-spacing: .12em; }
@@ -111,32 +110,13 @@
 .av-close { position: absolute; top: 14px; right: 14px; width: 30px; height: 30px; border: 1px solid var(--av-line); border-radius: 50%; background: #fff; color: #475569; font-size: 21px; line-height: 1; cursor: pointer; }
 .av-camera { overflow: hidden; width: 100%; max-height: 310px; aspect-ratio: 3/4; border-radius: 12px; background: #111827; }
 .av-camera video { width: 100%; height: 100%; object-fit: cover; }
-.av-beacon-state { display: flex; justify-content: space-between; margin: 12px 0; color: #64748b; font-size: 12px; }
-.av-beacon-state strong { font-variant-numeric: tabular-nums; }
-.av-beacon-state.is-good { color: var(--av-green); }
-.av-sim-toggle { display: flex; align-items: center; gap: 8px; margin: 12px 0; color: #475569; font-size: 12px; }
-.av-sim-toggle input { accent-color: var(--av-blue); }
 .av-sheet > .av-primary { width: 100%; margin-top: 8px; }
 .av-footnote { color: var(--av-muted); font-size: 10px; line-height: 1.5; text-align: center; }
-.av-offline-tools { border-color: #bfdbfe; background: linear-gradient(135deg,#fff 55%,#eff6ff); }
-.av-offline-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
-.av-offline-cache-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 14px; padding: 11px 12px; border: 1px solid #dbeafe; border-radius: 9px; background: #f8fbff; }
-.av-offline-cache-row > div,.av-offline-session { display: grid; gap: 5px; }
-.av-offline-cache-row strong,.av-offline-session strong { font-size: 12px; }
-.av-offline-cache-row small,.av-offline-session small { color: var(--av-muted); font-size: 10px; }
-.av-offline-start { min-height: 40px; }
-.av-offline-attendance { border-color: #bfdbfe; }
-.av-offline-session { margin-top: 12px; padding: 12px; border: 1px solid #bfdbfe; border-radius: 9px; background: #f8fbff; }
-.av-qr-input { display: grid; gap: 6px; margin: 12px 0; color: #475569; font-size: 11px; font-weight: 650; }
-.av-qr-input textarea { width: 100%; padding: 9px; border: 1px solid var(--av-line); border-radius: 7px; color: var(--av-ink); font: inherit; font-size: 11px; }
-.av-qr-camera { display: block; width: min(320px,100%); margin: 12px auto; border-radius: 10px; background: #111827; }
-.av-qr-sheet { display: grid; justify-items: center; gap: 9px; text-align: center; }
-.av-qr-sheet h2,.av-qr-sheet p { margin: 0; }
-.av-qr-code { display: grid; max-width: 100%; place-items: center; margin: 8px 0; padding: 10px; border-radius: 12px; background: #fff; }
-.av-qr-caption { color: var(--av-muted); font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
 @keyframes av-slide-up { from { transform: translateY(28px); opacity: .6; } to { transform: translateY(0); opacity: 1; } }
 @media (max-width: 640px) {
   .av-root { padding: 18px 12px calc(82px + env(safe-area-inset-bottom)); }
+  .av-root button { min-height: 44px; }
+  .av-root input:not([type="range"]),.av-root select,.av-root textarea { font-size: 16px; }
   .av-card-grid,.av-form-grid { grid-template-columns: 1fr; }
   .av-course-card { min-height: 160px; }
   .av-panel { padding: 15px; }
