@@ -752,8 +752,7 @@ function BeaconManager({ apiUrl, scope }) {
         root_ca_pem: ISRG_ROOT_X1
       };
       await port.open({ baudRate: 115200 });
-      await port.setSignals({ dataTerminalReady: false, requestToSend: false });
-      await new Promise((resolve) => window.setTimeout(resolve, 2200));
+      await new Promise((resolve) => window.setTimeout(resolve, 2000));
       if (!port.readable || !port.writable) throw new Error('The selected serial port is not available.');
       reader = port.readable.getReader();
       writer = port.writable.getWriter();
