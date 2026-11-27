@@ -566,7 +566,10 @@ function BeaconManager({ apiUrl, scope }) {
   const [wifiConfig, setWifiConfig] = useState(() => ({
     wifiSsid: localStorage.getItem('vidyut_esp32_wifi_ssid') || '',
     wifiPassword: localStorage.getItem('vidyut_esp32_wifi_password') || '',
-    apiBaseUrl: localStorage.getItem('vidyut_esp32_api_base_url') || apiUrl
+    apiBaseUrl: localStorage.getItem('vidyut_esp32_api_base_url') || apiUrl,
+    campusDomain: localStorage.getItem('vidyut_esp32_tenant_domain')
+      || localStorage.getItem('vidyut_tenant_domain')
+      || window.location.hostname
   }));
   const [provisioning, setProvisioning] = useState(null);
   const [serialBusy, setSerialBusy] = useState(false);
@@ -574,6 +577,24 @@ function BeaconManager({ apiUrl, scope }) {
   const [editingBeaconId, setEditingBeaconId] = useState('');
   const [editingBeaconName, setEditingBeaconName] = useState('');
   const [error, setError] = useState('');
+  useEffect(() => {
+    let active = true;
+    apiFetch(`${apiUrl}/api/auth/me`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(extractErrorMessage(data, `Session request failed (${response.status}).`));
+        const campusDomain = data.tenant?.primary_domain
+          || data.user?.tenant?.primary_domain
+          || data.user?.college?.primary_domain;
+        if (typeof campusDomain === 'string' && campusDomain.trim() && active) {
+          setWifiConfig((current) => ({ ...current, campusDomain: campusDomain.trim() }));
+        }
+      })
+      .catch((sessionError) => {
+        if (active) console.warn('Could not resolve the campus domain from the signed-in session:', sessionError);
+      });
+    return () => { active = false; };
+  }, [apiUrl]);
   const load = useCallback(async () => setBeacons(await requestJson(apiUrl, `/beacons?scope=${scope}`)), [apiUrl, scope]);
   useEffect(() => { void load().catch((loadError) => setError(extractErrorMessage(loadError))); }, [load]);
   useEffect(() => {
@@ -633,7 +654,7 @@ function BeaconManager({ apiUrl, scope }) {
     const wifiSsid = wifiConfig.wifiSsid.trim();
     const wifiPassword = wifiConfig.wifiPassword;
     const apiBaseUrl = wifiConfig.apiBaseUrl.trim().replace(/\/+$/, '');
-    const tenantDomain = localStorage.getItem('vidyut_tenant_domain') || '';
+    const tenantDomain = wifiConfig.campusDomain.trim().toLowerCase();
     let parsedApiUrl;
     try {
       parsedApiUrl = new URL(apiBaseUrl);
@@ -659,6 +680,8 @@ function BeaconManager({ apiUrl, scope }) {
       localStorage.setItem('vidyut_esp32_wifi_ssid', wifiSsid);
       localStorage.setItem('vidyut_esp32_wifi_password', wifiPassword);
       localStorage.setItem('vidyut_esp32_api_base_url', apiBaseUrl);
+      localStorage.setItem('vidyut_esp32_tenant_domain', tenantDomain);
+      setWifiConfig((current) => ({ ...current, apiBaseUrl, campusDomain: tenantDomain }));
     } catch (storageError) {
       setError(`Could not save Wi-Fi settings in this browser: ${extractErrorMessage(storageError)}`);
       return null;
@@ -796,10 +819,11 @@ function BeaconManager({ apiUrl, scope }) {
       </form>
       <div className="av-credentials av-provisioning-settings">
         <strong>USB provisioning network settings</strong>
-        <p>Save the campus 2.4 GHz Wi-Fi and API settings once; they stay in this browser for future boards. The campus domain comes from your signed-in portal.</p>
+        <p>Save the campus 2.4 GHz Wi-Fi, campus domain, and API settings once; they stay in this browser for future boards. The campus domain is pre-filled from your signed-in portal.</p>
         <div className="av-form-grid">
           <label>Campus 2.4 GHz Wi-Fi SSID<input maxLength="32" autoComplete="off" value={wifiConfig.wifiSsid} onChange={(event) => setWifiConfig({ ...wifiConfig, wifiSsid: event.target.value })} /></label>
           <label>Wi-Fi password<input type="password" maxLength="64" autoComplete="new-password" value={wifiConfig.wifiPassword} onChange={(event) => setWifiConfig({ ...wifiConfig, wifiPassword: event.target.value })} /></label>
+          <label>Campus domain<input type="text" value={wifiConfig.campusDomain} onChange={(event) => setWifiConfig({ ...wifiConfig, campusDomain: event.target.value })} placeholder="campus.example.edu" /></label>
           <label>API base URL<input type="url" value={wifiConfig.apiBaseUrl} onChange={(event) => setWifiConfig({ ...wifiConfig, apiBaseUrl: event.target.value })} placeholder="https://api.example.edu" /></label>
           <button type="button" className="av-secondary" onClick={saveProvisioningSettings}>Save Wi-Fi settings</button>
         </div>

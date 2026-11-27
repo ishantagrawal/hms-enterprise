@@ -121,6 +121,19 @@ class TenantSafetyTests(unittest.TestCase):
         conn.commit()
         conn.close()
 
+    def test_current_account_includes_the_authenticated_tenant_domain(self):
+        request = build_request([])
+        request.state.user = {"user_id": "STAFF-001", "role": "BeaconManager"}
+        request.state.tenant = {
+            "college_id": "TESTCOLLEGE",
+            "college_name": "Test College",
+            "primary_domain": "portal.example.edu",
+        }
+
+        response = main.get_current_account(request)
+
+        self.assertEqual(response["tenant"]["primary_domain"], "portal.example.edu")
+
     def test_attendance_v2_tables_are_additive_and_records_are_unique(self):
         conn = main.get_conn()
         try:

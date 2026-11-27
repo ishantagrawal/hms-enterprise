@@ -3929,7 +3929,16 @@ def get_current_account(request: Request):
     user = dict(request.state.user)
     user.pop("password", None)
     user.pop("dob", None)
-    return {"success": True, "user": user}
+    tenant = request.state.tenant
+    return {
+        "success": True,
+        "user": user,
+        "tenant": {
+            "college_id": tenant["college_id"],
+            "college_name": tenant["college_name"],
+            "primary_domain": tenant["primary_domain"],
+        },
+    }
 
 
 @app.get("/api/hostels")
