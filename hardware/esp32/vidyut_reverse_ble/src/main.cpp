@@ -2,6 +2,7 @@
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <NimBLEDevice.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <freertos/FreeRTOS.h>
@@ -10,7 +11,18 @@
 #include <map>
 #include <time.h>
 
-#include "../include/secrets.h"
+#if __has_include("secrets.h")
+#include "secrets.h"
+#else
+#define VIDYUT_NODE_ID ""
+#define VIDYUT_BEACON_ID ""
+#define VIDYUT_TENANT_DOMAIN ""
+#define VIDYUT_API_BASE_URL ""
+#define VIDYUT_WIFI_SSID ""
+#define VIDYUT_WIFI_PASSWORD ""
+#define VIDYUT_SIGNING_SECRET_HEX ""
+#define VIDYUT_API_ROOT_CA ""
+#endif
 
 namespace {
 constexpr uint32_t kScanInterval = 160;
@@ -20,6 +32,20 @@ constexpr uint32_t kUploadIntervalMs = 3000;
 constexpr uint32_t kReconnectIntervalMs = 15000;
 constexpr size_t kMaxStudents = 150;
 constexpr int8_t kDefaultRssiThreshold = -78;
+constexpr size_t kMaxProvisioningPayload = 8192;
+
+struct DeviceConfig {
+  String nodeId = VIDYUT_NODE_ID;
+  String beaconId = VIDYUT_BEACON_ID;
+  String signingSecret = VIDYUT_SIGNING_SECRET_HEX;
+  String tenantDomain = VIDYUT_TENANT_DOMAIN;
+  String wifiSsid = VIDYUT_WIFI_SSID;
+  String wifiPassword = VIDYUT_WIFI_PASSWORD;
+  String apiBaseUrl = VIDYUT_API_BASE_URL;
+  String rootCaPem = VIDYUT_API_ROOT_CA;
+};
+
+DeviceConfig config;
 
 struct AttendanceRecord {
   uint32_t rollId = 0;
@@ -46,6 +72,23 @@ unsigned long lastTimeSyncAt = 0;
 bool scanning = false;
 bool initialized = false;
 SemaphoreHandle_t recordsMutex = nullptr;
+
+bool loadConfig() {
+  Preferences preferences;
+  if (!preferences.begin("vidyut", true)) return false;
+  if (preferences.getBool("configured", false)) {
+    config.nodeId = preferences.getString("node_id", config.nodeId);
+    config.beaconId = preferences.getString("beacon_id", config.beaconId);
+    config.signingSecret = preferences.getString("signing_secret", config.signingSecret);
+    config.tenantDomain = preferences.getString("tenant_domain", config.tenantDomain);
+    config.wifiSsid = preferences.getString("wifi_ssid", config.wifiSsid);
+    config.wifiPassword = preferences.getString("wifi_password", config.wifiPassword);
+    config.apiBaseUrl = preferences.getString("api_base_url", config.apiBaseUrl);
+    config.rootCaPem = preferences.getString("root_ca_pem", config.rootCaPem);
+  }
+  preferences.end();
+  return true;
+}
 
 bool decodeHex(const String &value, uint8_t *output, size_t outputLength) {
   if (value.length() != outputLength * 2) return false;
@@ -89,20 +132,15 @@ bool hmacSha256(const uint8_t *key, size_t keyLength, const uint8_t *message,
 }
 
 bool signingKey(uint8_t key[32]) {
-  return decodeHex(VIDYUT_SIGNING_SECRET_HEX, key, 32);
+  return decodeHex(config.signingSecret, key, 32);
 }
 
 bool safeConfig() {
-  if (String(VIDYUT_NODE_ID).isEmpty()
-      || String(VIDYUT_BEACON_ID).length() < 4
-      || String(VIDYUT_BEACON_ID).startsWith("replace-")
-      || String(VIDYUT_TENANT_DOMAIN).isEmpty()
-      || String(VIDYUT_WIFI_SSID).isEmpty()
-      || String(VIDYUT_WIFI_SSID).startsWith("replace-")
-      || String(VIDYUT_WIFI_PASSWORD).startsWith("replace-")
-      || String(VIDYUT_API_BASE_URL).indexOf("https://") != 0
-      || String(VIDYUT_API_ROOT_CA).isEmpty()
-      || String(VIDYUT_SIGNING_SECRET_HEX).length() != 64) {
+  if (config.nodeId.isEmpty() || config.beaconId.length() < 4
+      || config.tenantDomain.isEmpty() || config.wifiSsid.isEmpty()
+      || config.apiBaseUrl.indexOf("https://") != 0
+      || config.apiBaseUrl.length() <= 8
+      || config.rootCaPem.isEmpty() || config.signingSecret.length() != 64) {
     Serial.println("Required online device configuration is missing; attendance is disabled.");
     return false;
   }
@@ -113,6 +151,106 @@ bool safeConfig() {
   }
   memset(key, 0, sizeof(key));
   return true;
+}
+
+bool validProvisioningConfig(const JsonDocument &document, DeviceConfig &provisioned) {
+  if (document["cmd"] != "PROVISION") return false;
+  provisioned.nodeId = String(document["node_id"] | "");
+  provisioned.beaconId = String(document["beacon_id"] | "");
+  provisioned.signingSecret = String(document["signing_secret"] | "");
+  provisioned.tenantDomain = String(document["tenant_domain"] | "");
+  provisioned.wifiSsid = String(document["wifi_ssid"] | "");
+  provisioned.wifiPassword = String(document["wifi_password"] | "");
+  provisioned.apiBaseUrl = String(document["api_base_url"] | "");
+  provisioned.rootCaPem = String(document["root_ca_pem"] | "");
+
+  uint8_t key[32];
+  const bool valid = !provisioned.nodeId.isEmpty() && provisioned.nodeId.length() <= 64
+      && provisioned.beaconId.length() >= 4 && provisioned.beaconId.length() <= 100
+      && provisioned.tenantDomain.length() <= 253 && !provisioned.tenantDomain.isEmpty()
+      && provisioned.tenantDomain.indexOf('/') < 0
+      && provisioned.tenantDomain.indexOf(' ') < 0
+      && provisioned.wifiSsid.length() <= 32 && !provisioned.wifiSsid.isEmpty()
+      && provisioned.wifiPassword.length() <= 64
+      && provisioned.apiBaseUrl.length() <= 256
+      && provisioned.apiBaseUrl.indexOf("https://") == 0
+      && provisioned.apiBaseUrl.substring(8).indexOf('/') < 0
+      && provisioned.apiBaseUrl.substring(8).indexOf(' ') < 0
+      && provisioned.apiBaseUrl.substring(8).indexOf('?') < 0
+      && provisioned.rootCaPem.length() <= 4096
+      && provisioned.rootCaPem.startsWith("-----BEGIN CERTIFICATE-----")
+      && provisioned.rootCaPem.indexOf("-----END CERTIFICATE-----") >= 0
+      && decodeHex(provisioned.signingSecret, key, sizeof(key));
+  memset(key, 0, sizeof(key));
+  return valid;
+}
+
+bool saveConfig(const DeviceConfig &provisioned) {
+  Preferences preferences;
+  if (!preferences.begin("vidyut", false)) return false;
+  const bool invalidated = preferences.putBool("configured", false);
+  const bool saved = invalidated && preferences.putString("node_id", provisioned.nodeId) > 0
+      && preferences.putString("beacon_id", provisioned.beaconId) > 0
+      && preferences.putString("signing_secret", provisioned.signingSecret) > 0
+      && preferences.putString("tenant_domain", provisioned.tenantDomain) > 0
+      && preferences.putString("wifi_ssid", provisioned.wifiSsid) > 0
+      && preferences.putString("wifi_password", provisioned.wifiPassword) > 0
+      && preferences.putString("api_base_url", provisioned.apiBaseUrl) > 0
+      && preferences.putString("root_ca_pem", provisioned.rootCaPem) > 0;
+  const bool markedConfigured = saved && preferences.putBool("configured", true);
+  preferences.end();
+  return markedConfigured;
+}
+
+void sendSerialStatus(const char *status, const String &beaconId = "",
+                      const char *error = nullptr) {
+  JsonDocument response;
+  response["status"] = status;
+  if (!beaconId.isEmpty()) response["beacon_id"] = beaconId;
+  if (error) response["error"] = error;
+  serializeJson(response, Serial);
+  Serial.println();
+}
+
+bool processProvisioningPayload(const String &payload) {
+  JsonDocument document;
+  if (deserializeJson(document, payload)) {
+    sendSerialStatus("ERROR", "", "Invalid JSON payload.");
+    return false;
+  }
+
+  DeviceConfig provisioned;
+  if (!validProvisioningConfig(document, provisioned)) {
+    sendSerialStatus("ERROR", "", "Missing or invalid provisioning fields.");
+    return false;
+  }
+  if (!saveConfig(provisioned)) {
+    sendSerialStatus("ERROR", "", "Could not save configuration to NVS.");
+    return false;
+  }
+
+  sendSerialStatus("OK", provisioned.beaconId);
+  Serial.flush();
+  delay(500);
+  ESP.restart();
+  return true;
+}
+
+void processSerialProvisioning() {
+  static String payload;
+  while (Serial.available()) {
+    const char next = static_cast<char>(Serial.read());
+    if (next == '\n') {
+      payload.trim();
+      if (!payload.isEmpty()) processProvisioningPayload(payload);
+      payload = "";
+    } else if (payload.length() < kMaxProvisioningPayload) {
+      payload += next;
+    } else {
+      payload = "";
+      sendSerialStatus("ERROR", "", "Provisioning payload exceeds the size limit.");
+    }
+  }
 }
 
 std::map<uint32_t, AttendanceRecord> recordSnapshot() {
@@ -170,7 +308,7 @@ void resetSession() {
 }
 
 String apiUrl(const char *path) {
-  String base = VIDYUT_API_BASE_URL;
+  String base = config.apiBaseUrl;
   while (base.endsWith("/")) base.remove(base.length() - 1);
   return base + path;
 }
@@ -196,7 +334,10 @@ bool syncClock() {
   lastTimeSyncAt = millis();
   configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
   const unsigned long deadline = millis() + 15000;
-  while (time(nullptr) < 1700000000 && millis() < deadline) delay(250);
+  while (time(nullptr) < 1700000000 && millis() < deadline) {
+    processSerialProvisioning();
+    delay(10);
+  }
   if (time(nullptr) < 1700000000) {
     Serial.println("NTP time sync is unavailable; authenticated session polling is paused.");
     return false;
@@ -269,7 +410,7 @@ bool refreshActiveSession() {
     return false;
   }
   const String timestamp = String(static_cast<uint32_t>(now));
-  const String signedMessage = String(VIDYUT_BEACON_ID) + "|" + timestamp;
+  const String signedMessage = config.beaconId + "|" + timestamp;
   const bool signedOk = hmacSha256(
       key, sizeof(key),
       reinterpret_cast<const uint8_t *>(signedMessage.c_str()),
@@ -278,17 +419,17 @@ bool refreshActiveSession() {
   if (!signedOk) return false;
 
   WiFiClientSecure tls;
-  tls.setCACert(VIDYUT_API_ROOT_CA);
+  tls.setCACert(config.rootCaPem.c_str());
   HTTPClient http;
   const String url = apiUrl("/api/attendance/esp32-active-session?beacon_id=")
-      + encodeQueryValue(VIDYUT_BEACON_ID);
+      + encodeQueryValue(config.beaconId);
   if (!http.begin(tls, url)) {
     memset(digest, 0, sizeof(digest));
     Serial.println("Could not initialize the active-session API request.");
     return false;
   }
   http.addHeader("Accept", "application/json");
-  http.addHeader("X-Campus-Domain", VIDYUT_TENANT_DOMAIN);
+  http.addHeader("X-Campus-Domain", config.tenantDomain);
   http.addHeader("X-Vidyut-Timestamp", timestamp);
   http.addHeader("X-Vidyut-Signature", toHex(digest, sizeof(digest)));
   memset(digest, 0, sizeof(digest));
@@ -354,7 +495,7 @@ String newBatchId() {
   memcpy(randomBytes + sizeof(first), &second, sizeof(second));
   const String suffix = toHex(randomBytes, sizeof(randomBytes));
   memset(randomBytes, 0, sizeof(randomBytes));
-  return String("VNODE-") + VIDYUT_NODE_ID + "-" + suffix;
+  return String("VNODE-") + config.nodeId + "-" + suffix;
 }
 
 bool uploadBatch() {
@@ -375,7 +516,7 @@ bool uploadBatch() {
   JsonDocument payload;
   payload["batch_id"] = newBatchId();
   payload["session_id"] = session.id;
-  payload["beacon_id"] = VIDYUT_BEACON_ID;
+  payload["beacon_id"] = config.beaconId;
   payload["raw_records_json"] = rawRecords;
   payload["esp32_batch_signature"] = toHex(digest, sizeof(digest));
   String body;
@@ -384,7 +525,7 @@ bool uploadBatch() {
   memset(digest, 0, sizeof(digest));
 
   WiFiClientSecure tls;
-  tls.setCACert(VIDYUT_API_ROOT_CA);
+  tls.setCACert(config.rootCaPem.c_str());
   HTTPClient http;
   if (!http.begin(tls, apiUrl("/api/attendance/esp32-batch"))) {
     Serial.println("Could not initialize the attendance batch upload.");
@@ -392,7 +533,7 @@ bool uploadBatch() {
     return false;
   }
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("X-Campus-Domain", VIDYUT_TENANT_DOMAIN);
+  http.addHeader("X-Campus-Domain", config.tenantDomain);
   const int status = http.POST(body);
   const bool uploaded = status >= 200 && status < 300;
   if (status < 0) Serial.printf("Attendance batch upload failed: %s\n", http.errorToString(status).c_str());
@@ -407,18 +548,24 @@ void connectCampusWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.setSleep(false);
-  WiFi.begin(VIDYUT_WIFI_SSID, VIDYUT_WIFI_PASSWORD);
+  WiFi.begin(config.wifiSsid.c_str(), config.wifiPassword.c_str());
   for (uint8_t attempt = 0; attempt < 3; ++attempt) {
     const unsigned long deadline = millis() + 10000;
-    while (WiFi.status() != WL_CONNECTED && millis() < deadline) delay(100);
+    while (WiFi.status() != WL_CONNECTED && millis() < deadline) {
+      processSerialProvisioning();
+      delay(10);
+    }
     if (WiFi.status() == WL_CONNECTED) {
       Serial.println("Connected to campus Wi-Fi.");
       syncClock();
       return;
     }
     WiFi.disconnect();
-    delay(500);
-    WiFi.begin(VIDYUT_WIFI_SSID, VIDYUT_WIFI_PASSWORD);
+    for (uint8_t wait = 0; wait < 50; ++wait) {
+      processSerialProvisioning();
+      delay(10);
+    }
+    WiFi.begin(config.wifiSsid.c_str(), config.wifiPassword.c_str());
   }
   Serial.println("Campus Wi-Fi is unavailable; attendance scanning remains disabled.");
 }
@@ -426,13 +573,16 @@ void connectCampusWifi() {
 
 void setup() {
   Serial.begin(115200);
+  if (!loadConfig()) {
+    Serial.println("Could not read ESP32 NVS configuration.");
+  }
   if (!safeConfig()) return;
   recordsMutex = xSemaphoreCreateMutex();
   if (recordsMutex == nullptr) {
     Serial.println("Could not initialize the attendance data lock.");
     return;
   }
-  NimBLEDevice::init(String(VIDYUT_NODE_ID).c_str());
+  NimBLEDevice::init(config.nodeId.c_str());
   scanner = NimBLEDevice::getScan();
   scanner->setScanCallbacks(&scanCallbacks, false);
   connectCampusWifi();
@@ -440,8 +590,9 @@ void setup() {
 }
 
 void loop() {
+  processSerialProvisioning();
   if (!initialized) {
-    delay(1000);
+    delay(10);
     return;
   }
 

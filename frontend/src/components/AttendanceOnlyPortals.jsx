@@ -16,6 +16,60 @@ import { Button, Chip, Icon, ProgressBar, StatusPill } from './ui/DesignSystem';
 import './AttendanceOnlyPortals.css';
 
 const ROOT = '/api/attendance-v2';
+const ISRG_ROOT_X1 = `-----BEGIN CERTIFICATE-----
+MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
+TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
+cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
+WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
+ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
+MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
+h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
+0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
+A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
+T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
+B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
+B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv
+KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn
+OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn
+jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw
+qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI
+rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
+HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
+hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
+ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
+3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
+NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5
+ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur
+TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC
+jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc
+oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
+4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA
+mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
+emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
+-----END CERTIFICATE-----`;
+
+async function readSerialProvisioningResponse(reader) {
+  const decoder = new TextDecoder();
+  let pending = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) throw new Error('ESP32 disconnected before confirming provisioning.');
+    pending += decoder.decode(value, { stream: true });
+    const lines = pending.split(/\r?\n/);
+    pending = lines.pop() || '';
+    if (pending.length > 4096) throw new Error('ESP32 sent an invalid serial response.');
+    for (const line of lines) {
+      let response;
+      try {
+        response = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (response.status === 'OK') return response;
+      if (response.status === 'ERROR') throw new Error(response.error || 'ESP32 rejected the configuration.');
+    }
+  }
+}
 
 async function requestJson(apiUrl, path, options = {}) {
   const headers = new Headers(options.headers || {});
@@ -509,7 +563,14 @@ function BeaconManager({ apiUrl, scope }) {
   const [beacons, setBeacons] = useState([]);
   const [hostels, setHostels] = useState([]);
   const [form, setForm] = useState({ name: '', hostel_block: '', wing_name: '', min_rssi: -78 });
+  const [wifiConfig, setWifiConfig] = useState(() => ({
+    wifiSsid: localStorage.getItem('vidyut_esp32_wifi_ssid') || '',
+    wifiPassword: localStorage.getItem('vidyut_esp32_wifi_password') || '',
+    apiBaseUrl: localStorage.getItem('vidyut_esp32_api_base_url') || apiUrl
+  }));
   const [provisioning, setProvisioning] = useState(null);
+  const [serialBusy, setSerialBusy] = useState(false);
+  const [serialStatus, setSerialStatus] = useState({ beaconId: '', message: '' });
   const [editingBeaconId, setEditingBeaconId] = useState('');
   const [editingBeaconName, setEditingBeaconName] = useState('');
   const [error, setError] = useState('');
@@ -567,6 +628,129 @@ function BeaconManager({ apiUrl, scope }) {
       await load();
     } catch (provisionError) { setError(extractErrorMessage(provisionError)); }
   };
+  const saveProvisioningSettings = () => {
+    setError('');
+    const wifiSsid = wifiConfig.wifiSsid.trim();
+    const wifiPassword = wifiConfig.wifiPassword;
+    const apiBaseUrl = wifiConfig.apiBaseUrl.trim().replace(/\/+$/, '');
+    const tenantDomain = localStorage.getItem('vidyut_tenant_domain') || '';
+    let parsedApiUrl;
+    try {
+      parsedApiUrl = new URL(apiBaseUrl);
+    } catch {
+      setError('Enter a valid HTTPS API base URL.');
+      return null;
+    }
+    if (!wifiSsid || wifiSsid.length > 32 || wifiPassword.length > 64) {
+      setError('Enter a Wi-Fi SSID (up to 32 characters) and a password of up to 64 characters.');
+      return null;
+    }
+    if (parsedApiUrl.protocol !== 'https:' || parsedApiUrl.username || parsedApiUrl.password
+        || (parsedApiUrl.pathname !== '/' && parsedApiUrl.pathname !== '')
+        || parsedApiUrl.search || parsedApiUrl.hash) {
+      setError('The API base URL must be an HTTPS origin without a path, query, or credentials.');
+      return null;
+    }
+    if (!tenantDomain || /[/:?#@\s]/.test(tenantDomain)) {
+      setError('The campus portal domain is unavailable. Sign in through the campus portal before provisioning.');
+      return null;
+    }
+    try {
+      localStorage.setItem('vidyut_esp32_wifi_ssid', wifiSsid);
+      localStorage.setItem('vidyut_esp32_wifi_password', wifiPassword);
+      localStorage.setItem('vidyut_esp32_api_base_url', apiBaseUrl);
+    } catch (storageError) {
+      setError(`Could not save Wi-Fi settings in this browser: ${extractErrorMessage(storageError)}`);
+      return null;
+    }
+    return { wifiSsid, wifiPassword, apiBaseUrl, tenantDomain };
+  };
+  const provisionViaUsb = async (beacon, knownProvisioning = provisioning) => {
+    setError('');
+    setSerialStatus({ beaconId: beacon.id, message: '' });
+    if (!navigator.serial) {
+      setSerialStatus({
+        beaconId: beacon.id,
+        message: 'Web Serial is unavailable. Open this portal in a supported Chromium browser over HTTPS to provision by USB.'
+      });
+      return;
+    }
+    const settings = saveProvisioningSettings();
+    if (!settings) return;
+    setSerialBusy(true);
+    setSerialStatus({ beaconId: beacon.id, message: 'Connecting...' });
+    let port;
+    let reader;
+    let writer;
+    let timeoutId;
+    try {
+      port = await navigator.serial.requestPort();
+      await port.open({ baudRate: 115200 });
+      await new Promise((resolve) => window.setTimeout(resolve, 2000));
+
+      let credentials = knownProvisioning?.id === beacon.id
+        && knownProvisioning.provisioning_secret ? knownProvisioning : null;
+      if (!credentials) {
+        const rotated = await requestJson(apiUrl, `/beacons/${encodeURIComponent(beacon.id)}/provision`, { method: 'POST' });
+        credentials = { ...beacon, ...rotated };
+        setProvisioning(credentials);
+        await load();
+      }
+
+      const beaconId = credentials.beacon_id || credentials.id;
+      const signingSecret = credentials.provisioning_secret;
+      if (!beaconId || !/^[0-9a-f]{64}$/i.test(signingSecret || '')) {
+        throw new Error('The one-time beacon signing secret is missing or invalid. Rotate the beacon key and try again.');
+      }
+      const payload = {
+        cmd: 'PROVISION',
+        node_id: `node-${String(credentials.beacon_code || beacon.beacon_code || beaconId).toLowerCase()}`,
+        beacon_id: beaconId,
+        signing_secret: signingSecret,
+        tenant_domain: settings.tenantDomain,
+        wifi_ssid: settings.wifiSsid,
+        wifi_password: settings.wifiPassword,
+        api_base_url: settings.apiBaseUrl,
+        root_ca_pem: ISRG_ROOT_X1
+      };
+      if (!port.readable || !port.writable) throw new Error('The selected serial port is not available.');
+      reader = port.readable.getReader();
+      writer = port.writable.getWriter();
+      const serialResponsePromise = readSerialProvisioningResponse(reader);
+      const timeoutPromise = new Promise((resolve, reject) => {
+        timeoutId = window.setTimeout(() => reject(new Error('Timed out waiting for the ESP32 provisioning response.')), 20000);
+      });
+      const responsePromise = Promise.race([serialResponsePromise, timeoutPromise]);
+      await writer.write(new TextEncoder().encode(`${JSON.stringify(payload)}\n`));
+      const response = await responsePromise;
+      if (response.beacon_id !== beaconId) throw new Error('The ESP32 confirmed a different beacon ID.');
+      setSerialStatus({ beaconId: beacon.id, message: 'Provisioned & Rebooting' });
+    } catch (provisionError) {
+      setSerialStatus({
+        beaconId: beacon.id,
+        message: `USB provisioning failed: ${extractErrorMessage(provisionError)}`
+      });
+    } finally {
+      if (timeoutId) window.clearTimeout(timeoutId);
+      if (reader) {
+        try {
+          await reader.cancel();
+        } catch (cleanupError) {
+          console.error('Could not close the ESP32 serial reader cleanly.', cleanupError);
+        }
+        reader.releaseLock();
+      }
+      if (writer) writer.releaseLock();
+      if (port?.readable || port?.writable) {
+        try {
+          await port.close();
+        } catch (cleanupError) {
+          console.error('Could not close the ESP32 serial port cleanly.', cleanupError);
+        }
+      }
+      setSerialBusy(false);
+    }
+  };
   const renameBeacon = async (beacon) => {
     const name = editingBeaconName.trim();
     if (!name) {
@@ -610,12 +794,26 @@ function BeaconManager({ apiUrl, scope }) {
         <label>Minimum RSSI <b className="av-tabular">{form.min_rssi} dBm</b><input type="range" min="-85" max="-65" value={form.min_rssi} onChange={(event) => setForm({ ...form, min_rssi: event.target.value })} /></label>
         <button className="av-primary" disabled={scope === 'HOSTEL' && !form.wing_name}>Add and provision ESP32 beacon</button>
       </form>
+      <div className="av-credentials av-provisioning-settings">
+        <strong>USB provisioning network settings</strong>
+        <p>Save the campus 2.4 GHz Wi-Fi and API settings once; they stay in this browser for future boards. The campus domain comes from your signed-in portal.</p>
+        <div className="av-form-grid">
+          <label>Campus 2.4 GHz Wi-Fi SSID<input maxLength="32" autoComplete="off" value={wifiConfig.wifiSsid} onChange={(event) => setWifiConfig({ ...wifiConfig, wifiSsid: event.target.value })} /></label>
+          <label>Wi-Fi password<input type="password" maxLength="64" autoComplete="new-password" value={wifiConfig.wifiPassword} onChange={(event) => setWifiConfig({ ...wifiConfig, wifiPassword: event.target.value })} /></label>
+          <label>API base URL<input type="url" value={wifiConfig.apiBaseUrl} onChange={(event) => setWifiConfig({ ...wifiConfig, apiBaseUrl: event.target.value })} placeholder="https://api.example.edu" /></label>
+          <button type="button" className="av-secondary" onClick={saveProvisioningSettings}>Save Wi-Fi settings</button>
+        </div>
+      </div>
       {provisioning?.provisioning_secret && (
         <div className="av-credentials" role="status">
           <strong>One-time ESP32 provisioning values</strong>
-          <p>Copy these to the ESP32 firmware setup now. Vidyut OS stores only an encrypted copy and will never show this secret again.</p>
+          <p>Vidyut OS stores only an encrypted copy and will never show this secret again. Provision the connected ESP32 now or keep this secret private for your records.</p>
           <div className="av-list-row"><span>Beacon code</span><code>{provisioning.beacon_code}</code></div>
           <div className="av-list-row"><span>Signing secret</span><code className="av-temp-password">{provisioning.provisioning_secret}</code></div>
+          <button type="button" className="av-primary" disabled={serialBusy} onClick={() => provisionViaUsb(provisioning, provisioning)}>
+            {serialBusy ? 'Connecting...' : 'Provision ESP32 via USB'}
+          </button>
+          {serialStatus.beaconId === provisioning.id && serialStatus.message && <p role="status">{serialStatus.message}</p>}
           <p className="av-subtitle">Keep the secret private and unique to this beacon. Rotate it here if the device is replaced or the secret is exposed.</p>
         </div>
       )}
@@ -631,6 +829,10 @@ function BeaconManager({ apiUrl, scope }) {
             {!beacon.is_provisioned && <span className="av-status is-absent">Provisioning required</span>}
             <button type="button" className="av-secondary" onClick={() => { setEditingBeaconId(editingBeaconId === beacon.id ? '' : beacon.id); setEditingBeaconName(beacon.name); }}>Rename</button>
             <button className="av-secondary" onClick={() => rotateKey(beacon)}>{beacon.is_provisioned ? 'Rotate key' : 'Provision ESP32'}</button>
+            <button type="button" className="av-secondary" disabled={serialBusy} onClick={() => provisionViaUsb(beacon)}>
+              {serialBusy ? 'Connecting...' : 'Provision ESP32 via USB'}
+            </button>
+            {serialStatus.beaconId === beacon.id && serialStatus.message && <small role="status">{serialStatus.message}</small>}
             <button className="av-secondary" onClick={() => toggle(beacon)}>{beacon.is_active ? 'Deactivate' : 'Activate'}</button>
           </div>
         ))}
