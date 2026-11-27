@@ -56,6 +56,10 @@ async function getFaceLandmarker() {
   return landmarkerPromise;
 }
 
+export async function prepareOfflineLiveness() {
+  await getFaceLandmarker();
+}
+
 export async function verifyLocalBlinkGesture(video, onStatus, signal) {
   const landmarker = await getFaceLandmarker();
   const startedAt = performance.now();

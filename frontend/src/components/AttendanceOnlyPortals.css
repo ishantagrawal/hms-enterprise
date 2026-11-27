@@ -118,6 +118,22 @@
 .av-sim-toggle input { accent-color: var(--av-blue); }
 .av-sheet > .av-primary { width: 100%; margin-top: 8px; }
 .av-footnote { color: var(--av-muted); font-size: 10px; line-height: 1.5; text-align: center; }
+.av-offline-tools { border-color: #bfdbfe; background: linear-gradient(135deg,#fff 55%,#eff6ff); }
+.av-offline-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.av-offline-cache-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 14px; padding: 11px 12px; border: 1px solid #dbeafe; border-radius: 9px; background: #f8fbff; }
+.av-offline-cache-row > div,.av-offline-session { display: grid; gap: 5px; }
+.av-offline-cache-row strong,.av-offline-session strong { font-size: 12px; }
+.av-offline-cache-row small,.av-offline-session small { color: var(--av-muted); font-size: 10px; }
+.av-offline-start { min-height: 40px; }
+.av-offline-attendance { border-color: #bfdbfe; }
+.av-offline-session { margin-top: 12px; padding: 12px; border: 1px solid #bfdbfe; border-radius: 9px; background: #f8fbff; }
+.av-qr-input { display: grid; gap: 6px; margin: 12px 0; color: #475569; font-size: 11px; font-weight: 650; }
+.av-qr-input textarea { width: 100%; padding: 9px; border: 1px solid var(--av-line); border-radius: 7px; color: var(--av-ink); font: inherit; font-size: 11px; }
+.av-qr-camera { display: block; width: min(320px,100%); margin: 12px auto; border-radius: 10px; background: #111827; }
+.av-qr-sheet { display: grid; justify-items: center; gap: 9px; text-align: center; }
+.av-qr-sheet h2,.av-qr-sheet p { margin: 0; }
+.av-qr-code { display: grid; max-width: 100%; place-items: center; margin: 8px 0; padding: 10px; border-radius: 12px; background: #fff; }
+.av-qr-caption { color: var(--av-muted); font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
 @keyframes av-slide-up { from { transform: translateY(28px); opacity: .6; } to { transform: translateY(0); opacity: 1; } }
 @media (max-width: 640px) {
   .av-root { padding: 18px 12px calc(82px + env(safe-area-inset-bottom)); }

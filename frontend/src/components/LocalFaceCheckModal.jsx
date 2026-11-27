@@ -3,7 +3,7 @@ import { verifyLocalBlinkGesture } from '../utils/faceBiometrics';
 import { captureLivenessEmbedding, encodeAlignedFaceReference } from '../utils/faceEmbedding';
 import './LocalFaceCheckModal.css';
 
-export default function LocalFaceCheckModal({ onResult, purpose = 'attendance', challenge }) {
+export default function LocalFaceCheckModal({ onResult, purpose = 'attendance', challenge, offline = false, offlinePasskey = false }) {
   const videoRef = useRef(null);
   const onResultRef = useRef(onResult);
   const [status, setStatus] = useState('Requesting camera permission…');
@@ -86,11 +86,19 @@ export default function LocalFaceCheckModal({ onResult, purpose = 'attendance', 
         </h2>
         <p>
           Center your face and blink both eyes once. {purpose === 'attendance'
-            ? 'Live face frames stay on this device; a 128D embedding is sent securely for 1:1 verification.'
+            ? offline
+              ? offlinePasskey
+                ? 'Face liveness and the 128D embedding are processed on this device. No image is sent; the session-bound passkey assertion can be queued offline, and the embedding is sent securely only after connectivity returns.'
+                : 'Face liveness and the 128D embedding are processed on this device only. No image or embedding is sent; your enrolled device key creates the attendance proof.'
+              : 'Live face frames stay on this device; a 128D embedding is sent securely for 1:1 verification.'
             : purpose === 'enrollment'
               ? 'One enrollment frame and its aligned crop are sent securely for'
               : 'A live face frame is sent over the secure connection for'}
-          {purpose === 'enrollment'
+          {offline && purpose === 'attendance'
+            ? offlinePasskey
+              ? ' The passkey assertion is bound to this session and can be synced after connectivity returns.'
+              : ' The BLE proof will be uploaded only after the ESP32 batch is synced.'
+            : purpose === 'enrollment'
             ? ' enrollment; the frame and derived 128D reference are stored encrypted.'
             : purpose === 'return'
               ? ' server-side verification against your encrypted enrollment reference; the live frame is not retained.'

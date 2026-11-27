@@ -1,4 +1,5 @@
 import csv
+import base64
 import hashlib
 import hmac
 import io
@@ -18,10 +19,16 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile, File
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+from cryptography.exceptions import InvalidSignature
 from cryptography.fernet import InvalidToken
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/attendance-v2", tags=["attendance-v2"])
+reverse_ble_router = APIRouter(prefix="/api/attendance", tags=["reverse-ble"])
 
 TABLES = {
     "attendance_v2_beacons": """
@@ -71,6 +78,7 @@ TABLES = {
             beacon_id TEXT NOT NULL, beacon_ids_json TEXT NOT NULL DEFAULT '[]',
             created_by TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('OPEN', 'CLOSED')),
             expires_at TEXT, current_nonce TEXT NOT NULL, nonce_expires_at TEXT NOT NULL,
+            ble_nonce TEXT NOT NULL DEFAULT '', ble_nonce_expires_at TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL, closed_at TEXT,
             PRIMARY KEY (college_id, id)
         )
@@ -107,9 +115,39 @@ TABLES = {
             webauthn_credential_id TEXT NOT NULL, public_key_cbor TEXT NOT NULL,
             sign_count INTEGER NOT NULL DEFAULT 0,
             reference_face_embedding_enc TEXT NOT NULL,
+            ble_secret_enc TEXT NOT NULL DEFAULT '',
             locked_at TEXT NOT NULL, approved_by TEXT NOT NULL,
             PRIMARY KEY (college_id, student_id),
             UNIQUE (college_id, webauthn_credential_id)
+        )
+    """,
+    "attendance_v2_ble_batches": """
+        CREATE TABLE IF NOT EXISTS attendance_v2_ble_batches (
+            college_id TEXT NOT NULL, batch_id TEXT NOT NULL, session_id TEXT NOT NULL,
+            beacon_id TEXT NOT NULL, imported_at TEXT NOT NULL,
+            PRIMARY KEY (college_id, batch_id)
+        )
+    """,
+    "attendance_v2_staff_offline_keys": """
+        CREATE TABLE IF NOT EXISTS attendance_v2_staff_offline_keys (
+            college_id TEXT NOT NULL, tenant_id TEXT NOT NULL, actor_id TEXT NOT NULL,
+            key_id TEXT NOT NULL, public_key_der TEXT NOT NULL, created_at TEXT NOT NULL,
+            revoked_at TEXT, PRIMARY KEY (college_id, actor_id, key_id)
+        )
+    """,
+    "attendance_v2_offline_session_metadata": """
+        CREATE TABLE IF NOT EXISTS attendance_v2_offline_session_metadata (
+            college_id TEXT NOT NULL, session_id TEXT NOT NULL, faculty_key_id TEXT NOT NULL,
+            offline_session_json TEXT NOT NULL, faculty_signature TEXT NOT NULL, created_at TEXT NOT NULL,
+            PRIMARY KEY (college_id, session_id)
+        )
+    """,
+    "attendance_v2_ios_ble_tokens": """
+        CREATE TABLE IF NOT EXISTS attendance_v2_ios_ble_tokens (
+            college_id TEXT NOT NULL, token_hash TEXT NOT NULL, session_id TEXT NOT NULL,
+            student_id TEXT NOT NULL, roll_id TEXT NOT NULL, expires_at TEXT NOT NULL,
+            consumed_at TEXT, created_at TEXT NOT NULL,
+            PRIMARY KEY (college_id, token_hash)
         )
     """,
     "attendance_v2_enrollment_windows": """
@@ -218,6 +256,7 @@ class RegistrationInput(BaseModel):
     challenge_id: str
     credential: dict
     reference_image_base64: str = Field(min_length=100, max_length=6_000_000)
+    ble_public_key: Optional[str] = Field(default=None, min_length=80, max_length=1024)
 
 
 class CheckInInput(BaseModel):
@@ -230,6 +269,32 @@ class CheckInInput(BaseModel):
     rssi: int
     live_image_base64: str = Field(min_length=100, max_length=6_000_000)
 
+
+class ReverseBleBatchInput(BaseModel):
+    batch_id: str = Field(min_length=16, max_length=80)
+    session_id: str = Field(min_length=4, max_length=100)
+    beacon_id: str = Field(min_length=4, max_length=100)
+    raw_records_json: str = Field(min_length=2, max_length=256_000)
+    esp32_batch_signature: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+    offline_session_json: Optional[str] = Field(default=None, min_length=2, max_length=128_000)
+    faculty_key_id: Optional[str] = Field(default=None, min_length=16, max_length=64)
+    faculty_signature: Optional[str] = Field(default=None, min_length=40, max_length=256)
+
+
+class OfflineFacultyKeyInput(BaseModel):
+    public_key: str = Field(min_length=80, max_length=1024)
+
+
+class OfflineStudentCheckInInput(BaseModel):
+    session_id: str = Field(min_length=4, max_length=100)
+    credential: dict
+    face_embedding: list[float] = Field(min_length=128, max_length=128)
+
+
+class IOSBleTokenInput(BaseModel):
+    session_nonce: str = Field(min_length=16, max_length=128)
+    credential: dict
+    live_image_base64: str = Field(min_length=100, max_length=6_000_000)
 
 def _now():
     return datetime.now(timezone.utc)
@@ -245,6 +310,18 @@ def _parse_time(value):
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     except (TypeError, ValueError):
         return None
+
+
+def _session_ble_expiry(session):
+    expires = _parse_time(session.get("expires_at"))
+    if expires:
+        return int(expires.timestamp())
+    created = _parse_time(session.get("created_at")) or _now()
+    return int((created + timedelta(hours=24)).timestamp())
+
+
+def _hmac_digest(key, message):
+    return hmac.new(key, message, hashlib.sha256).digest()
 
 
 def _webauthn_challenge(conn, backend, challenge_id, user_id, purpose):
@@ -292,6 +369,38 @@ def _require_attendance_enabled(request):
 
 def _new_id(prefix):
     return f"{prefix}-{uuid.uuid4().hex}"
+
+
+def _wrap_ble_secret(public_key_b64, secret):
+    try:
+        public_key_der = base64.b64decode(public_key_b64, validate=True)
+        public_key = serialization.load_der_public_key(public_key_der)
+    except (ValueError, TypeError) as error:
+        raise HTTPException(status_code=400, detail="The Android BLE key-agreement public key is invalid.") from error
+    if not isinstance(public_key, ec.EllipticCurvePublicKey) or not isinstance(public_key.curve, ec.SECP256R1):
+        raise HTTPException(status_code=400, detail="The BLE key-agreement key must use P-256.")
+    ephemeral_key = ec.generate_private_key(ec.SECP256R1())
+    shared_secret = ephemeral_key.exchange(ec.ECDH(), public_key)
+    salt = secrets.token_bytes(16)
+    wrapping_key = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        info=b"vidyut-attendance-ble-key-v1",
+    ).derive(shared_secret)
+    nonce = secrets.token_bytes(12)
+    aad = b"vidyut-attendance-ble-key-v1"
+    ciphertext = AESGCM(wrapping_key).encrypt(nonce, secret, aad)
+    ephemeral_public_key = ephemeral_key.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return {
+        "ble_key_ephemeral_public_key": base64.b64encode(ephemeral_public_key).decode("ascii"),
+        "ble_key_salt": base64.b64encode(salt).decode("ascii"),
+        "ble_key_nonce": base64.b64encode(nonce).decode("ascii"),
+        "ble_key_ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+    }
 
 
 def _new_beacon_credentials(conn, backend):
@@ -365,6 +474,10 @@ def _sync_v2_rls(conn, backend):
             _ensure_column(conn, backend, table_name, "department", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, backend, table_name, "year", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, backend, table_name, "division", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, backend, table_name, "ble_nonce", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, backend, table_name, "ble_nonce_expires_at", "TEXT NOT NULL DEFAULT ''")
+        elif table_name == "attendance_v2_student_devices":
+            _ensure_column(conn, backend, table_name, "ble_secret_enc", "TEXT NOT NULL DEFAULT ''")
         if backend["USE_POSTGRES"]:
             db_exec(conn, f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY")
             db_exec(conn, f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY")
@@ -1084,6 +1197,75 @@ def attendance_student_directory(
         conn.close()
 
 
+@router.get("/offline/roster")
+def get_offline_roster(
+    request: Request,
+    scope: str,
+    department: str = "",
+    year: str = "",
+    division: str = "",
+    hostel_block: str = "",
+    wing_name: str = "",
+):
+    normalized_scope = _validate_scope(scope)
+    if normalized_scope == "CLASS":
+        actor = _require_roles(request, "Faculty", "Dean")
+        _require_feature(request, "class_attendance")
+        if not department.strip() or not year.strip() or not division.strip():
+            raise HTTPException(status_code=400, detail="Department, year, and division are required.")
+        if str(actor["role"]).upper() == "FACULTY" and str(actor.get("department") or "").strip():
+            if str(actor["department"]).casefold() != department.strip().casefold():
+                raise HTTPException(status_code=403, detail="You cannot cache a roster outside your department.")
+        sql = """
+            SELECT user_id AS student_id, user_id AS roll_no, COALESCE(full_name, '') AS student_name
+            FROM users WHERE college_id = ? AND role = 'Student'
+              AND LOWER(TRIM(COALESCE(department, ''))) = LOWER(?)
+              AND LOWER(TRIM(COALESCE(year, ''))) = LOWER(?)
+              AND LOWER(TRIM(COALESCE(division, ''))) = LOWER(?)
+            ORDER BY UPPER(user_id), user_id LIMIT 201
+        """
+        params = (
+            request.app.state.attendance_v2_backend["ACTIVE_COLLEGE_ID"].get(),
+            department.strip(), year.strip(), division.strip(),
+        )
+    else:
+        actor = _require_roles(request, "Warden", "Dean")
+        _require_feature(request, "hostel_attendance")
+        block = str(actor.get("hostel_block") or "").strip() if str(actor["role"]).upper() == "WARDEN" else hostel_block.strip()
+        if not block or not wing_name.strip():
+            raise HTTPException(status_code=400, detail="Hostel block and wing are required.")
+        if str(actor["role"]).upper() == "WARDEN" and block.casefold() != hostel_block.strip().casefold() and hostel_block.strip():
+            raise HTTPException(status_code=403, detail="You cannot cache a roster outside your assigned hostel.")
+        sql = """
+            SELECT m.student_id, m.roll_no, m.student_name
+            FROM attendance_v2_hostel_wing_members m
+            WHERE m.college_id = ? AND LOWER(m.hostel_block) = LOWER(?)
+              AND (? = 'ALL' OR LOWER(m.wing_name) = LOWER(?))
+            ORDER BY m.room_no, UPPER(m.roll_no), m.roll_no LIMIT 201
+        """
+        params = (
+            request.app.state.attendance_v2_backend["ACTIVE_COLLEGE_ID"].get(),
+            block, wing_name.strip(), wing_name.strip(),
+        )
+    backend = request.app.state.attendance_v2_backend
+    conn = backend["get_conn"]()
+    try:
+        rows = backend["db_exec"](conn, sql, params).fetchall()
+        if len(rows) > 200:
+            raise HTTPException(status_code=422, detail="Offline capture supports at most 200 roster members.")
+        return {
+            "scope": normalized_scope,
+            "department": department.strip(),
+            "year": year.strip(),
+            "division": division.strip(),
+            "hostel_block": block if normalized_scope == "HOSTEL" else "",
+            "wing_name": wing_name.strip(),
+            "roster": [dict(row) for row in rows if row["student_id"]],
+        }
+    finally:
+        conn.close()
+
+
 def _add_students(conn, backend, course_id, students, actor=None):
     college_id = backend["ACTIVE_COLLEGE_ID"].get()
     added = 0
@@ -1380,14 +1562,19 @@ def start_session(body: SessionInput, request: Request):
         created_at = _now()
         session_id = _new_id("SES")
         expires_at = (created_at + timedelta(minutes=body.duration_minutes)).isoformat(timespec="seconds") if body.duration_minutes else None
+        ble_nonce = secrets.token_hex(4)
+        ble_nonce_expires_at = (
+            _parse_time(expires_at).isoformat(timespec="seconds")
+            if expires_at else (created_at + timedelta(hours=24)).isoformat(timespec="seconds")
+        )
         backend["db_exec"](
             conn,
             """
             INSERT INTO attendance_v2_sessions
                 (college_id, tenant_id, id, scope, course_id, department, year, division,
                  wing_name, hostel_block, beacon_id, beacon_ids_json, created_by, status,
-                 expires_at, current_nonce, nonce_expires_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)
+                 expires_at, current_nonce, nonce_expires_at, ble_nonce, ble_nonce_expires_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?)
             """,
             (
                 backend["ACTIVE_COLLEGE_ID"].get(), _tenant_id(request), session_id, scope,
@@ -1397,6 +1584,7 @@ def start_session(body: SessionInput, request: Request):
                 class_group["division"] if scope == "CLASS" else "",
                 wing_name, hostel_block, body.beacon_id, json.dumps(beacon_ids), actor["user_id"], expires_at,
                 secrets.token_urlsafe(24), (created_at + timedelta(seconds=30)).isoformat(timespec="seconds"),
+                ble_nonce, ble_nonce_expires_at,
                 created_at.isoformat(timespec="seconds"),
             ),
         )
@@ -1441,8 +1629,14 @@ def _get_session(conn, backend, session_id):
             session["nonce_expires_at"] = (now + timedelta(seconds=30)).isoformat(timespec="seconds")
             backend["db_exec"](
                 conn,
-                "UPDATE attendance_v2_sessions SET current_nonce = ?, nonce_expires_at = ? WHERE college_id = ? AND id = ?",
-                (session["current_nonce"], session["nonce_expires_at"], backend["ACTIVE_COLLEGE_ID"].get(), session_id),
+                """
+                UPDATE attendance_v2_sessions SET current_nonce = ?, nonce_expires_at = ?
+                WHERE college_id = ? AND id = ?
+                """,
+                (
+                    session["current_nonce"], session["nonce_expires_at"],
+                    backend["ACTIVE_COLLEGE_ID"].get(), session_id,
+                ),
             )
     return session
 
@@ -1450,6 +1644,916 @@ def _get_session(conn, backend, session_id):
 def _session_expired(session):
     expires = _parse_time(session.get("expires_at"))
     return bool(session.get("status") == "OPEN" and expires and expires <= _now())
+
+
+@reverse_ble_router.post("/offline/faculty-key")
+def register_offline_faculty_key(body: OfflineFacultyKeyInput, request: Request):
+    actor = _require_roles(request, "Faculty", "Warden", "Dean")
+    try:
+        public_der = base64.b64decode(body.public_key, validate=True)
+        public_key = serialization.load_der_public_key(public_der)
+    except (ValueError, TypeError) as error:
+        raise HTTPException(status_code=422, detail="The faculty offline public key is invalid.") from error
+    if not isinstance(public_key, ec.EllipticCurvePublicKey) or not isinstance(public_key.curve, ec.SECP256R1):
+        raise HTTPException(status_code=422, detail="A P-256 faculty signing key is required.")
+    key_id = hashlib.sha256(public_der).hexdigest()[:32]
+    backend = request.app.state.attendance_v2_backend
+    college_id = backend["ACTIVE_COLLEGE_ID"].get()
+    conn = backend["get_conn"]()
+    try:
+        existing = backend["db_exec"](
+            conn,
+            """
+            SELECT revoked_at FROM attendance_v2_staff_offline_keys
+            WHERE college_id = ? AND actor_id = ? AND key_id = ?
+            """,
+            (college_id, actor["user_id"], key_id),
+        ).fetchone()
+        if not existing:
+            backend["db_exec"](
+                conn,
+                """
+                INSERT INTO attendance_v2_staff_offline_keys
+                    (college_id, tenant_id, actor_id, key_id, public_key_der, created_at, revoked_at)
+                VALUES (?, ?, ?, ?, ?, ?, NULL)
+                """,
+                (
+                    college_id, _tenant_id(request), actor["user_id"], key_id,
+                    base64.b64encode(public_der).decode("ascii"), _now_text(),
+                ),
+            )
+        elif existing["revoked_at"]:
+            raise HTTPException(status_code=409, detail="This key was revoked. Create a new device key before registering again.")
+        conn.commit()
+        return {"success": True, "key_id": key_id}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@reverse_ble_router.delete("/offline/faculty-key/{key_id}")
+def revoke_offline_faculty_key(key_id: str, request: Request):
+    actor = _require_roles(request, "Faculty", "Warden", "Dean")
+    backend = request.app.state.attendance_v2_backend
+    conn = backend["get_conn"]()
+    try:
+        updated = backend["db_exec"](
+            conn,
+            """
+            UPDATE attendance_v2_staff_offline_keys SET revoked_at = ?
+            WHERE college_id = ? AND actor_id = ? AND key_id = ? AND revoked_at IS NULL
+            """,
+            (_now_text(), backend["ACTIVE_COLLEGE_ID"].get(), actor["user_id"], key_id),
+        )
+        conn.commit()
+        return {"success": True, "revoked": updated.rowcount > 0}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@reverse_ble_router.get("/sessions/{session_id}/ble")
+def get_reverse_ble_session(session_id: str, request: Request):
+    actor = _require_roles(request, "Student", "Faculty", "Warden", "Dean")
+    backend = request.app.state.attendance_v2_backend
+    conn = backend["get_conn"]()
+    try:
+        session = _get_session(conn, backend, session_id)
+        if session["status"] != "OPEN" or _session_expired(session):
+            raise HTTPException(status_code=409, detail="This attendance session is closed.")
+        if str(actor["role"]).upper() == "STUDENT":
+            roster = _session_roster(conn, backend, session)
+            if not any(str(item.get("student_id") or "").upper() == str(actor["user_id"]).upper() for item in roster):
+                raise HTTPException(status_code=403, detail="You are not enrolled in this attendance session.")
+        elif str(session["created_by"]).upper() != str(actor["user_id"]).upper() and str(actor["role"]).upper() != "DEAN":
+            raise HTTPException(status_code=403, detail="This session belongs to another staff member.")
+
+        beacon = _beacon(conn, backend, session["beacon_id"], session["scope"])
+        if not beacon["is_active"] or not beacon["signing_secret_enc"]:
+            raise HTTPException(status_code=409, detail="The active room beacon is not provisioned.")
+        secret_hex = backend["_beacon_signing_cipher"]().decrypt(
+            beacon["signing_secret_enc"].encode("ascii")
+        ).decode("ascii")
+        secret = bytes.fromhex(secret_hex)
+        location_id = int(beacon["minor"])
+        expiry = _session_ble_expiry(session)
+        nonce = bytes.fromhex(session["ble_nonce"])
+        unsigned = bytes((
+            0x56, 0x4e, (location_id >> 8) & 0xff, location_id & 0xff,
+        )) + nonce + expiry.to_bytes(4, "big")
+        signature = _hmac_digest(secret, unsigned)[:4]
+        packet = unsigned + signature
+        service_uuid = str(uuid.UUID(bytes=packet))
+        duration_seconds = max(1, expiry - int(_now().timestamp()))
+        start_message = "|".join((
+            session["id"], nonce.hex(), str(expiry), str(location_id),
+            str(duration_seconds), service_uuid,
+        )).encode("ascii")
+        conn.commit()
+        return {
+            "session_id": session["id"],
+            "location_id": location_id,
+            "session_nonce": nonce.hex(),
+            "expires_at": expiry,
+            "duration_seconds": duration_seconds,
+            "service_uuid": service_uuid,
+            "start_signature": _hmac_digest(secret, start_message).hex(),
+            "min_rssi": int(beacon["min_rssi"]),
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@reverse_ble_router.post("/sessions/{session_id}/ios-ble-token")
+def issue_ios_ble_token(session_id: str, body: IOSBleTokenInput, request: Request):
+    student = _require_roles(request, "Student")
+    backend = request.app.state.attendance_v2_backend
+    college_id = backend["ACTIVE_COLLEGE_ID"].get()
+    conn = backend["get_conn"]()
+    live_image = body.live_image_base64
+    body.live_image_base64 = ""
+    try:
+        session = _get_session(conn, backend, session_id)
+        if session["status"] != "OPEN" or _session_expired(session):
+            raise HTTPException(status_code=409, detail="This attendance session is closed.")
+        _require_feature(request, "class_attendance" if session["scope"] == "CLASS" else "hostel_attendance")
+        if (
+            body.session_nonce != session["current_nonce"]
+            or (_parse_time(session["nonce_expires_at"]) or _now()) <= _now()
+        ):
+            raise HTTPException(status_code=409, detail="The session challenge expired. Retry the passkey check.")
+
+        roster = _session_roster(conn, backend, session)
+        roster_entry = next(
+            (
+                item for item in roster
+                if str(item.get("student_id") or "").upper() == str(student["user_id"]).upper()
+            ),
+            None,
+        )
+        if not roster_entry:
+            raise HTTPException(status_code=403, detail="You are not enrolled in this attendance session.")
+        try:
+            roll_id = int(str(roster_entry["roll_no"]), 10)
+        except (KeyError, TypeError, ValueError) as error:
+            raise HTTPException(status_code=422, detail="This student does not have a numeric BLE roll ID.") from error
+        if not 0 <= roll_id <= 0xffffffff:
+            raise HTTPException(status_code=422, detail="This student does not have a numeric BLE roll ID.")
+
+        ble_nonce = bytes.fromhex(session["ble_nonce"])
+        ble_nonce_expiry = _parse_time(session["ble_nonce_expires_at"])
+        if len(ble_nonce) != 4 or not ble_nonce_expiry or ble_nonce_expiry <= _now():
+            raise HTTPException(status_code=409, detail="This session no longer accepts BLE attendance.")
+
+        device = backend["db_exec"](
+            conn,
+            """
+            SELECT * FROM attendance_v2_student_devices
+            WHERE college_id = ? AND UPPER(student_id) = ?
+            """,
+            (college_id, str(student["user_id"]).upper()),
+        ).fetchone()
+        if not device:
+            raise HTTPException(status_code=403, detail="Enroll an approved passkey and face reference before checking in.")
+        origin, rp_id = backend["expected_webauthn_origin"](request)
+        try:
+            verified = backend["verify_authentication_response"](
+                credential=body.credential,
+                expected_challenge=backend["base64url_to_bytes"](body.session_nonce),
+                expected_rp_id=rp_id,
+                expected_origin=origin,
+                credential_public_key=backend["base64url_to_bytes"](device["public_key_cbor"]),
+                credential_current_sign_count=int(device["sign_count"]),
+                require_user_verification=True,
+            )
+        except (backend["WebAuthnException"], ValueError, TypeError) as error:
+            raise HTTPException(status_code=403, detail="Hardware passkey assertion could not be verified.") from error
+
+        embedding_enc = backend["_compute_enrollment_embedding"](live_image)
+        live_image = None
+        candidate_bytes = backend["_embedding_cipher"]().decrypt(embedding_enc.encode("ascii"))
+        import numpy as np
+        candidate = np.frombuffer(candidate_bytes, dtype=np.float32)
+        matched = backend["_verify_embedding"](candidate.tolist(), device["reference_face_embedding_enc"])
+        del candidate, candidate_bytes, embedding_enc
+        if not matched:
+            raise HTTPException(status_code=403, detail="Face verification did not match the enrolled reference.")
+
+        token = secrets.token_bytes(8)
+        token_hash = hashlib.sha256(token).hexdigest()
+        now = _now()
+        expires_at = min(now + timedelta(seconds=90), ble_nonce_expiry)
+        created_at = _now_text()
+        backend["db_exec"](
+            conn,
+            """
+            INSERT INTO attendance_v2_ios_ble_tokens
+                (college_id, token_hash, session_id, student_id, roll_id, expires_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                college_id, token_hash, session["id"], student["user_id"],
+                str(roll_id), expires_at.isoformat(timespec="seconds"), created_at,
+            ),
+        )
+        backend["db_exec"](
+            conn,
+            """
+            UPDATE attendance_v2_student_devices SET sign_count = ?
+            WHERE college_id = ? AND UPPER(student_id) = ?
+            """,
+            (verified.new_sign_count, college_id, str(student["user_id"]).upper()),
+        )
+        conn.commit()
+        return {
+            "success": True,
+            "attendance_token": token.hex(),
+            "session_nonce": ble_nonce.hex(),
+            "expires_at": int(expires_at.timestamp()),
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        body.live_image_base64 = ""
+        live_image = None
+        conn.close()
+
+
+def _process_offline_signed_batch(body, request):
+    actor = _require_roles(request, "Faculty", "Warden", "Dean")
+    if not body.offline_session_json or not body.faculty_key_id or not body.faculty_signature:
+        raise HTTPException(status_code=400, detail="A signed offline session package is required.")
+    try:
+        session_data = json.loads(body.offline_session_json)
+    except json.JSONDecodeError as error:
+        raise HTTPException(status_code=400, detail="The offline session package is invalid JSON.") from error
+    if not isinstance(session_data, dict):
+        raise HTTPException(status_code=400, detail="The offline session package must be an object.")
+    canonical = json.dumps(session_data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    if canonical != body.offline_session_json:
+        raise HTTPException(status_code=400, detail="The offline session package is not canonically encoded.")
+    try:
+        signature = base64.b64decode(body.faculty_signature, validate=True)
+    except (ValueError, TypeError) as error:
+        raise HTTPException(status_code=400, detail="The faculty session signature is malformed.") from error
+
+    backend = request.app.state.attendance_v2_backend
+    college_id = backend["ACTIVE_COLLEGE_ID"].get()
+    conn = backend["get_conn"]()
+    try:
+        key_row = backend["db_exec"](
+            conn,
+            """
+            SELECT public_key_der FROM attendance_v2_staff_offline_keys
+            WHERE college_id = ? AND actor_id = ? AND key_id = ? AND revoked_at IS NULL
+            """,
+            (college_id, actor["user_id"], body.faculty_key_id),
+        ).fetchone()
+        if not key_row:
+            raise HTTPException(status_code=403, detail="This faculty signing key is not registered or has been revoked.")
+        try:
+            public_key = serialization.load_der_public_key(
+                base64.b64decode(key_row["public_key_der"], validate=True)
+            )
+            public_key.verify(signature, canonical.encode("utf-8"), ec.ECDSA(hashes.SHA256()))
+        except (ValueError, TypeError, InvalidSignature) as error:
+            raise HTTPException(status_code=403, detail="The offline session signature is invalid.") from error
+
+        if session_data.get("actor_id") != actor["user_id"]:
+            raise HTTPException(status_code=403, detail="The offline session belongs to another staff member.")
+        session_id = str(session_data.get("session_id") or "")
+        scope = _validate_scope(str(session_data.get("scope") or ""))
+        _require_feature(request, "class_attendance" if scope == "CLASS" else "hostel_attendance")
+        if len(session_id) < 4 or len(session_id) > 100 or session_id != body.session_id:
+            raise HTTPException(status_code=400, detail="The offline session ID does not match the batch.")
+        if body.beacon_id != session_data.get("beacon_id"):
+            raise HTTPException(status_code=403, detail="The batch beacon does not match the signed session.")
+        if scope == "CLASS" and str(actor["role"]).upper() not in {"FACULTY", "DEAN"}:
+            raise HTTPException(status_code=403, detail="Only Faculty or the Dean can sync a class session.")
+        if scope == "HOSTEL" and str(actor["role"]).upper() not in {"WARDEN", "DEAN"}:
+            raise HTTPException(status_code=403, detail="Only a Warden or the Dean can sync a hostel session.")
+
+        created_at = _parse_time(session_data.get("created_at"))
+        expires_at = _parse_time(session_data.get("expires_at"))
+        duration_seconds = session_data.get("duration_seconds")
+        if (
+            not created_at or not expires_at or expires_at <= created_at
+            or not isinstance(duration_seconds, int) or duration_seconds < 30 or duration_seconds > 86400
+            or abs((expires_at - created_at).total_seconds() - duration_seconds) > 2
+            or created_at > _now() + timedelta(minutes=5)
+            or _now() - created_at > timedelta(days=7)
+        ):
+            raise HTTPException(status_code=422, detail="The offline session timestamps or duration are invalid or too old.")
+        try:
+            nonce = bytes.fromhex(str(session_data.get("session_nonce") or ""))
+            location_id = int(session_data.get("location_id"))
+            passkey_challenge = backend["base64url_to_bytes"](
+                str(session_data.get("offline_passkey_challenge") or "")
+            )
+        except (TypeError, ValueError) as error:
+            raise HTTPException(
+                status_code=422,
+                detail="The offline session nonce, passkey challenge, or location is invalid.",
+            ) from error
+        if len(nonce) != 4 or len(passkey_challenge) != 32 or not 0 <= location_id <= 65535:
+            raise HTTPException(
+                status_code=422,
+                detail="The offline session nonce, passkey challenge, or location is invalid.",
+            )
+
+        beacon_ids = session_data.get("beacon_ids")
+        if not isinstance(beacon_ids, list) or not beacon_ids or len(beacon_ids) > 20 or body.beacon_id not in beacon_ids:
+            raise HTTPException(status_code=422, detail="The signed session does not include this beacon.")
+        beacon = _beacon(conn, backend, body.beacon_id, scope)
+        if not beacon["is_active"] or not beacon["signing_secret_enc"] or int(beacon["minor"]) != location_id:
+            raise HTTPException(status_code=403, detail="The selected beacon is inactive or its location does not match.")
+        try:
+            beacon_secret = bytes.fromhex(
+                backend["_beacon_signing_cipher"]().decrypt(
+                    beacon["signing_secret_enc"].encode("ascii")
+                ).decode("ascii")
+            )
+        except (ValueError, TypeError, UnicodeDecodeError, InvalidToken) as error:
+            raise HTTPException(status_code=503, detail="The ESP32 signing key could not be loaded.") from error
+        expected_batch_signature = _hmac_digest(
+            beacon_secret, body.raw_records_json.encode("utf-8")
+        ).hex()
+        if not hmac.compare_digest(expected_batch_signature, body.esp32_batch_signature.lower()):
+            raise HTTPException(status_code=403, detail="The ESP32 batch signature is invalid.")
+        existing_batch = backend["db_exec"](
+            conn,
+            """
+            SELECT session_id, beacon_id FROM attendance_v2_ble_batches
+            WHERE college_id = ? AND batch_id = ?
+            """,
+            (college_id, body.batch_id),
+        ).fetchone()
+        if existing_batch:
+            if existing_batch["session_id"] == session_id and existing_batch["beacon_id"] == body.beacon_id:
+                conn.commit()
+                return {"success": True, "accepted": 0, "rejected": [], "duplicate_batch": True}
+            raise HTTPException(status_code=409, detail="This batch ID is already assigned to another session or beacon.")
+        existing_session = backend["db_exec"](
+            conn,
+            "SELECT 1 FROM attendance_v2_sessions WHERE college_id = ? AND id = ?",
+            (college_id, session_id),
+        ).fetchone()
+        if existing_session:
+            raise HTTPException(status_code=409, detail="This offline session has already been reconciled.")
+
+        roster = session_data.get("roster")
+        if not isinstance(roster, list) or not roster or len(roster) > 200:
+            raise HTTPException(status_code=422, detail="The signed offline roster must contain 1 to 200 students.")
+        roster_by_roll = {}
+        for item in roster:
+            if not isinstance(item, dict):
+                raise HTTPException(status_code=422, detail="The signed offline roster contains an invalid entry.")
+            student_id = str(item.get("student_id") or "")
+            roll_no = str(item.get("roll_no") or "")
+            try:
+                roll_id = int(roll_no, 10)
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail="Offline BLE requires numeric 32-bit student roll IDs.") from error
+            if not student_id or not 0 <= roll_id <= 0xffffffff or roll_id in roster_by_roll:
+                raise HTTPException(status_code=422, detail="The signed offline roster contains duplicate or invalid roll IDs.")
+            if scope == "CLASS":
+                department = str(session_data.get("department") or "").strip()
+                year = str(session_data.get("year") or "").strip()
+                division = str(session_data.get("division") or "").strip()
+                if not department or not year or not division:
+                    raise HTTPException(status_code=422, detail="The signed class session must identify a complete division.")
+                student_row = backend["db_exec"](
+                    conn,
+                    """
+                    SELECT user_id, full_name FROM users
+                    WHERE college_id = ? AND role = 'Student' AND UPPER(user_id) = ?
+                      AND LOWER(TRIM(COALESCE(department, ''))) = LOWER(?)
+                      AND LOWER(TRIM(COALESCE(year, ''))) = LOWER(?)
+                      AND LOWER(TRIM(COALESCE(division, ''))) = LOWER(?)
+                    """,
+                    (college_id, student_id.upper(), department, year, division),
+                ).fetchone()
+            else:
+                hostel_block = str(session_data.get("hostel_block") or "").strip()
+                wing_name = str(session_data.get("wing_name") or "").strip()
+                if not hostel_block or not wing_name:
+                    raise HTTPException(status_code=422, detail="The signed hostel session must identify a hostel and wing.")
+                if str(actor["role"]).upper() == "WARDEN" and str(actor.get("hostel_block") or "").casefold() != hostel_block.casefold():
+                    raise HTTPException(status_code=403, detail="The offline session is outside your assigned hostel.")
+                student_row = backend["db_exec"](
+                    conn,
+                    """
+                    SELECT u.user_id, u.full_name FROM attendance_v2_hostel_wing_members m
+                    JOIN users u ON u.college_id = m.college_id AND UPPER(u.user_id) = UPPER(m.student_id)
+                    WHERE m.college_id = ? AND UPPER(m.student_id) = ?
+                      AND LOWER(m.hostel_block) = LOWER(?)
+                      AND (? = 'ALL' OR LOWER(m.wing_name) = LOWER(?))
+                    """,
+                    (college_id, student_id, hostel_block, wing_name.upper(), wing_name),
+                ).fetchone()
+            if not student_row or str(student_row["user_id"]).upper() != student_id.upper():
+                raise HTTPException(status_code=403, detail="A roster member is no longer authorized for this offline session.")
+            if str(student_row["user_id"]) != roll_no:
+                raise HTTPException(status_code=422, detail="The BLE roll ID must match the student's account ID.")
+            roster_by_roll[roll_id] = {
+                "student_id": student_row["user_id"],
+                "roll_no": roll_no,
+                "student_name": str(item.get("student_name") or student_row["full_name"] or ""),
+            }
+
+        try:
+            records = json.loads(body.raw_records_json)
+        except json.JSONDecodeError as error:
+            raise HTTPException(status_code=400, detail="The attendance batch JSON is invalid.") from error
+        if not isinstance(records, list) or not records or len(records) > 200:
+            raise HTTPException(status_code=400, detail="A batch must contain 1 to 200 attendance records.")
+
+        department = str(session_data.get("department") or "").strip()
+        year = str(session_data.get("year") or "").strip()
+        division = str(session_data.get("division") or "").strip()
+        wing_name = str(session_data.get("wing_name") or "").strip()
+        hostel_block = str(session_data.get("hostel_block") or "").strip()
+        created_text = created_at.isoformat(timespec="seconds")
+        expires_text = expires_at.isoformat(timespec="seconds")
+        backend["db_exec"](
+            conn,
+            """
+            INSERT INTO attendance_v2_sessions
+                (college_id, tenant_id, id, scope, course_id, department, year, division,
+                 wing_name, hostel_block, beacon_id, beacon_ids_json, created_by, status,
+                 expires_at, current_nonce, nonce_expires_at, ble_nonce, ble_nonce_expires_at,
+                 created_at, closed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CLOSED', ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                college_id, _tenant_id(request), session_id, scope,
+                session_data.get("course_id") if scope == "CLASS" else None,
+                department, year, division, wing_name, hostel_block, body.beacon_id,
+                json.dumps(beacon_ids), actor["user_id"], expires_text,
+                secrets.token_urlsafe(24), expires_text, nonce.hex(), expires_text,
+                created_text, expires_text,
+            ),
+        )
+        backend["db_exec"](
+            conn,
+            """
+            INSERT INTO attendance_v2_offline_session_metadata
+                (college_id, session_id, faculty_key_id, offline_session_json, faculty_signature, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                college_id, session_id, body.faculty_key_id,
+                body.offline_session_json, body.faculty_signature, created_text,
+            ),
+        )
+        for item in roster_by_roll.values():
+            backend["db_exec"](
+                conn,
+                """
+                INSERT INTO attendance_v2_session_roster
+                    (college_id, tenant_id, session_id, student_id, roll_no, student_name, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    college_id, _tenant_id(request), session_id, item["student_id"],
+                    item["roll_no"], item["student_name"], created_text,
+                ),
+            )
+
+        accepted = []
+        rejected = []
+        seen_token_hashes = set()
+        for record in records:
+            if not isinstance(record, dict):
+                rejected.append({"reason": "malformed"})
+                continue
+            try:
+                roll_id = int(record["student_roll_id"])
+                rssi = int(record["rssi"])
+                record_nonce = bytes.fromhex(str(record["session_nonce"]))
+                proof = bytes.fromhex(str(record["proof"]))
+            except (KeyError, TypeError, ValueError):
+                rejected.append({"reason": "malformed"})
+                continue
+            if not 0 <= roll_id <= 0xffffffff or len(record_nonce) != 4 or len(proof) != 8:
+                rejected.append({"reason": "malformed"})
+                continue
+            student = roster_by_roll.get(roll_id)
+            if not student:
+                rejected.append({"student_roll_id": roll_id, "reason": "not_enrolled"})
+                continue
+            if record_nonce != nonce:
+                rejected.append({"student_roll_id": roll_id, "reason": "stale_nonce"})
+                continue
+            if rssi < int(beacon["min_rssi"]):
+                rejected.append({"student_roll_id": roll_id, "reason": "weak_signal"})
+                continue
+            token_hash = hashlib.sha256(proof).hexdigest()
+            token_row = backend["db_exec"](
+                conn,
+                """
+                SELECT token_hash FROM attendance_v2_ios_ble_tokens
+                WHERE college_id = ? AND token_hash = ? AND session_id = ?
+                  AND UPPER(student_id) = UPPER(?) AND roll_id = ?
+                  AND consumed_at IS NULL AND expires_at > ?
+                """,
+                (
+                    college_id, token_hash, session["id"], student["student_id"],
+                    str(roll_id), _now_text(),
+                ),
+            ).fetchone()
+            if token_row:
+                if token_hash in seen_token_hashes:
+                    rejected.append({"student_roll_id": roll_id, "reason": "duplicate_token"})
+                    continue
+                seen_token_hashes.add(token_hash)
+                accepted.append((student, rssi, token_hash))
+                continue
+            device = backend["db_exec"](
+                conn,
+                """
+                SELECT ble_secret_enc FROM attendance_v2_student_devices
+                WHERE college_id = ? AND UPPER(student_id) = ?
+                """,
+                (college_id, student["student_id"].upper()),
+            ).fetchone()
+            if not device or not device["ble_secret_enc"]:
+                rejected.append({"student_roll_id": roll_id, "reason": "device_not_enrolled"})
+                continue
+            try:
+                student_secret = backend["_embedding_cipher"]().decrypt(
+                    device["ble_secret_enc"].encode("ascii")
+                )
+            except (ValueError, InvalidToken) as error:
+                raise HTTPException(status_code=503, detail="A student BLE key could not be loaded.") from error
+            expected_proof = _hmac_digest(student_secret, nonce + roll_id.to_bytes(4, "big"))[:8]
+            if not hmac.compare_digest(expected_proof, proof):
+                rejected.append({"student_roll_id": roll_id, "reason": "invalid_proof"})
+                continue
+            accepted.append((student, rssi))
+        marked_at = _now_text()
+        for student, rssi in accepted:
+            backend["db_exec"](
+                conn,
+                """
+                INSERT INTO attendance_v2_records
+                    (college_id, id, session_id, student_id, roll_no, status, method, measured_rssi, marked_at)
+                VALUES (?, ?, ?, ?, ?, 'PRESENT', 'BLE_REVERSE', ?, ?)
+                """,
+                (
+                    college_id, _new_id("REC"), session_id, student["student_id"],
+                    student["roll_no"], rssi, marked_at,
+                ),
+            )
+        backend["db_exec"](
+            conn,
+            """
+            INSERT INTO attendance_v2_ble_batches
+                (college_id, batch_id, session_id, beacon_id, imported_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (college_id, body.batch_id, session_id, body.beacon_id, marked_at),
+        )
+        conn.commit()
+        return {
+            "success": True,
+            "accepted": len(accepted),
+            "rejected": rejected,
+            "offline_session": True,
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _process_reverse_ble_batch(body, request, require_faculty):
+    if require_faculty and body.offline_session_json:
+        return _process_offline_signed_batch(body, request)
+    if require_faculty:
+        actor = _require_roles(request, "Faculty", "Warden", "Dean")
+    backend = request.app.state.attendance_v2_backend
+    college_id = backend["ACTIVE_COLLEGE_ID"].get()
+    conn = backend["get_conn"]()
+    try:
+        if len(body.raw_records_json.encode("utf-8")) > 256_000:
+            raise HTTPException(status_code=413, detail="The attendance batch is too large.")
+        try:
+            records = json.loads(body.raw_records_json)
+        except json.JSONDecodeError as error:
+            raise HTTPException(status_code=400, detail="The attendance batch JSON is invalid.") from error
+        if not isinstance(records, list) or not records or len(records) > 200:
+            raise HTTPException(status_code=400, detail="A batch must contain 1 to 200 attendance records.")
+
+        session = _get_session(conn, backend, body.session_id)
+        if session["status"] != "OPEN" or _session_expired(session):
+            raise HTTPException(status_code=409, detail="This attendance session is closed.")
+        _require_feature(request, "class_attendance" if session["scope"] == "CLASS" else "hostel_attendance")
+        if require_faculty and str(session["created_by"]).upper() != str(actor["user_id"]).upper() and str(actor["role"]).upper() != "DEAN":
+            raise HTTPException(status_code=403, detail="This session belongs to another staff member.")
+        allowed_beacons = json.loads(session.get("beacon_ids_json") or "[]") or [session["beacon_id"]]
+        if body.beacon_id not in allowed_beacons:
+            raise HTTPException(status_code=403, detail="This beacon is not assigned to the attendance session.")
+        beacon = _beacon(conn, backend, body.beacon_id, session["scope"])
+        if not beacon["is_active"] or not beacon["signing_secret_enc"]:
+            raise HTTPException(status_code=403, detail="The ESP32 beacon is inactive or not provisioned.")
+        try:
+            beacon_secret_hex = backend["_beacon_signing_cipher"]().decrypt(
+                beacon["signing_secret_enc"].encode("ascii")
+            ).decode("ascii")
+            beacon_secret = bytes.fromhex(beacon_secret_hex)
+        except (ValueError, TypeError, UnicodeDecodeError, InvalidToken) as error:
+            raise HTTPException(status_code=503, detail="The ESP32 signing key could not be loaded.") from error
+        expected_batch_signature = _hmac_digest(
+            beacon_secret, body.raw_records_json.encode("utf-8")
+        ).hex()
+        if not hmac.compare_digest(expected_batch_signature, body.esp32_batch_signature.lower()):
+            raise HTTPException(status_code=403, detail="The ESP32 batch signature is invalid.")
+
+        existing_batch = backend["db_exec"](
+            conn,
+            """
+            SELECT session_id, beacon_id FROM attendance_v2_ble_batches
+            WHERE college_id = ? AND batch_id = ?
+            """,
+            (college_id, body.batch_id),
+        ).fetchone()
+        if existing_batch:
+            if existing_batch["session_id"] == body.session_id and existing_batch["beacon_id"] == body.beacon_id:
+                conn.commit()
+                return {"success": True, "accepted": 0, "rejected": [], "duplicate_batch": True}
+            raise HTTPException(status_code=409, detail="This batch ID is already assigned to another session or beacon.")
+
+        nonce = bytes.fromhex(session["ble_nonce"])
+        nonce_expiry = _parse_time(session.get("ble_nonce_expires_at"))
+        if not nonce_expiry or nonce_expiry <= _now():
+            raise HTTPException(status_code=409, detail="The BLE session nonce has expired.")
+        roster = _session_roster(conn, backend, session)
+        by_roll = {}
+        for item in roster:
+            try:
+                numeric_roll = int(str(item["roll_no"]), 10)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= numeric_roll <= 0xffffffff:
+                by_roll[numeric_roll] = item
+
+        accepted = []
+        rejected = []
+        for record in records:
+            if not isinstance(record, dict):
+                rejected.append({"reason": "malformed"})
+                continue
+            try:
+                roll_id = int(record["student_roll_id"])
+                rssi = int(record["rssi"])
+                record_nonce = bytes.fromhex(str(record["session_nonce"]))
+                proof = bytes.fromhex(str(record["proof"]))
+            except (KeyError, TypeError, ValueError):
+                rejected.append({"reason": "malformed"})
+                continue
+            if not 0 <= roll_id <= 0xffffffff or len(record_nonce) != 4 or len(proof) != 8:
+                rejected.append({"reason": "malformed"})
+                continue
+            student = by_roll.get(roll_id)
+            if not student or not student.get("student_id"):
+                rejected.append({"student_roll_id": roll_id, "reason": "not_enrolled"})
+                continue
+            if record_nonce != nonce:
+                rejected.append({"student_roll_id": roll_id, "reason": "stale_nonce"})
+                continue
+            if rssi < int(beacon["min_rssi"]):
+                rejected.append({"student_roll_id": roll_id, "reason": "weak_signal"})
+                continue
+            device = backend["db_exec"](
+                conn,
+                """
+                SELECT ble_secret_enc FROM attendance_v2_student_devices
+                WHERE college_id = ? AND UPPER(student_id) = ?
+                """,
+                (college_id, str(student["student_id"]).upper()),
+            ).fetchone()
+            if not device or not device["ble_secret_enc"]:
+                rejected.append({"student_roll_id": roll_id, "reason": "device_not_enrolled"})
+                continue
+            try:
+                student_secret = backend["_embedding_cipher"]().decrypt(
+                    device["ble_secret_enc"].encode("ascii")
+                )
+            except (ValueError, InvalidToken) as error:
+                raise HTTPException(status_code=503, detail="A student BLE key could not be loaded.") from error
+            signed_message = nonce + roll_id.to_bytes(4, "big")
+            expected_proof = _hmac_digest(student_secret, signed_message)[:8]
+            if not hmac.compare_digest(expected_proof, proof):
+                rejected.append({"student_roll_id": roll_id, "reason": "invalid_proof"})
+                continue
+            accepted.append((student, rssi, None))
+
+        now = _now_text()
+        for student, rssi, token_hash in accepted:
+            current = backend["db_exec"](
+                conn,
+                """
+                SELECT method, measured_rssi FROM attendance_v2_records
+                WHERE college_id = ? AND session_id = ? AND student_id = ?
+                """,
+                (college_id, session["id"], student["student_id"]),
+            ).fetchone()
+            if current and current["method"] == "MANUAL_OVERRIDE":
+                continue
+            if current and current["measured_rssi"] is not None and int(current["measured_rssi"]) >= rssi:
+                continue
+            if token_hash:
+                consumed = backend["db_exec"](
+                    conn,
+                    """
+                    UPDATE attendance_v2_ios_ble_tokens SET consumed_at = ?
+                    WHERE college_id = ? AND token_hash = ? AND consumed_at IS NULL AND expires_at > ?
+                    """,
+                    (now, college_id, token_hash, now),
+                )
+                if consumed.rowcount != 1:
+                    continue
+            backend["db_exec"](
+                conn,
+                """
+                INSERT INTO attendance_v2_records
+                    (college_id, id, session_id, student_id, roll_no, status, method, measured_rssi, marked_at)
+                VALUES (?, ?, ?, ?, ?, 'PRESENT', 'BLE_REVERSE', ?, ?)
+                ON CONFLICT (session_id, student_id) DO UPDATE SET
+                    status = 'PRESENT', method = 'BLE_REVERSE',
+                    measured_rssi = excluded.measured_rssi, marked_at = excluded.marked_at
+                """,
+                (
+                    college_id, _new_id("REC"), session["id"], student["student_id"],
+                    student["roll_no"], rssi, now,
+                ),
+            )
+        backend["db_exec"](
+            conn,
+            """
+            INSERT INTO attendance_v2_ble_batches
+                (college_id, batch_id, session_id, beacon_id, imported_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (college_id, body.batch_id, session["id"], body.beacon_id, now),
+        )
+        conn.commit()
+        return {"success": True, "accepted": len(accepted), "rejected": rejected}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@reverse_ble_router.post("/esp32-batch")
+def ingest_reverse_ble_batch(body: ReverseBleBatchInput, request: Request):
+    return _process_reverse_ble_batch(body, request, require_faculty=False)
+
+
+@reverse_ble_router.post("/faculty-offline-sync")
+def sync_reverse_ble_batch(body: ReverseBleBatchInput, request: Request):
+    return _process_reverse_ble_batch(body, request, require_faculty=True)
+
+
+@reverse_ble_router.post("/student-offline-sync")
+def sync_student_offline_checkin(body: OfflineStudentCheckInInput, request: Request):
+    student = _require_roles(request, "Student")
+    backend = request.app.state.attendance_v2_backend
+    college_id = backend["ACTIVE_COLLEGE_ID"].get()
+    conn = backend["get_conn"]()
+    try:
+        session = backend["db_exec"](
+            conn,
+            """
+            SELECT s.*, m.offline_session_json
+            FROM attendance_v2_sessions s
+            JOIN attendance_v2_offline_session_metadata m
+              ON m.college_id = s.college_id AND m.session_id = s.id
+            WHERE s.college_id = ? AND s.id = ?
+            """,
+            (college_id, body.session_id),
+        ).fetchone()
+        if not session:
+            raise HTTPException(status_code=404, detail="This offline session has not been synced by Faculty yet.")
+        offline_expires_at = _parse_time(session["expires_at"])
+        if (
+            session["status"] != "CLOSED"
+            or not offline_expires_at
+            or _now() > offline_expires_at + timedelta(days=7)
+        ):
+            raise HTTPException(status_code=409, detail="This offline check-in window is closed.")
+        _require_feature(request, "class_attendance" if session["scope"] == "CLASS" else "hostel_attendance")
+        roster_entry = backend["db_exec"](
+            conn,
+            """
+            SELECT student_id, roll_no FROM attendance_v2_session_roster
+            WHERE college_id = ? AND session_id = ? AND UPPER(student_id) = ?
+            """,
+            (college_id, body.session_id, str(student["user_id"]).upper()),
+        ).fetchone()
+        if not roster_entry:
+            raise HTTPException(status_code=403, detail="You are not on this offline attendance roster.")
+        current = backend["db_exec"](
+            conn,
+            """
+            SELECT method, status FROM attendance_v2_records
+            WHERE college_id = ? AND session_id = ? AND UPPER(student_id) = ?
+            """,
+            (college_id, body.session_id, str(student["user_id"]).upper()),
+        ).fetchone()
+        if current and current["method"] == "MANUAL_OVERRIDE":
+            return {"success": True, "status": current["status"], "preserved_manual_override": True}
+        if current and current["method"] == "BLE_QR_PASSKEY":
+            return {"success": True, "status": "PRESENT", "duplicate": True}
+
+        try:
+            session_data = json.loads(session["offline_session_json"])
+            challenge = backend["base64url_to_bytes"](
+                str(session_data["offline_passkey_challenge"])
+            )
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise HTTPException(status_code=503, detail="The offline session passkey challenge could not be loaded.") from error
+        if len(challenge) != 32 or len(body.face_embedding) != 128:
+            raise HTTPException(status_code=422, detail="The offline passkey proof has invalid dimensions.")
+        import math
+        if any(not math.isfinite(value) for value in body.face_embedding):
+            raise HTTPException(status_code=422, detail="The offline face embedding contains invalid values.")
+        device = backend["db_exec"](
+            conn,
+            """
+            SELECT * FROM attendance_v2_student_devices
+            WHERE college_id = ? AND UPPER(student_id) = ?
+            """,
+            (college_id, str(student["user_id"]).upper()),
+        ).fetchone()
+        if not device:
+            raise HTTPException(status_code=403, detail="Enroll an approved passkey and face reference before checking in.")
+        origin, rp_id = backend["expected_webauthn_origin"](request)
+        try:
+            verified = backend["verify_authentication_response"](
+                credential=body.credential,
+                expected_challenge=challenge,
+                expected_rp_id=rp_id,
+                expected_origin=origin,
+                credential_public_key=backend["base64url_to_bytes"](device["public_key_cbor"]),
+                credential_current_sign_count=int(device["sign_count"]),
+                require_user_verification=True,
+            )
+        except (backend["WebAuthnException"], ValueError, TypeError) as error:
+            raise HTTPException(status_code=403, detail="The offline passkey assertion could not be verified.") from error
+        if not backend["_verify_embedding"](
+            body.face_embedding, device["reference_face_embedding_enc"]
+        ):
+            raise HTTPException(status_code=403, detail="Offline face verification did not match the enrolled reference.")
+        marked_at = _now_text()
+        if current:
+            backend["db_exec"](
+                conn,
+                """
+                UPDATE attendance_v2_records SET status = 'PRESENT', method = 'BLE_QR_PASSKEY',
+                    marked_at = ? WHERE college_id = ? AND session_id = ? AND UPPER(student_id) = ?
+                """,
+                (marked_at, college_id, body.session_id, str(student["user_id"]).upper()),
+            )
+        else:
+            backend["db_exec"](
+                conn,
+                """
+                INSERT INTO attendance_v2_records
+                    (college_id, id, session_id, student_id, roll_no, status, method, measured_rssi, marked_at)
+                VALUES (?, ?, ?, ?, ?, 'PRESENT', 'BLE_QR_PASSKEY', NULL, ?)
+                """,
+                (
+                    college_id, _new_id("REC"), body.session_id, student["user_id"],
+                    roster_entry["roll_no"], marked_at,
+                ),
+            )
+        backend["db_exec"](
+            conn,
+            """
+            UPDATE attendance_v2_student_devices SET sign_count = ?
+            WHERE college_id = ? AND UPPER(student_id) = ?
+            """,
+            (verified.new_sign_count, college_id, str(student["user_id"]).upper()),
+        )
+        conn.commit()
+        return {"success": True, "status": "PRESENT", "marked_at": marked_at}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 @router.get("/sessions")
@@ -2526,23 +3630,33 @@ def complete_device_enrollment(body: RegistrationInput, request: Request):
             raise HTTPException(status_code=400, detail="Passkey enrollment could not be verified.") from error
         embedding_enc = backend["_compute_enrollment_embedding"](body.reference_image_base64)
         credential_id = backend["bytes_to_base64url"](verified.credential_id)
+        ble_secret = secrets.token_bytes(32) if body.ble_public_key else None
+        ble_secret_wrapped = (
+            _wrap_ble_secret(body.ble_public_key, ble_secret)
+            if ble_secret and body.ble_public_key else {}
+        )
+        ble_secret_enc = (
+            backend["_embedding_cipher"]().encrypt(ble_secret).decode("ascii")
+            if ble_secret else ""
+        )
         backend["db_exec"](
             conn,
             """
             INSERT INTO attendance_v2_student_devices
                 (college_id, student_id, webauthn_credential_id, public_key_cbor, sign_count,
-                 reference_face_embedding_enc,                  locked_at, approved_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 reference_face_embedding_enc, ble_secret_enc, locked_at, approved_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (college_id, student_id) DO UPDATE SET
                 webauthn_credential_id = excluded.webauthn_credential_id,
                 public_key_cbor = excluded.public_key_cbor, sign_count = excluded.sign_count,
                 reference_face_embedding_enc = excluded.reference_face_embedding_enc,
+                ble_secret_enc = excluded.ble_secret_enc,
                 locked_at = excluded.locked_at, approved_by = excluded.approved_by
             """,
             (
                 backend["ACTIVE_COLLEGE_ID"].get(), student["user_id"], credential_id,
                 backend["bytes_to_base64url"](verified.credential_public_key),
-                verified.sign_count, embedding_enc, _now_text(), window["approved_by"],
+                verified.sign_count, embedding_enc, ble_secret_enc, _now_text(), window["approved_by"],
             ),
         )
         backend["db_exec"](
@@ -2556,7 +3670,10 @@ def complete_device_enrollment(body: RegistrationInput, request: Request):
             (backend["ACTIVE_COLLEGE_ID"].get(), student["user_id"].upper()),
         )
         conn.commit()
-        return {"success": True, "device_locked": True}
+        result = {"success": True, "device_locked": True, "reverse_ble_enabled": bool(ble_secret)}
+        if ble_secret and body.ble_public_key:
+            result.update(ble_secret_wrapped)
+        return result
     except Exception:
         conn.rollback()
         raise
@@ -2987,3 +4104,4 @@ def install(app, backend):
     finally:
         conn.close()
     app.include_router(router)
+    app.include_router(reverse_ble_router)

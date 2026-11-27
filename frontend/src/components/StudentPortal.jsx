@@ -1179,7 +1179,7 @@ export default function StudentPortal({ user, apiUrl, onUserUpdate, onLogout, mo
               </Suspense>
             )}
             {showAttendanceV2 && page === 'attendance_v2' && (
-              <StudentAttendanceV2 apiUrl={apiUrl} modules={modules} />
+              <StudentAttendanceV2 apiUrl={apiUrl} modules={modules} user={user} />
             )}
             {showOutpass && page === 'leave_pass' && !isDayScholar && (
               <Suspense fallback={<ListRowSkeleton count={3} />}>
