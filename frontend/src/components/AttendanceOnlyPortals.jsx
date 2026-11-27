@@ -48,7 +48,7 @@ mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
 emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
 -----END CERTIFICATE-----`;
 
-async function readSerialProvisioningResponse(reader) {
+async function readSerialProvisioningResponse(reader, onLine) {
   const decoder = new TextDecoder();
   let pending = '';
   while (true) {
@@ -58,7 +58,9 @@ async function readSerialProvisioningResponse(reader) {
     const lines = pending.split(/\r?\n/);
     pending = lines.pop() || '';
     if (pending.length > 4096) throw new Error('ESP32 sent an invalid serial response.');
+    if (pending.trim()) onLine(pending.trim());
     for (const line of lines) {
+      if (line.trim()) onLine(line.trim());
       let response;
       try {
         response = JSON.parse(line);
@@ -69,6 +71,22 @@ async function readSerialProvisioningResponse(reader) {
       if (response.status === 'ERROR') throw new Error(response.error || 'ESP32 rejected the configuration.');
     }
   }
+}
+
+function waitForSerialResponse(responsePromise, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const timerId = window.setTimeout(() => resolve(null), timeoutMs);
+    responsePromise.then(
+      (response) => {
+        window.clearTimeout(timerId);
+        resolve(response);
+      },
+      (error) => {
+        window.clearTimeout(timerId);
+        reject(error);
+      }
+    );
+  });
 }
 
 async function requestJson(apiUrl, path, options = {}) {
@@ -708,9 +726,6 @@ function BeaconManager({ apiUrl, scope }) {
     let timeoutId;
     try {
       port = await navigator.serial.requestPort();
-      await port.open({ baudRate: 115200 });
-      await new Promise((resolve) => window.setTimeout(resolve, 2000));
-
       let credentials = knownProvisioning?.id === beacon.id
         && knownProvisioning.provisioning_secret ? knownProvisioning : null;
       if (!credentials) {
@@ -736,15 +751,35 @@ function BeaconManager({ apiUrl, scope }) {
         api_base_url: settings.apiBaseUrl,
         root_ca_pem: ISRG_ROOT_X1
       };
+      await port.open({ baudRate: 115200 });
+      await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+      await new Promise((resolve) => window.setTimeout(resolve, 2200));
       if (!port.readable || !port.writable) throw new Error('The selected serial port is not available.');
       reader = port.readable.getReader();
       writer = port.writable.getWriter();
-      const serialResponsePromise = readSerialProvisioningResponse(reader);
-      const timeoutPromise = new Promise((resolve, reject) => {
-        timeoutId = window.setTimeout(() => reject(new Error('Timed out waiting for the ESP32 provisioning response.')), 20000);
+      let lastSerialLine = '';
+      const serialResponsePromise = readSerialProvisioningResponse(reader, (line) => {
+        lastSerialLine = line.slice(-300);
       });
-      const responsePromise = Promise.race([serialResponsePromise, timeoutPromise]);
-      await writer.write(new TextEncoder().encode(`${JSON.stringify(payload)}\n`));
+      const commandLine = new TextEncoder().encode(`${JSON.stringify(payload)}\n`);
+      let timedOut = false;
+      const timeoutPromise = new Promise((resolve, reject) => {
+        timeoutId = window.setTimeout(() => {
+          timedOut = true;
+          const lastLine = lastSerialLine ? JSON.stringify(lastSerialLine) : '<none>';
+          reject(new Error(`Timed out waiting for the ESP32 provisioning response. Last received serial line: ${lastLine}`));
+        }, 10000);
+      });
+      const sendWithRetries = async () => {
+        for (let attempt = 0; attempt <= 3; attempt += 1) {
+          if (timedOut) return serialResponsePromise;
+          await writer.write(commandLine);
+          const response = await waitForSerialResponse(serialResponsePromise, 2500);
+          if (response) return response;
+        }
+        return serialResponsePromise;
+      };
+      const responsePromise = Promise.race([sendWithRetries(), timeoutPromise]);
       const response = await responsePromise;
       if (response.beacon_id !== beaconId) throw new Error('The ESP32 confirmed a different beacon ID.');
       setSerialStatus({ beaconId: beacon.id, message: 'Provisioned & Rebooting' });

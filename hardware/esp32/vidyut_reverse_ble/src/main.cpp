@@ -557,6 +557,7 @@ void connectCampusWifi() {
     }
     if (WiFi.status() == WL_CONNECTED) {
       Serial.println("Connected to campus Wi-Fi.");
+      processSerialProvisioning();
       syncClock();
       return;
     }
@@ -573,6 +574,14 @@ void connectCampusWifi() {
 
 void setup() {
   Serial.begin(115200);
+  Serial.println("VIDYUT_BLE_READY");
+  const unsigned long provisioningDeadline = millis() + 3000;
+  while (millis() < provisioningDeadline) {
+    processSerialProvisioning();
+    delay(1);
+  }
+  processSerialProvisioning();
+
   if (!loadConfig()) {
     Serial.println("Could not read ESP32 NVS configuration.");
   }
@@ -608,6 +617,7 @@ void loop() {
   }
 
   if (now - lastTimeSyncAt >= 3600000UL || time(nullptr) < 1700000000) {
+    processSerialProvisioning();
     syncClock();
   }
   if (time(nullptr) < 1700000000) {
@@ -616,11 +626,13 @@ void loop() {
     return;
   }
   if (now - lastPollAt >= kSessionPollIntervalMs) {
+    processSerialProvisioning();
     lastPollAt = now;
     refreshActiveSession();
   }
   if (session.active && !scanning) startScanner();
   if (session.active && now - lastUploadAt >= kUploadIntervalMs) {
+    processSerialProvisioning();
     lastUploadAt = now;
     uploadBatch();
   }
